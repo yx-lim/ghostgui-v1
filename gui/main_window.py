@@ -28,6 +28,8 @@ from .trajectory import SampledTrajectory
 from .controls import TrajectoryControlPanel
 from .viewer_2d import RobotCanvas
 from .viewer_3d import RobotCanvas3D
+from .viewer_2d_stickman import Stickman2DViewer
+from .viewer_3d_mujoco import Mujoco3DViewerPanel
 from .backend_interface import BackendInterface
 
 
@@ -50,6 +52,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls = TrajectoryControlPanel()
         self.viewer_2d = RobotCanvas()
         self.viewer_3d = RobotCanvas3D()
+        self.viewer_2d_stickman = Stickman2DViewer()
+        self.viewer_3d_mujoco = Mujoco3DViewerPanel()
         self.viewer_tabs = self.build_viewer_tabs()
         self.status_panel = self.build_status_panel()
 
@@ -94,6 +98,8 @@ class RobotGuiMainWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(self.viewer_2d, "2D Side View")
         tabs.addTab(self.viewer_3d, "3D View")
+        tabs.addTab(self.viewer_2d_stickman, "2D Stickman")
+        tabs.addTab(self.viewer_3d_mujoco, "3D MuJoCo")
         return tabs
 
     # ============================================================
@@ -107,9 +113,11 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.delete_keyframe_clicked.connect(self.on_delete_keyframe)
         self.controls.generate_clicked.connect(self.on_generate_trajectory)
         self.controls.keyframe_selected.connect(self.on_keyframe_selected)
+        self.controls.frame_name_changed.connect(self.on_frame_name_changed)
 
         self.viewer_2d.target_dragged.connect(self.on_target_dragged)
         self.viewer_3d.target_dragged.connect(self.on_target_dragged)
+        self.viewer_2d_stickman.target_dragged.connect(self.on_target_dragged)
 
     # ============================================================
     # GUI interaction callbacks
@@ -191,6 +199,23 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.set_from_frame(frame)
         self.refresh_display()
 
+    def on_frame_name_changed(self, frame_name):
+        """
+        Called when user changes the selected target robot frame.
+
+        Example:
+            pelvis -> left_foot
+
+        The red target marker should jump to the current stickman body part,
+        so the target is attached to the selected frame.
+        """
+
+        x, z = self.viewer_2d.get_body_point(frame_name)
+
+        self.controls.set_position_from_viewer(x, z)
+
+        self.refresh_display()
+
     def on_generate_trajectory(self):
         if len(self.trajectory.frames) == 0:
             self.status_text.setText("Trajectory is empty. Add keyframes first.")
@@ -241,6 +266,10 @@ class RobotGuiMainWindow(QMainWindow):
             active_frame=active_frame,
         )
         self.viewer_3d.update_scene(
+            trajectory=self.trajectory,
+            active_frame=active_frame,
+        )
+        self.viewer_2d_stickman.update_scene(
             trajectory=self.trajectory,
             active_frame=active_frame,
         )

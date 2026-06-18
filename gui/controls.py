@@ -130,6 +130,7 @@ class TrajectoryControlPanel(QGroupBox):
     delete_keyframe_clicked = Signal()
     generate_clicked = Signal()
     keyframe_selected = Signal(int)
+    frame_name_changed = Signal(str)
 
     def __init__(self):
         super().__init__("Reference Frame Trajectory Editor")
@@ -152,6 +153,7 @@ class TrajectoryControlPanel(QGroupBox):
             "left_hand",
             "right_hand",
         ])
+        self.frame_box.currentTextChanged.connect(self.frame_name_changed.emit)
         layout.addWidget(self.frame_box)
 
         # --------------------------------------------------------
