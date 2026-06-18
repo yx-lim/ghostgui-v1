@@ -1,3 +1,4 @@
+![ghostgui](ghostgui.png)
 # GhostGUI
 
 A lightweight graphical user interface for simulating reference frame trajectory
