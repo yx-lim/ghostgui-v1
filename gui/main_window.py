@@ -20,12 +20,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QTextEdit,
     QGroupBox,
+    QTabWidget,
 )
 
 from .trajectory import Trajectory
 from .trajectory import SampledTrajectory
 from .controls import TrajectoryControlPanel
-from .viewer import RobotCanvas
+from .viewer_2d import RobotCanvas
+from .viewer_3d import RobotCanvas3D
 from .backend_interface import BackendInterface
 
 
@@ -46,7 +48,9 @@ class RobotGuiMainWindow(QMainWindow):
 
         # GUI widgets
         self.controls = TrajectoryControlPanel()
-        self.canvas = RobotCanvas()
+        self.viewer_2d = RobotCanvas()
+        self.viewer_3d = RobotCanvas3D()
+        self.viewer_tabs = self.build_viewer_tabs()
         self.status_panel = self.build_status_panel()
 
         self.connect_signals()
@@ -58,7 +62,7 @@ class RobotGuiMainWindow(QMainWindow):
         layout = QHBoxLayout()
 
         layout.addWidget(self.controls)
-        layout.addWidget(self.canvas, stretch=1)
+        layout.addWidget(self.viewer_tabs, stretch=1)
         layout.addWidget(self.status_panel)
 
         central.setLayout(layout)
@@ -86,6 +90,12 @@ class RobotGuiMainWindow(QMainWindow):
         panel.setLayout(layout)
         return panel
 
+    def build_viewer_tabs(self):
+        tabs = QTabWidget()
+        tabs.addTab(self.viewer_2d, "2D Side View")
+        tabs.addTab(self.viewer_3d, "3D View")
+        return tabs
+
     # ============================================================
     # Signal connections
     # ============================================================
@@ -98,7 +108,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.generate_clicked.connect(self.on_generate_trajectory)
         self.controls.keyframe_selected.connect(self.on_keyframe_selected)
 
-        self.canvas.target_dragged.connect(self.on_target_dragged)
+        self.viewer_2d.target_dragged.connect(self.on_target_dragged)
+        self.viewer_3d.target_dragged.connect(self.on_target_dragged)
 
     # ============================================================
     # GUI interaction callbacks
@@ -225,7 +236,11 @@ class RobotGuiMainWindow(QMainWindow):
 
         active_frame = self.controls.current_frame()
 
-        self.canvas.update_scene(
+        self.viewer_2d.update_scene(
+            trajectory=self.trajectory,
+            active_frame=active_frame,
+        )
+        self.viewer_3d.update_scene(
             trajectory=self.trajectory,
             active_frame=active_frame,
         )
