@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from .trajectory import Trajectory
+from .trajectory import SampledTrajectory
 from .controls import TrajectoryControlPanel
 from .viewer import RobotCanvas
 from .backend_interface import BackendInterface
@@ -184,25 +185,31 @@ class RobotGuiMainWindow(QMainWindow):
             self.status_text.setText("Trajectory is empty. Add keyframes first.")
             return
 
-        result_states = self.backend_interface.solve_trajectory(self.trajectory)
+        export_dt = 0.01
 
-        csv_path = "pelvis_base_trajectory.csv"
+        sampled_frames = self.trajectory.sample_uniform_dt(dt=export_dt)
+        sampled_trajectory = SampledTrajectory(sampled_frames)
+
+        result_states = self.backend_interface.solve_trajectory(sampled_trajectory)
+
+        csv_path = "pelvis_base_trajectory_uniform_dt.csv"
         self.backend_interface.export_last_solution_csv(csv_path)
 
         lines = []
-        lines.append("Generated q(t) trajectory.")
+        lines.append("Generated uniformly sampled q(t) trajectory.")
+        lines.append(f"Export dt: {export_dt:.4f} s")
+        lines.append(f"Number of GUI keyframes: {len(self.trajectory.frames)}")
+        lines.append(f"Number of exported samples: {len(sampled_frames)}")
         lines.append(f"Exported CSV to: {csv_path}")
         lines.append("")
-        lines.append("Solved states:")
+        lines.append("First few sampled frames:")
         lines.append("")
 
-        for q in result_states:
+        for frame in sampled_frames[:10]:
             lines.append(
-                f"t={q.time:.2f}s | "
-                f"base=({q.base_x:.2f}, {q.base_y:.2f}, {q.base_z:.2f}) | "
-                f"quat=({q.base_qw:.3f}, {q.base_qx:.3f}, "
-                f"{q.base_qy:.3f}, {q.base_qz:.3f}) | "
-                f"{q.status}"
+                f"t={frame.time:.3f}s | "
+                f"frame={frame.frame_name} | "
+                f"x={frame.x:.3f}, y={frame.y:.3f}, z={frame.z:.3f}"
             )
 
         self.status_text.setText("\n".join(lines))
