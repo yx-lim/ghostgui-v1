@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QHBoxLayout,
+    QCheckBox,
 )
 
 from .trajectory import TargetFrame
@@ -131,6 +132,7 @@ class TrajectoryControlPanel(QGroupBox):
     generate_clicked = Signal()
     keyframe_selected = Signal(int)
     frame_name_changed = Signal(str)
+    trajectory_lines_changed = Signal(bool)
 
     def __init__(self):
         super().__init__("Reference Frame Trajectory Editor")
@@ -217,6 +219,14 @@ class TrajectoryControlPanel(QGroupBox):
         self.yaw_slider.value_changed.connect(self.emit_pose_changed)
 
         # --------------------------------------------------------
+        # Trajectory display options
+        # --------------------------------------------------------
+        self.show_lines_box = QCheckBox("Show trajectory lines")
+        self.show_lines_box.setChecked(True)
+        self.show_lines_box.toggled.connect(self.trajectory_lines_changed.emit)
+        layout.addWidget(self.show_lines_box)
+
+        # --------------------------------------------------------
         # Keyframe buttons
         # --------------------------------------------------------
         button_row = QHBoxLayout()
@@ -285,6 +295,9 @@ class TrajectoryControlPanel(QGroupBox):
             pitch=0.0,
             yaw=self.yaw_slider.value(),
         )
+
+    def show_trajectory_lines(self):
+        return self.show_lines_box.isChecked()
 
     def set_from_frame(self, frame):
         """

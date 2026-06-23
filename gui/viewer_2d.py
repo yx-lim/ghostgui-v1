@@ -17,6 +17,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPen, QBrush
 from PySide6.QtWidgets import QGraphicsView, QGraphicsScene
 
+from .trajectory_colors import qt_color_for_frame
+
 
 class RobotCanvas(QGraphicsView):
     target_dragged = Signal(float, float)
@@ -56,7 +58,7 @@ class RobotCanvas(QGraphicsView):
     # Main draw function
     # ============================================================
 
-    def update_scene(self, trajectory, active_frame=None):
+    def update_scene(self, trajectory, active_frame=None, show_trajectory_lines=True):
         self.scene.clear()
 
         if active_frame is not None:
@@ -65,7 +67,7 @@ class RobotCanvas(QGraphicsView):
             self.target_yaw = active_frame.yaw
 
         self.draw_ground()
-        self.draw_trajectory(trajectory)
+        self.draw_trajectory(trajectory, show_lines=show_trajectory_lines)
         self.draw_target_frame()
         self.draw_legend()
 
@@ -73,7 +75,7 @@ class RobotCanvas(QGraphicsView):
         ground_y = self.world_to_screen(0.0, 0.0)[1]
         self.scene.addLine(-325, ground_y, 325, ground_y, QPen(Qt.GlobalColor.black, 2))
 
-    def draw_trajectory(self, trajectory):
+    def draw_trajectory(self, trajectory, show_lines=True):
         """
         Draw stored trajectory keyframes and connecting lines.
         """
@@ -81,14 +83,14 @@ class RobotCanvas(QGraphicsView):
         if len(trajectory.frames) == 0:
             return
 
-        pen_line = QPen(Qt.GlobalColor.darkGreen, 2)
-        pen_point = QPen(Qt.GlobalColor.darkGreen, 2)
-        brush_point = QBrush(Qt.GlobalColor.green)
-
-        previous = None
+        previous_by_frame = {}
 
         for frame in trajectory.frames:
             x, y = self.world_to_screen(frame.x, frame.z)
+            color = qt_color_for_frame(frame.frame_name)
+            pen_line = QPen(color, 2)
+            pen_point = QPen(color, 2)
+            brush_point = QBrush(color)
 
             self.scene.addEllipse(
                 x - 5,
@@ -101,11 +103,12 @@ class RobotCanvas(QGraphicsView):
 
             self.scene.addText(f"{frame.time:.1f}s").setPos(x + 6, y - 18)
 
-            if previous is not None:
+            previous = previous_by_frame.get(frame.frame_name)
+            if show_lines and previous is not None:
                 px, py = self.world_to_screen(previous.x, previous.z)
                 self.scene.addLine(px, py, x, y, pen_line)
 
-            previous = frame
+            previous_by_frame[frame.frame_name] = frame
 
     def draw_target_frame(self):
         """
@@ -140,7 +143,7 @@ class RobotCanvas(QGraphicsView):
 
     def draw_legend(self):
         self.scene.addText("Red = currently edited target reference frame").setPos(-315, -240)
-        self.scene.addText("Green = stored trajectory keyframes").setPos(-315, -215)
+        self.scene.addText("Colored = stored per-frame keyframes").setPos(-315, -215)
 
     # ============================================================
     # Mouse dragging

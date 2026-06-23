@@ -16,6 +16,8 @@ from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtGui import QMatrix4x4, QVector3D
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
+from .trajectory_colors import gl_color_for_frame
+
 
 class RobotCanvas3D(QOpenGLWidget):
     target_dragged = Signal(float, float)
@@ -27,6 +29,7 @@ class RobotCanvas3D(QOpenGLWidget):
         self.setMouseTracking(True)
 
         self.trajectory = None
+        self.show_trajectory_lines = True
 
         self.target_x = 0.0
         self.target_y = 0.0
@@ -49,8 +52,9 @@ class RobotCanvas3D(QOpenGLWidget):
     # Scene API
     # ============================================================
 
-    def update_scene(self, trajectory, active_frame=None):
+    def update_scene(self, trajectory, active_frame=None, show_trajectory_lines=True):
         self.trajectory = trajectory
+        self.show_trajectory_lines = show_trajectory_lines
 
         if active_frame is not None:
             self.target_x = active_frame.x
@@ -165,17 +169,27 @@ class RobotCanvas3D(QOpenGLWidget):
         if self.trajectory is None or len(self.trajectory.frames) == 0:
             return
 
-        GL.glLineWidth(2.0)
-        GL.glColor3f(0.05, 0.85, 0.25)
-        GL.glBegin(GL.GL_LINE_STRIP)
-        for frame in self.trajectory.frames:
-            GL.glVertex3f(frame.x, frame.y, frame.z)
-        GL.glEnd()
+        if self.show_trajectory_lines:
+            frames_by_name = {}
+            for frame in self.trajectory.frames:
+                frames_by_name.setdefault(frame.frame_name, []).append(frame)
+
+            GL.glLineWidth(2.0)
+
+            for frame_name, frames in frames_by_name.items():
+                if len(frames) < 2:
+                    continue
+
+                GL.glColor3f(*gl_color_for_frame(frame_name))
+                GL.glBegin(GL.GL_LINE_STRIP)
+                for frame in sorted(frames, key=lambda f: f.time):
+                    GL.glVertex3f(frame.x, frame.y, frame.z)
+                GL.glEnd()
 
         GL.glPointSize(7.0)
-        GL.glColor3f(0.10, 0.95, 0.35)
         GL.glBegin(GL.GL_POINTS)
         for frame in self.trajectory.frames:
+            GL.glColor3f(*gl_color_for_frame(frame.frame_name))
             GL.glVertex3f(frame.x, frame.y, frame.z)
         GL.glEnd()
 

@@ -21,6 +21,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPen, QBrush
 from PySide6.QtWidgets import QGraphicsView, QGraphicsScene
 
+from .trajectory_colors import qt_color_for_frame
+
 
 # ============================================================
 # Small 2D vector helpers
@@ -421,6 +423,27 @@ class StickmanPose:
         elif name == "right_hand":
             self.set_right_hand(frame.x, frame.z)
 
+    def apply_target_snapshot(self, targets):
+        """
+        Rebuild the simplified stickman from a same-time target snapshot while
+        preserving the same reach constraints used during dragging.
+        """
+        self.reset()
+
+        for name in [
+            "pelvis",
+            "base",
+            "root",
+            "torso",
+            "left_foot",
+            "right_foot",
+            "left_hand",
+            "right_hand",
+        ]:
+            frame = targets.get(name)
+            if frame is not None:
+                self.apply_target_frame(frame)
+
 
 # ============================================================
 # 2D viewer widget
@@ -475,7 +498,13 @@ class Stickman2DViewer(QGraphicsView):
 
         return self.pose.get_body_point(frame_name)
 
-    def update_scene(self, trajectory, active_frame=None, apply_active_frame=True):
+    def update_scene(
+        self,
+        trajectory,
+        active_frame=None,
+        apply_active_frame=True,
+        show_trajectory_lines=True,
+    ):
         """
         Redraw viewer.
 
@@ -488,7 +517,16 @@ class Stickman2DViewer(QGraphicsView):
             self.selected_frame_name = active_frame.frame_name
 
             if apply_active_frame:
-                self.pose.apply_target_frame(active_frame)
+                targets = trajectory.targets_at_time(active_frame.time)
+                existing = targets.get(active_frame.frame_name)
+                if (
+                    existing is None
+                    or abs(existing.x - active_frame.x) > 0.005
+                    or abs(existing.z - active_frame.z) > 0.005
+                    or abs(existing.yaw - active_frame.yaw) > 0.005
+                ):
+                    targets[active_frame.frame_name] = active_frame
+                self.pose.apply_target_snapshot(targets)
 
             point_x, point_z = self.pose.get_body_point(active_frame.frame_name)
 
@@ -500,7 +538,7 @@ class Stickman2DViewer(QGraphicsView):
 
         self.draw_ground()
         self.draw_stickman()
-        self.draw_trajectory(trajectory)
+        self.draw_trajectory(trajectory, show_lines=show_trajectory_lines)
         self.draw_target_frame()
         self.draw_legend()
 
@@ -593,7 +631,7 @@ class Stickman2DViewer(QGraphicsView):
         ]:
             joint(body_point)
 
-    def draw_trajectory(self, trajectory):
+    def draw_trajectory(self, trajectory, show_lines=True):
         """
         Draw stored keyframe target positions.
         """
@@ -601,14 +639,14 @@ class Stickman2DViewer(QGraphicsView):
         if len(trajectory.frames) == 0:
             return
 
-        pen_line = QPen(Qt.GlobalColor.darkGreen, 2)
-        pen_point = QPen(Qt.GlobalColor.darkGreen, 2)
-        brush_point = QBrush(Qt.GlobalColor.green)
-
-        previous = None
+        previous_by_frame = {}
 
         for frame in trajectory.frames:
             x, y = self.world_to_screen(frame.x, frame.z)
+            color = qt_color_for_frame(frame.frame_name)
+            pen_line = QPen(color, 2)
+            pen_point = QPen(color, 2)
+            brush_point = QBrush(color)
 
             self.scene.addEllipse(
                 x - 5,
@@ -623,11 +661,12 @@ class Stickman2DViewer(QGraphicsView):
                 f"{frame.frame_name}\n{frame.time:.1f}s"
             ).setPos(x + 6, y - 24)
 
-            if previous is not None:
+            previous = previous_by_frame.get(frame.frame_name)
+            if show_lines and previous is not None:
                 px, py = self.world_to_screen(previous.x, previous.z)
                 self.scene.addLine(px, py, x, y, pen_line)
 
-            previous = frame
+            previous_by_frame[frame.frame_name] = frame
 
     def draw_target_frame(self):
         """
@@ -661,7 +700,7 @@ class Stickman2DViewer(QGraphicsView):
     def draw_legend(self):
         self.scene.addText("Black = simplified stickman").setPos(-315, -240)
         self.scene.addText("Red = selected target frame").setPos(-315, -215)
-        self.scene.addText("Green = stored keyframes").setPos(-315, -190)
+        self.scene.addText("Colored = stored per-frame keyframes").setPos(-315, -190)
 
     # ============================================================
     # Mouse dragging

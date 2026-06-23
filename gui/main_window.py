@@ -114,6 +114,9 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.generate_clicked.connect(self.on_generate_trajectory)
         self.controls.keyframe_selected.connect(self.on_keyframe_selected)
         self.controls.frame_name_changed.connect(self.on_frame_name_changed)
+        self.controls.trajectory_lines_changed.connect(
+            self.on_trajectory_lines_changed
+        )
 
         self.viewer_2d.target_dragged.connect(self.on_target_dragged)
         self.viewer_3d.target_dragged.connect(self.on_target_dragged)
@@ -141,6 +144,9 @@ class RobotGuiMainWindow(QMainWindow):
         """
 
         self.controls.set_position_from_viewer(x, z)
+
+    def on_trajectory_lines_changed(self, checked):
+        self.refresh_display()
 
     def on_add_keyframe(self):
         """
@@ -262,19 +268,23 @@ class RobotGuiMainWindow(QMainWindow):
         """
 
         active_frame = self.controls.current_frame()
+        show_trajectory_lines = self.controls.show_trajectory_lines()
 
         self.viewer_2d.update_scene(
             trajectory=self.trajectory,
             active_frame=active_frame,
+            show_trajectory_lines=show_trajectory_lines,
         )
         self.viewer_3d.update_scene(
             trajectory=self.trajectory,
             active_frame=active_frame,
+            show_trajectory_lines=show_trajectory_lines,
         )
         self.viewer_2d_stickman.update_scene(
             trajectory=self.trajectory,
             active_frame=active_frame,
             apply_active_frame=apply_stickman_frame,
+            show_trajectory_lines=show_trajectory_lines,
         )
 
         self.controls.refresh_table(self.trajectory)
