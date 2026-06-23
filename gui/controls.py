@@ -134,6 +134,7 @@ class TrajectoryControlPanel(QGroupBox):
 
     def __init__(self):
         super().__init__("Reference Frame Trajectory Editor")
+        self._suppress_pose_changed = False
         self.build_ui()
 
     def build_ui(self):
@@ -259,6 +260,9 @@ class TrajectoryControlPanel(QGroupBox):
         self.setLayout(layout)
 
     def emit_pose_changed(self):
+        if self._suppress_pose_changed:
+            return
+
         self.pose_changed.emit(
             self.x_slider.value(),
             self.z_slider.value(),
@@ -287,24 +291,38 @@ class TrajectoryControlPanel(QGroupBox):
         Load a keyframe into the editor.
         """
 
-        self.time_slider.set_value(frame.time)
-        self.x_slider.set_value(frame.x)
-        self.z_slider.set_value(frame.z)
-        self.yaw_slider.set_value(frame.yaw)
+        self._suppress_pose_changed = True
 
-        self.phase_box.setCurrentText(frame.phase)
-        self.frame_box.setCurrentText(frame.frame_name)
+        try:
+            self.time_slider.set_value(frame.time)
+            self.x_slider.set_value(frame.x)
+            self.z_slider.set_value(frame.z)
+            self.yaw_slider.set_value(frame.yaw)
+
+            self.phase_box.setCurrentText(frame.phase)
+            previous_block_state = self.frame_box.blockSignals(True)
+            self.frame_box.setCurrentText(frame.frame_name)
+            self.frame_box.blockSignals(previous_block_state)
+        finally:
+            self._suppress_pose_changed = False
 
         self.emit_pose_changed()
 
-    def set_position_from_viewer(self, x, z):
+    def set_position_from_viewer(self, x, z, emit_pose_changed=True):
         """
         Called when user drags target frame in the viewer.
         """
 
-        self.x_slider.set_value(x)
-        self.z_slider.set_value(z)
-        self.emit_pose_changed()
+        self._suppress_pose_changed = True
+
+        try:
+            self.x_slider.set_value(x)
+            self.z_slider.set_value(z)
+        finally:
+            self._suppress_pose_changed = False
+
+        if emit_pose_changed:
+            self.emit_pose_changed()
 
     def refresh_table(self, trajectory):
         """

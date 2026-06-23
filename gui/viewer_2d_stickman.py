@@ -475,7 +475,7 @@ class Stickman2DViewer(QGraphicsView):
 
         return self.pose.get_body_point(frame_name)
 
-    def update_scene(self, trajectory, active_frame=None):
+    def update_scene(self, trajectory, active_frame=None, apply_active_frame=True):
         """
         Redraw viewer.
 
@@ -487,7 +487,8 @@ class Stickman2DViewer(QGraphicsView):
         if active_frame is not None:
             self.selected_frame_name = active_frame.frame_name
 
-            self.pose.apply_target_frame(active_frame)
+            if apply_active_frame:
+                self.pose.apply_target_frame(active_frame)
 
             point_x, point_z = self.pose.get_body_point(active_frame.frame_name)
 

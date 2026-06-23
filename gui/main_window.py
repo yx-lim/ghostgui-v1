@@ -210,11 +210,15 @@ class RobotGuiMainWindow(QMainWindow):
         so the target is attached to the selected frame.
         """
 
-        x, z = self.viewer_2d.get_body_point(frame_name)
+        x, z = self.viewer_2d_stickman.get_body_point(frame_name)
 
-        self.controls.set_position_from_viewer(x, z)
+        self.controls.set_position_from_viewer(
+            x,
+            z,
+            emit_pose_changed=False,
+        )
 
-        self.refresh_display()
+        self.refresh_display(apply_stickman_frame=False)
 
     def on_generate_trajectory(self):
         if len(self.trajectory.frames) == 0:
@@ -254,7 +258,7 @@ class RobotGuiMainWindow(QMainWindow):
     # Display update
     # ============================================================
 
-    def refresh_display(self):
+    def refresh_display(self, apply_stickman_frame=True):
         """
         Refresh viewer, table, and status text.
         """
@@ -272,6 +276,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_2d_stickman.update_scene(
             trajectory=self.trajectory,
             active_frame=active_frame,
+            apply_active_frame=apply_stickman_frame,
         )
 
         self.controls.refresh_table(self.trajectory)
