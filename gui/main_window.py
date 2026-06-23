@@ -227,8 +227,8 @@ class RobotGuiMainWindow(QMainWindow):
 
         export_dt = 0.01
 
-        sampled_frames = self.trajectory.sample_uniform_dt(dt=export_dt)
-        sampled_trajectory = SampledTrajectory(sampled_frames)
+        sampled_tracks = self.trajectory.sample_tracks_uniform_dt(dt=export_dt)
+        sampled_trajectory = SampledTrajectory(samples=sampled_tracks)
 
         result_states = self.backend_interface.solve_trajectory(sampled_trajectory)
 
@@ -236,21 +236,19 @@ class RobotGuiMainWindow(QMainWindow):
         self.backend_interface.export_last_solution_csv(csv_path)
 
         lines = []
-        lines.append("Generated uniformly sampled q(t) trajectory.")
+        lines.append("Generated uniformly sampled per-frame target tracks.")
         lines.append(f"Export dt: {export_dt:.4f} s")
         lines.append(f"Number of GUI keyframes: {len(self.trajectory.frames)}")
-        lines.append(f"Number of exported samples: {len(sampled_frames)}")
+        lines.append(f"Number of sampled time steps: {len(sampled_tracks)}")
+        lines.append(f"Number of backend states: {len(result_states)}")
         lines.append(f"Exported CSV to: {csv_path}")
         lines.append("")
-        lines.append("First few sampled frames:")
+        lines.append("First few sampled time groups:")
         lines.append("")
 
-        for frame in sampled_frames[:10]:
-            lines.append(
-                f"t={frame.time:.3f}s | "
-                f"frame={frame.frame_name} | "
-                f"x={frame.x:.3f}, y={frame.y:.3f}, z={frame.z:.3f}"
-            )
+        for sample in sampled_tracks[:10]:
+            frame_names = ", ".join(sorted(sample["targets"].keys()))
+            lines.append(f"t={sample['time']:.3f}s | targets={frame_names}")
 
         self.status_text.setText("\n".join(lines))
 
