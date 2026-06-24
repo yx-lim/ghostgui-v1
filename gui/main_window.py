@@ -278,6 +278,9 @@ class RobotGuiMainWindow(QMainWindow):
         lines.append(f"Number of GUI keyframes: {len(self.trajectory.frames)}")
         lines.append(f"Number of sampled time steps: {len(sampled_tracks)}")
         lines.append(f"Number of backend states: {len(result_states)}")
+        if result_states:
+            max_ik_error = max(state.ik_error for state in result_states)
+            lines.append(f"Max IK position error: {max_ik_error:.4f} m")
         lines.append(f"Exported CSV to: {csv_path}")
         lines.append("")
         lines.append("First few sampled time groups:")
