@@ -31,6 +31,7 @@ from .viewer_3d import RobotCanvas3D
 from .viewer_2d_stickman import Stickman2DViewer
 from .viewer_3d_mujoco import Mujoco3DViewerPanel
 from .backend_interface import BackendInterface
+from .model_reference import MujocoReferenceFrames
 
 
 class RobotGuiMainWindow(QMainWindow):
@@ -47,6 +48,7 @@ class RobotGuiMainWindow(QMainWindow):
 
         # Backend
         self.backend_interface = BackendInterface()
+        self.model_reference = MujocoReferenceFrames()
 
         # GUI widgets
         self.controls = TrajectoryControlPanel()
@@ -58,6 +60,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.status_panel = self.build_status_panel()
 
         self.connect_signals()
+        self.set_current_frame_to_model_reference("pelvis", emit_pose_changed=False)
 
         # --------------------------------------------------------
         # Layout
@@ -126,7 +129,7 @@ class RobotGuiMainWindow(QMainWindow):
     # GUI interaction callbacks
     # ============================================================
 
-    def on_pose_changed(self, x, z, yaw):
+    def on_pose_changed(self, x, y, z, yaw):
         """
         Called when sliders change.
 
@@ -212,9 +215,17 @@ class RobotGuiMainWindow(QMainWindow):
         Example:
             pelvis -> left_foot
 
-        The red target marker should jump to the current stickman body part,
-        so the target is attached to the selected frame.
+        The target controls should jump to the current real MuJoCo body/site
+        position. The simplified stickman is still drawn as a 2D helper, but
+        target-frame defaults come from the actual robot model.
         """
+
+        if self.set_current_frame_to_model_reference(
+            frame_name,
+            emit_pose_changed=False,
+        ):
+            self.refresh_display(apply_stickman_frame=False)
+            return
 
         x, z = self.viewer_2d_stickman.get_body_point(frame_name)
 
@@ -225,6 +236,25 @@ class RobotGuiMainWindow(QMainWindow):
         )
 
         self.refresh_display(apply_stickman_frame=False)
+
+    def set_current_frame_to_model_reference(
+        self,
+        frame_name,
+        emit_pose_changed=True,
+    ):
+        position = self.model_reference.position_for_frame(frame_name)
+
+        if position is None:
+            return False
+
+        x, y, z = position
+        self.controls.set_position_values(
+            x=x,
+            y=y,
+            z=z,
+            emit_pose_changed=emit_pose_changed,
+        )
+        return True
 
     def on_generate_trajectory(self):
         if len(self.trajectory.frames) == 0:

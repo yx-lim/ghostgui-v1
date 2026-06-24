@@ -528,7 +528,11 @@ class Stickman2DViewer(QGraphicsView):
                     targets[active_frame.frame_name] = active_frame
                 self.pose.apply_target_snapshot(targets)
 
-            point_x, point_z = self.pose.get_body_point(active_frame.frame_name)
+            if apply_active_frame:
+                point_x, point_z = self.pose.get_body_point(active_frame.frame_name)
+            else:
+                point_x = active_frame.x
+                point_z = active_frame.z
 
             self.target_x = point_x
             self.target_z = point_z
