@@ -352,6 +352,33 @@ class Trajectory:
 
         return samples
 
+    def targets_at_time(self, t):
+        """
+        Return interpolated targets grouped by frame name at one time.
+
+        This is the single-time version of sample_tracks_uniform_dt(). Each
+        robot frame/body part is interpolated only within its own named track;
+        pelvis never interpolates with hands, feet, torso, etc.
+        """
+        targets = {}
+
+        for frame_name, track in self.tracks.items():
+            if not track:
+                continue
+
+            sorted_track = sorted(track, key=lambda f: f.time)
+
+            if t < sorted_track[0].time - 1e-9:
+                continue
+
+            if t > sorted_track[-1].time + 1e-9:
+                continue
+
+            f0, f1 = self.find_surrounding_keyframes(sorted_track, t)
+            targets[frame_name] = self.interpolate_frames(f0, f1, t)
+
+        return targets
+
     def find_surrounding_keyframes(self, sorted_frames, t):
         """
         Find keyframes f0 and f1 such that:
