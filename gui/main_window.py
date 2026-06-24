@@ -240,6 +240,7 @@ class RobotGuiMainWindow(QMainWindow):
 
         csv_path = "pelvis_base_trajectory_uniform_dt.csv"
         self.backend_interface.export_last_solution_csv(csv_path)
+        self.viewer_3d_mujoco.set_trajectory_csv(csv_path)
 
         lines = []
         lines.append("Generated uniformly sampled per-frame target tracks.")
