@@ -130,7 +130,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
     def test_sidebars_collapse_without_recreating_viewer_or_state(self):
         self.window.resize(1700, 800)
-        self.window.viewer_tabs.setCurrentWidget(self.viewer)
+        self.window.viewer_tabs.setCurrentWidget(self.window.viewer_3d_stack)
         self.window.show()
         self.app.processEvents()
         viewer_identity = id(self.window.viewer_3d)

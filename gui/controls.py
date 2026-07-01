@@ -137,14 +137,34 @@ class TrajectoryControlPanel(QGroupBox):
     frame_name_changed = Signal(str)
     trajectory_lines_changed = Signal(bool)
     time_changed = Signal(float)
+    model_changed = Signal(str)
 
-    def __init__(self):
+    def __init__(self, model_registry=None, model_key="g1", frame_names=None):
         super().__init__("Reference Frame Trajectory Editor")
         self._suppress_pose_changed = False
+        self.model_registry = model_registry or {}
+        self.model_key = model_key
+        self.frame_names = list(frame_names or [
+            "pelvis", "torso", "left_foot", "right_foot",
+            "left_hand", "right_hand",
+        ])
         self.build_ui()
 
     def build_ui(self):
         layout = QVBoxLayout()
+
+        if self.model_registry:
+            layout.addWidget(QLabel("Robot model"))
+            self.model_box = QComboBox()
+            for key, info in self.model_registry.items():
+                self.model_box.addItem(info.display_name, key)
+            selected = self.model_box.findData(self.model_key)
+            if selected >= 0:
+                self.model_box.setCurrentIndex(selected)
+            self.model_box.currentIndexChanged.connect(
+                lambda index: self.model_changed.emit(self.model_box.itemData(index))
+            )
+            layout.addWidget(self.model_box)
 
         # --------------------------------------------------------
         # Select which robot frame this target refers to
@@ -152,17 +172,11 @@ class TrajectoryControlPanel(QGroupBox):
         layout.addWidget(QLabel("Target robot frame"))
 
         self.frame_box = QComboBox()
-        self.frame_box.addItems([
-            "pelvis",
-            "torso",
-            "left_foot",
-            "right_foot",
-            "left_hand",
-            "right_hand",
-        ])
+        self.frame_box.addItems(self.frame_names)
         # A hand is the most useful default for the 3D transform gizmo. The
         # user can still select pelvis/feet exactly as before.
-        self.frame_box.setCurrentText("left_hand")
+        preferred = "left_hand" if "left_hand" in self.frame_names else self.frame_names[0]
+        self.frame_box.setCurrentText(preferred)
         self.frame_box.currentTextChanged.connect(self.frame_name_changed.emit)
         layout.addWidget(self.frame_box)
 
@@ -295,6 +309,20 @@ class TrajectoryControlPanel(QGroupBox):
         layout.addWidget(self.table)
 
         self.setLayout(layout)
+
+    def set_frame_names(self, frame_names, preferred=None):
+        """Replace target choices without emitting an intermediate selection."""
+        names = list(frame_names)
+        if not names:
+            return
+        old = self.frame_box.currentText()
+        self.frame_box.blockSignals(True)
+        self.frame_box.clear()
+        self.frame_box.addItems(names)
+        choice = preferred if preferred in names else old if old in names else names[0]
+        self.frame_box.setCurrentText(choice)
+        self.frame_box.blockSignals(False)
+        self.frame_name_changed.emit(choice)
 
     def emit_pose_changed(self):
         if self._suppress_pose_changed:

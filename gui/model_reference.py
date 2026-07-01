@@ -29,9 +29,10 @@ REFERENCE_FRAME_BINDINGS = {
 
 
 class MujocoReferenceFrames:
-    def __init__(self, model_path=MODEL_PATH, mj_model=None):
+    def __init__(self, model_path=MODEL_PATH, mj_model=None, adapter=None):
+        self.adapter = adapter
         self.model_path = Path(model_path)
-        self.model = mj_model
+        self.model = adapter.mj_model if adapter is not None else mj_model
         self.data = None
         self.error = None
         self.load()
@@ -50,7 +51,9 @@ class MujocoReferenceFrames:
                 self.model = mujoco.MjModel.from_xml_path(str(self.model_path))
             self.data = mujoco.MjData(self.model)
 
-            if self.model.nkey > 0:
+            if self.adapter is not None:
+                self.data.qpos[:] = self.adapter.home_qpos
+            elif self.model.nkey > 0:
                 mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
 
             mujoco.mj_forward(self.model, self.data)
@@ -64,7 +67,11 @@ class MujocoReferenceFrames:
         if self.model is None or self.data is None:
             return None
 
-        binding = REFERENCE_FRAME_BINDINGS.get(frame_name)
+        binding = (
+            self.adapter.resolve_logical_frame(frame_name)
+            if self.adapter is not None
+            else REFERENCE_FRAME_BINDINGS.get(frame_name)
+        )
         if binding is None:
             return None
 

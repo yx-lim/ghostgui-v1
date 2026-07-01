@@ -15,7 +15,7 @@ import numpy as np
 
 from OpenGL import GL
 from OpenGL import GLU
-from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QMatrix4x4, QVector3D
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
@@ -29,6 +29,7 @@ class RobotCanvas3D(QOpenGLWidget):
     target_pose_dragged = Signal(float, float, float)
     target_transform_dragged = Signal(object, object)
     transform_drag_finished = Signal()
+    geometry_progress = Signal(int, int)
 
     def __init__(self):
         super().__init__()
@@ -66,14 +67,17 @@ class RobotCanvas3D(QOpenGLWidget):
             (self.target_x, self.target_y, self.target_z)
         )
         self._geometry_build_count = 0
+        self._geometry_queue = []
+        self._geometry_total = 0
+        self._geometry_timer = QTimer(self)
+        self._geometry_timer.setInterval(0)
+        self._geometry_timer.timeout.connect(self._compile_next_geometry)
 
     def set_robot_state(self, robot_state, ghost_renderer=None):
         self.robot_state = robot_state
         self.ghost_renderer = ghost_renderer
         if self.isValid():
-            self.makeCurrent()
             self._build_robot_geometry()
-            self.doneCurrent()
         self.update()
 
     def set_ghost_options(self, visible, alpha=0.18):
@@ -134,6 +138,10 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glLightfv(GL.GL_LIGHT0, GL.GL_SPECULAR, (0.5, 0.5, 0.5, 1.0))
         self._quadric = GLU.gluNewQuadric()
         GLU.gluQuadricNormals(self._quadric, GLU.GLU_SMOOTH)
+        # Display lists belong to this OpenGL context. A restored/cached widget
+        # keeps them; a genuinely new context rebuilds them incrementally.
+        self._geom_lists = []
+        self._geometry_queue = []
         self._build_robot_geometry()
 
     def resizeGL(self, width, height):
@@ -163,22 +171,52 @@ class RobotCanvas3D(QOpenGLWidget):
         self.draw_transform_gizmo()
 
     def _build_robot_geometry(self):
-        """Compile local geom topology once; FK only changes draw transforms."""
+        """Queue local geometry so Qt can repaint between expensive meshes."""
         if self.robot_state is None or self._geom_lists:
             return
         model = self.robot_state.mj_model
         self._geom_lists = [None] * model.ngeom
-        for geom_id in range(model.ngeom):
-            # Group 2 is the model's visual geometry. Drawing group 3 collision
-            # capsules over the same links caused overlapping surfaces/flicker.
-            if int(model.geom_group[geom_id]) != 2:
-                continue
+        render_ids = self.render_geom_ids(model)
+        # Native MJCF models usually separate visual (group 2) and collision
+        # geometry.  A sanitized URDF such as Go2 only has collision geometry;
+        # in that case it is also the best available render geometry.
+        self._geometry_queue = sorted(render_ids)
+        self._geometry_total = len(self._geometry_queue)
+        self.geometry_progress.emit(0, self._geometry_total)
+        if self._geometry_queue:
+            self._geometry_timer.start()
+
+    def _compile_next_geometry(self):
+        if not self._geometry_queue:
+            self._geometry_timer.stop()
+            return
+        if not self.isValid() or self.robot_state is None:
+            return
+        geom_id = self._geometry_queue.pop(0)
+        model = self.robot_state.mj_model
+        self.makeCurrent()
+        try:
             list_id = GL.glGenLists(1)
             GL.glNewList(list_id, GL.GL_COMPILE)
             self._draw_local_geom(model, geom_id)
             GL.glEndList()
             self._geom_lists[geom_id] = list_id
-        self._geometry_build_count += 1
+        finally:
+            self.doneCurrent()
+        complete = self._geometry_total - len(self._geometry_queue)
+        self.geometry_progress.emit(complete, self._geometry_total)
+        self.update()
+        if not self._geometry_queue:
+            self._geometry_timer.stop()
+            self._geometry_build_count += 1
+
+    @staticmethod
+    def render_geom_ids(model):
+        visual_ids = {
+            geom_id for geom_id in range(model.ngeom)
+            if int(model.geom_group[geom_id]) == 2
+        }
+        return visual_ids or set(range(model.ngeom))
 
     def _draw_local_geom(self, model, geom_id):
         import mujoco

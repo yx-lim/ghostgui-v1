@@ -118,6 +118,7 @@ class PythonRobotConfiguration:
     ik_error: float = 0.0
     success: bool = True
     status: str = "Python fallback"
+    qpos: object = None
 
 
 def rpy_to_quaternion(roll, pitch, yaw):
@@ -468,8 +469,15 @@ class MujocoIKBackend(PythonTrajectoryBackend):
     Jacobians and damped least squares.
     """
 
-    def __init__(self, model_path=MODEL_PATH, mj_model=None):
+    def __init__(self, model_path=MODEL_PATH, mj_model=None, adapter=None):
         super().__init__()
+        self.adapter = adapter
+        if adapter is not None:
+            self.joint_names = list(adapter.actuated_joints)
+            self.default_joint_positions = [
+                float(adapter.home_qpos[adapter.joints[name].qpos_address])
+                for name in self.joint_names
+            ]
 
         if not MUJOCO_IK_AVAILABLE:
             raise RuntimeError("mujoco or numpy is not available")
@@ -499,6 +507,8 @@ class MujocoIKBackend(PythonTrajectoryBackend):
         else:
             mujoco.mj_resetData(self.model, self.data)
 
+        if self.adapter is not None:
+            self.data.qpos[:] = self.adapter.home_qpos
         mujoco.mj_forward(self.model, self.data)
 
     def build_joint_maps(self):
@@ -515,7 +525,7 @@ class MujocoIKBackend(PythonTrajectoryBackend):
             if plain_name.startswith("robot/"):
                 plain_name = plain_name[len("robot/"):]
 
-            if plain_name not in JOINT_INDEX:
+            if plain_name not in self.joint_names:
                 continue
 
             self.joint_qpos_addresses[plain_name] = int(
@@ -530,7 +540,15 @@ class MujocoIKBackend(PythonTrajectoryBackend):
                 self.joint_limits[plain_name] = (float(lo), float(hi))
 
     def build_task_bindings(self):
-        for frame_name, (kind, mujoco_name, weight) in IK_TASKS.items():
+        if self.adapter is None or self.adapter.info.key == "g1":
+            configured = IK_TASKS
+        else:
+            configured = {
+                name: (kind, mujoco_name, 1.0)
+                for name, (kind, mujoco_name)
+                in self.adapter.logical_frame_bindings.items()
+            }
+        for frame_name, (kind, mujoco_name, weight) in configured.items():
             if kind == "site":
                 object_id = mujoco.mj_name2id(
                     self.model,
@@ -557,17 +575,24 @@ class MujocoIKBackend(PythonTrajectoryBackend):
     def qpos_to_configuration(self, time=0.0, status="MuJoCo IK"):
         q = PythonRobotConfiguration(
             time=time,
-            base_x=float(self.data.qpos[0]),
-            base_y=float(self.data.qpos[1]),
-            base_z=float(self.data.qpos[2]),
-            base_qw=float(self.data.qpos[3]),
-            base_qx=float(self.data.qpos[4]),
-            base_qy=float(self.data.qpos[5]),
-            base_qz=float(self.data.qpos[6]),
             joint_names=self.joint_names,
             joint_positions=[],
             status=status,
+            qpos=self.data.qpos.copy(),
         )
+
+        free_joints = (
+            list(self.adapter.free_joints_by_body.values())
+            if self.adapter is not None else []
+        )
+        if free_joints:
+            address = free_joints[0].qpos_address
+            q.base_x, q.base_y, q.base_z = map(
+                float, self.data.qpos[address:address + 3]
+            )
+            q.base_qw, q.base_qx, q.base_qy, q.base_qz = map(
+                float, self.data.qpos[address + 3:address + 7]
+            )
 
         for joint_name in self.joint_names:
             qpos_address = self.joint_qpos_addresses.get(joint_name)
@@ -579,15 +604,23 @@ class MujocoIKBackend(PythonTrajectoryBackend):
         return q
 
     def set_base_from_target(self, target):
-        self.data.qpos[0] = target.x
-        self.data.qpos[1] = target.y
-        self.data.qpos[2] = target.z
+        free_joints = (
+            list(self.adapter.free_joints_by_body.values())
+            if self.adapter is not None else []
+        )
+        address = free_joints[0].qpos_address if free_joints else 0
+        if self.adapter is not None and not free_joints:
+            return False
+        self.data.qpos[address] = target.x
+        self.data.qpos[address + 1] = target.y
+        self.data.qpos[address + 2] = target.z
         (
-            self.data.qpos[3],
-            self.data.qpos[4],
-            self.data.qpos[5],
-            self.data.qpos[6],
+            self.data.qpos[address + 3],
+            self.data.qpos[address + 4],
+            self.data.qpos[address + 5],
+            self.data.qpos[address + 6],
         ) = rpy_to_quaternion(target.roll, target.pitch, target.yaw)
+        return True
 
     def clamp_joint_limits(self):
         for joint_name, qpos_address in self.joint_qpos_addresses.items():
@@ -751,7 +784,7 @@ class MujocoIKBackend(PythonTrajectoryBackend):
 
 
 class BackendInterface:
-    def __init__(self, mj_model=None):
+    def __init__(self, mj_model=None, adapter=None):
         self.grouped_fallback_backend = PythonTrajectoryBackend()
         self.ik_backend = None
         self.ik_error = None
@@ -759,7 +792,7 @@ class BackendInterface:
 
         if MUJOCO_IK_AVAILABLE:
             try:
-                self.backend = MujocoIKBackend(mj_model=mj_model)
+                self.backend = MujocoIKBackend(mj_model=mj_model, adapter=adapter)
                 self.ik_backend = self.backend
                 self.using_cpp_backend = False
                 self.using_mujoco_ik_backend = True

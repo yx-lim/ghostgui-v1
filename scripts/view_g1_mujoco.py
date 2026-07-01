@@ -128,14 +128,13 @@ class TrajectoryPlayer:
 
         row = self.rows[self.index]
 
-        if all(column in row for column in BASE_COLUMNS):
-            self.data.qpos[0] = row["base_x"]
-            self.data.qpos[1] = row["base_y"]
-            self.data.qpos[2] = row["base_z"]
-            self.data.qpos[3] = row["base_qw"]
-            self.data.qpos[4] = row["base_qx"]
-            self.data.qpos[5] = row["base_qy"]
-            self.data.qpos[6] = row["base_qz"]
+        free_joints = [
+            joint_id for joint_id in range(self.model.njnt)
+            if int(self.model.jnt_type[joint_id]) == int(mujoco.mjtJoint.mjJNT_FREE)
+        ]
+        if free_joints and all(column in row for column in BASE_COLUMNS):
+            address = int(self.model.jnt_qposadr[free_joints[0]])
+            self.data.qpos[address:address + 7] = [row[name] for name in BASE_COLUMNS]
 
         for column, qpos_address in self.joint_qpos_by_column.items():
             if column in row:
@@ -245,19 +244,26 @@ def parse_args():
         default=None,
         help="Optional trajectory CSV to load on startup.",
     )
+    parser.add_argument(
+        "--model",
+        type=Path,
+        default=MODEL_PATH,
+        help="MJCF or MuJoCo-compatible URDF to load.",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    model_path = args.model.expanduser().resolve()
 
-    if not MODEL_PATH.exists():
-        print(f"Could not find model: {MODEL_PATH}", flush=True)
+    if not model_path.exists():
+        print(f"Could not find model: {model_path}", flush=True)
         sys.exit(1)
 
-    print(f"Loading model: {MODEL_PATH}", flush=True)
+    print(f"Loading model: {model_path}", flush=True)
 
-    model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
+    model = mujoco.MjModel.from_xml_path(str(model_path))
     data = mujoco.MjData(model)
 
     if model.nkey > 0:

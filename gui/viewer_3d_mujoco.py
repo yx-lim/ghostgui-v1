@@ -27,14 +27,18 @@ from PySide6.QtWidgets import (
 
 
 class Mujoco3DViewerPanel(QWidget):
-    def __init__(self):
+    def __init__(self, adapter=None):
         super().__init__()
 
         self.process = None
 
         self.project_root = Path(__file__).resolve().parents[1]
         self.viewer_script = self.project_root / "scripts" / "view_g1_mujoco.py"
-        self.model_path = self.project_root / "models" / "g1_29dof.xml"
+        self.adapter = adapter
+        self.model_path = (
+            adapter.runtime_model_path if adapter is not None
+            else self.project_root / "models" / "g1_29dof.xml"
+        )
         self.trajectory_csv_path = (
             self.project_root / "pelvis_base_trajectory_uniform_dt.csv"
         )
@@ -48,10 +52,12 @@ class Mujoco3DViewerPanel(QWidget):
     def build_ui(self):
         layout = QVBoxLayout()
 
-        self.title = QLabel("3D MuJoCo Viewer: G1 29-DoF")
-        self.model_label = QLabel(f"Model: {self.model_path}")
+        display_name = self.adapter.model_name if self.adapter else "Unitree G1"
+        self.title = QLabel(f"3D MuJoCo Viewer: {display_name}")
+        shown_path = self.adapter.model_path if self.adapter else self.model_path
+        self.model_label = QLabel(f"Model: {shown_path}")
 
-        self.open_button = QPushButton("Open G1 MuJoCo Viewer")
+        self.open_button = QPushButton("Open MuJoCo Viewer")
         self.close_button = QPushButton("Close MuJoCo Viewer")
         self.play_button = QPushButton("Play")
         self.pause_button = QPushButton("Pause")
@@ -103,6 +109,16 @@ class Mujoco3DViewerPanel(QWidget):
         layout.addWidget(self.log_box)
 
         self.setLayout(layout)
+
+    def set_model_adapter(self, adapter):
+        if self.process is not None:
+            self.close_viewer()
+        self.adapter = adapter
+        self.model_path = adapter.runtime_model_path
+        self.title.setText(f"3D MuJoCo Viewer: {adapter.model_name}")
+        self.model_label.setText(f"Model: {adapter.model_path}")
+        if adapter.load_warning:
+            self.log_box.append(adapter.load_warning)
 
     def load_timeline_metadata(self, csv_path):
         self.trajectory_csv_path = Path(csv_path)
@@ -170,7 +186,7 @@ class Mujoco3DViewerPanel(QWidget):
 
         self.log_box.append("Launching MuJoCo viewer...")
 
-        arguments = [str(self.viewer_script)]
+        arguments = [str(self.viewer_script), "--model", str(self.model_path)]
         if self.trajectory_csv_path.exists():
             arguments.extend(["--csv", str(self.trajectory_csv_path)])
 

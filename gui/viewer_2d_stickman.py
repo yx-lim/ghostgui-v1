@@ -16,6 +16,8 @@ Important:
 """
 
 import math
+import mujoco
+import numpy as np
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPen, QBrush
@@ -452,8 +454,11 @@ class StickmanPose:
 class Stickman2DViewer(QGraphicsView):
     target_dragged = Signal(float, float)
 
-    def __init__(self):
+    def __init__(self, adapter=None):
         super().__init__()
+
+        self.adapter = adapter
+        self.skeleton_state = adapter.create_state() if adapter is not None else None
 
         self.scene = QGraphicsScene()
         self.setScene(self.scene)
@@ -471,6 +476,14 @@ class Stickman2DViewer(QGraphicsView):
         self.target_yaw = 0.0
 
         self.dragging_target = False
+        self._skeleton_targets = {}
+        self._last_projected_positions = {}
+
+    def set_adapter(self, adapter):
+        self.adapter = adapter
+        self.skeleton_state = adapter.create_state() if adapter is not None else None
+        self.pose.reset()
+        self._skeleton_targets = {}
 
     # ============================================================
     # Coordinate transforms
@@ -496,7 +509,20 @@ class Stickman2DViewer(QGraphicsView):
         Used to attach the target marker when frame selector changes.
         """
 
-        return self.pose.get_body_point(frame_name)
+        if self.adapter is None:
+            return self.pose.get_body_point(frame_name)
+        binding = self.adapter.resolve_logical_frame(frame_name)
+        if binding is None:
+            return 0.0, 0.0
+        kind, name = binding
+        try:
+            position, _ = (
+                self.adapter.get_site_pose(name)
+                if kind == "site" else self.adapter.get_body_pose(name)
+            )
+        except KeyError:
+            return 0.0, 0.0
+        return self.project_position(position)
 
     def update_scene(
         self,
@@ -516,7 +542,7 @@ class Stickman2DViewer(QGraphicsView):
         if active_frame is not None:
             self.selected_frame_name = active_frame.frame_name
 
-            if apply_active_frame:
+            if apply_active_frame and self.adapter is None:
                 targets = trajectory.targets_at_time(active_frame.time)
                 existing = targets.get(active_frame.frame_name)
                 if (
@@ -528,7 +554,7 @@ class Stickman2DViewer(QGraphicsView):
                     targets[active_frame.frame_name] = active_frame
                 self.pose.apply_target_snapshot(targets)
 
-            if apply_active_frame:
+            if apply_active_frame and self.adapter is None:
                 point_x, point_z = self.pose.get_body_point(active_frame.frame_name)
             else:
                 point_x = active_frame.x
@@ -537,6 +563,15 @@ class Stickman2DViewer(QGraphicsView):
             self.target_x = point_x
             self.target_z = point_z
             self.target_yaw = active_frame.yaw
+
+            if self.adapter is not None:
+                self._skeleton_targets = {}
+                if apply_active_frame:
+                    self._skeleton_targets = trajectory.targets_at_time(
+                        active_frame.time
+                    )
+                    self._skeleton_targets[active_frame.frame_name] = active_frame
+                self.solve_generated_skeleton()
 
         self.scene.clear()
 
@@ -561,6 +596,9 @@ class Stickman2DViewer(QGraphicsView):
         )
 
     def draw_stickman(self):
+        if self.adapter is not None:
+            self.draw_generated_skeleton()
+            return
         pen_body = QPen(Qt.GlobalColor.black, 4)
         pen_joint = QPen(Qt.GlobalColor.black, 2)
         brush_joint = QBrush(Qt.GlobalColor.white)
@@ -635,6 +673,134 @@ class Stickman2DViewer(QGraphicsView):
         ]:
             joint(body_point)
 
+    def project_position(self, position):
+        """Readable side projection with a small lateral separation cue."""
+        x, y, z = map(float, position)
+        lateral = 0.22 if self.adapter.model_type == "humanoid" else 0.12
+        return x + lateral * y, z
+
+    def solve_generated_skeleton(self):
+        """Apply target snapshots through joint-limited MuJoCo kinematics."""
+        if self.skeleton_state is None:
+            return
+        self.skeleton_state.set_qpos(self.adapter.home_qpos)
+
+        def is_root_target(frame):
+            binding = self.adapter.resolve_logical_frame(frame.frame_name)
+            return bool(binding and binding[1] == self.adapter.root_body)
+
+        targets = sorted(
+            self._skeleton_targets.values(), key=lambda frame: not is_root_target(frame)
+        )
+        for frame in targets:
+            binding = self.adapter.resolve_logical_frame(frame.frame_name)
+            if binding is None:
+                continue
+            kind, name = binding
+            target = np.array([frame.x, frame.y, frame.z], dtype=float)
+            self.skeleton_state.solve_ik(
+                name,
+                target,
+                kind=kind,
+                target_quaternion=None,
+                orientation_weight=0.0,
+                tolerance=0.003,
+                max_iterations=100,
+            )
+            current, _ = self.skeleton_state.get_body_pose(name, kind)
+            residual = target - current
+            # Preserve rigid link lengths for out-of-reach targets by pulling
+            # the floating root and the rest of the robot along, matching the
+            # original 2D editor's whole-body follow behavior.
+            if (
+                np.linalg.norm(residual) > 0.005
+                and name != self.adapter.root_body
+                and self.adapter.free_joints_by_body
+            ):
+                free_joint = next(iter(self.adapter.free_joints_by_body.values()))
+                qpos = self.skeleton_state.get_qpos()
+                address = free_joint.qpos_address
+                qpos[address:address + 3] += residual
+                self.skeleton_state.set_qpos(qpos)
+                self.skeleton_state.solve_ik(
+                    name,
+                    target,
+                    kind=kind,
+                    target_quaternion=None,
+                    orientation_weight=0.0,
+                    tolerance=0.003,
+                    max_iterations=40,
+                )
+
+    def draw_generated_skeleton(self):
+        state = self.skeleton_state
+        positions = {}
+        for body_id in range(self.adapter.mj_model.nbody):
+            name = mujoco.mj_id2name(
+                self.adapter.mj_model, mujoco.mjtObj.mjOBJ_BODY, body_id
+            )
+            if name:
+                positions[name] = state.mj_data.xpos[body_id].copy()
+        ignored = tuple(
+            token.lower() for token in self.adapter.info.ignored_body_tokens
+        )
+
+        def relevant(name):
+            return name == "world" or not any(token in name.lower() for token in ignored)
+
+        site_parents = {}
+        for logical, (kind, name) in self.adapter.logical_frame_bindings.items():
+            if kind != "site":
+                continue
+            site_id = mujoco.mj_name2id(
+                self.adapter.mj_model, mujoco.mjtObj.mjOBJ_SITE, name
+            )
+            if site_id < 0:
+                continue
+            positions[name] = state.mj_data.site_xpos[site_id].copy()
+            body_id = int(self.adapter.mj_model.site_bodyid[site_id])
+            site_parents[name] = mujoco.mj_id2name(
+                self.adapter.mj_model, mujoco.mjtObj.mjOBJ_BODY, body_id
+            )
+
+        projected = {
+            name: self.project_position(position)
+            for name, position in positions.items() if relevant(name)
+        }
+        edges = []
+        for parent, child in self.adapter.get_kinematic_edges():
+            if child not in projected:
+                continue
+            effective_parent = parent
+            while effective_parent not in projected and effective_parent:
+                effective_parent = self.adapter.get_parent_body(effective_parent)
+            if effective_parent in projected and effective_parent != child:
+                edges.append((effective_parent, child))
+
+        # Logical sites are useful endpoints even when the MuJoCo body tree
+        # ends at an ankle/palm link.
+        for name, parent in site_parents.items():
+            if parent in projected:
+                edges.append((parent, name))
+
+        self._last_projected_positions = dict(projected)
+
+        pen_body = QPen(Qt.GlobalColor.black, 4)
+        pen_joint = QPen(Qt.GlobalColor.black, 2)
+        brush_joint = QBrush(Qt.GlobalColor.white)
+        for parent, child in edges:
+            ax, ay = self.world_to_screen(*projected[parent])
+            bx, by = self.world_to_screen(*projected[child])
+            self.scene.addLine(ax, ay, bx, by, pen_body)
+        important = set(sum(([a, b] for a, b in edges), []))
+        for name in important:
+            x, y = self.world_to_screen(*projected[name])
+            radius = 5 if name != self.adapter.root_body else 7
+            self.scene.addEllipse(
+                x - radius, y - radius, 2 * radius, 2 * radius,
+                pen_joint, brush_joint,
+            )
+
     def draw_trajectory(self, trajectory, show_lines=True):
         """
         Draw stored keyframe target positions.
@@ -702,7 +868,11 @@ class Stickman2DViewer(QGraphicsView):
         ).setPos(x + 12, y + 12)
 
     def draw_legend(self):
-        self.scene.addText("Black = simplified stickman").setPos(-315, -240)
+        label = (
+            f"Black = {self.adapter.model_name} kinematic skeleton"
+            if self.adapter is not None else "Black = simplified stickman"
+        )
+        self.scene.addText(label).setPos(-315, -240)
         self.scene.addText("Red = selected target frame").setPos(-315, -215)
         self.scene.addText("Colored = stored per-frame keyframes").setPos(-315, -190)
 

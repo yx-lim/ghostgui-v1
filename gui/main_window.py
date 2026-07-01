@@ -12,7 +12,9 @@ Updated project flow:
     5. Backend maps robot to each target frame
 """
 
-from PySide6.QtCore import Qt
+from dataclasses import dataclass
+
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -24,23 +26,54 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QTabWidget,
     QSplitter,
+    QStackedWidget,
+    QProgressDialog,
 )
 
 from .trajectory import Trajectory
 from .trajectory import SampledTrajectory
 from .controls import TrajectoryControlPanel
 from .viewer_2d import RobotCanvas
-from .robot_model_3d import RobotModel3D
 from .robot_viewer_3d import RobotViewer3D
 from .viewer_2d_stickman import Stickman2DViewer
 from .viewer_3d_mujoco import Mujoco3DViewerPanel
 from .backend_interface import BackendInterface
 from .model_reference import MujocoReferenceFrames
 from .collapsible_sidebar import CollapsibleSidebar
+from .robot_model_adapter import MuJoCoRobotAdapter
+from .robot_model_registry import ROBOT_MODELS
+
+
+@dataclass
+class RobotModelSession:
+    adapter: object
+    backend: object
+    reference: object
+    viewer_3d: object
+    viewer_2d_skeleton: object
+    trajectory: object
+    active_index: int = -1
+
+
+class ModelLoadThread(QThread):
+    loaded = Signal(str, object)
+    failed = Signal(str, str)
+
+    def __init__(self, model_key, parent=None):
+        super().__init__(parent)
+        self.model_key = model_key
+
+    def run(self):
+        try:
+            adapter = MuJoCoRobotAdapter(self.model_key)
+        except Exception as exc:
+            self.failed.emit(self.model_key, str(exc))
+            return
+        self.loaded.emit(self.model_key, adapter)
 
 
 class RobotGuiMainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, model_key="g1"):
         super().__init__()
 
         self.setWindowTitle("Reference Frame Trajectory GUI")
@@ -53,28 +86,57 @@ class RobotGuiMainWindow(QMainWindow):
 
         # One immutable MuJoCo model is shared by FK, IK, and rendering. Each
         # subsystem owns its own MjData so live UI and batch solves stay isolated.
+        self.model_key = model_key
         self.robot_model_3d = None
         self.robot_model_error = None
         try:
-            self.robot_model_3d = RobotModel3D()
+            self.robot_model_3d = MuJoCoRobotAdapter(model_key)
+            self.robot_model_error = self.robot_model_3d.load_warning
         except Exception as exc:
             self.robot_model_error = str(exc)
+        if self.robot_model_3d is not None:
+            self.setWindowTitle(
+                f"Reference Frame Trajectory GUI — {self.robot_model_3d.model_name}"
+            )
 
         shared_mj_model = (
             self.robot_model_3d.mj_model if self.robot_model_3d else None
         )
-        self.backend_interface = BackendInterface(mj_model=shared_mj_model)
-        self.model_reference = MujocoReferenceFrames(mj_model=shared_mj_model)
+        self.backend_interface = BackendInterface(
+            mj_model=shared_mj_model, adapter=self.robot_model_3d
+        )
+        self.model_reference = MujocoReferenceFrames(
+            mj_model=shared_mj_model, adapter=self.robot_model_3d
+        )
 
         # GUI widgets
-        self.controls = TrajectoryControlPanel()
+        frame_names = (
+            self.robot_model_3d.trajectory_frames
+            if self.robot_model_3d else ["pelvis"]
+        )
+        self.controls = TrajectoryControlPanel(
+            ROBOT_MODELS, model_key=model_key, frame_names=frame_names
+        )
         self.viewer_2d = RobotCanvas()
         self.viewer_3d = RobotViewer3D(
             robot_model=self.robot_model_3d,
             error=self.robot_model_error,
         )
-        self.viewer_2d_stickman = Stickman2DViewer()
-        self.viewer_3d_mujoco = Mujoco3DViewerPanel()
+        self.viewer_2d_stickman = Stickman2DViewer(self.robot_model_3d)
+        self.viewer_3d_mujoco = Mujoco3DViewerPanel(self.robot_model_3d)
+        self.model_sessions = {
+            model_key: RobotModelSession(
+                adapter=self.robot_model_3d,
+                backend=self.backend_interface,
+                reference=self.model_reference,
+                viewer_3d=self.viewer_3d,
+                viewer_2d_skeleton=self.viewer_2d_stickman,
+                trajectory=self.trajectory,
+                active_index=self.active_index,
+            )
+        }
+        self.model_loaders = {}
+        self.model_loading_dialog = None
         self.viewer_tabs = self.build_viewer_tabs()
         self.status_panel = self.build_status_panel()
         self.left_sidebar = CollapsibleSidebar(
@@ -155,9 +217,13 @@ class RobotGuiMainWindow(QMainWindow):
 
     def build_viewer_tabs(self):
         tabs = QTabWidget()
+        self.viewer_3d_stack = QStackedWidget()
+        self.viewer_3d_stack.addWidget(self.viewer_3d)
+        self.viewer_2d_skeleton_stack = QStackedWidget()
+        self.viewer_2d_skeleton_stack.addWidget(self.viewer_2d_stickman)
         tabs.addTab(self.viewer_2d, "2D Side View")
-        tabs.addTab(self.viewer_3d, "3D View")
-        tabs.addTab(self.viewer_2d_stickman, "2D Stickman")
+        tabs.addTab(self.viewer_3d_stack, "3D View")
+        tabs.addTab(self.viewer_2d_skeleton_stack, "2D Skeleton")
         tabs.addTab(self.viewer_3d_mujoco, "3D MuJoCo")
         return tabs
 
@@ -166,6 +232,7 @@ class RobotGuiMainWindow(QMainWindow):
     # ============================================================
 
     def connect_signals(self):
+        self.controls.model_changed.connect(self.on_model_changed)
         self.controls.pose_changed.connect(self.on_pose_changed)
         self.controls.add_keyframe_clicked.connect(self.on_add_keyframe)
         self.controls.update_keyframe_clicked.connect(self.on_update_keyframe)
@@ -179,13 +246,100 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.time_changed.connect(self.on_time_changed)
 
         self.viewer_2d.target_dragged.connect(self.on_target_dragged)
-        self.viewer_3d.target_dragged.connect(self.on_target_dragged)
-        self.viewer_3d.target_pose_dragged.connect(self.on_target_pose_dragged)
-        self.viewer_3d.target_pose_drag_finished.connect(
+        self.connect_model_viewer_signals(self.viewer_3d, self.viewer_2d_stickman)
+
+    def connect_model_viewer_signals(self, viewer_3d, viewer_2d_skeleton):
+        viewer_3d.target_dragged.connect(self.on_target_dragged)
+        viewer_3d.target_pose_dragged.connect(self.on_target_pose_dragged)
+        viewer_3d.target_pose_drag_finished.connect(
             self.on_target_pose_drag_finished
         )
-        self.viewer_3d.target_frame_changed.connect(self.on_3d_target_frame_changed)
-        self.viewer_2d_stickman.target_dragged.connect(self.on_target_dragged)
+        viewer_3d.target_frame_changed.connect(self.on_3d_target_frame_changed)
+        viewer_2d_skeleton.target_dragged.connect(self.on_target_dragged)
+
+    def on_model_changed(self, model_key):
+        """Swap model-owned widgets while retaining the surrounding app."""
+        if model_key == self.model_key:
+            return
+        cached = self.model_sessions.get(model_key)
+        if cached is not None:
+            self.activate_model_session(model_key, cached)
+            return
+        if model_key in self.model_loaders:
+            return
+        self.controls.model_box.setEnabled(False)
+        self.statusBar().showMessage(f"Loading {ROBOT_MODELS[model_key].display_name}…")
+        self.model_loading_dialog = QProgressDialog(
+            f"Loading {ROBOT_MODELS[model_key].display_name}…",
+            None, 0, 0, self,
+        )
+        self.model_loading_dialog.setWindowTitle("Loading robot model")
+        self.model_loading_dialog.setWindowModality(Qt.WindowModality.NonModal)
+        self.model_loading_dialog.setMinimumDuration(0)
+        self.model_loading_dialog.show()
+        loader = ModelLoadThread(model_key, self)
+        loader.loaded.connect(self.on_model_loaded)
+        loader.failed.connect(self.on_model_load_failed)
+        loader.finished.connect(loader.deleteLater)
+        self.model_loaders[model_key] = loader
+        loader.start()
+
+    def on_model_loaded(self, model_key, adapter):
+        self.model_loaders.pop(model_key, None)
+        backend = BackendInterface(mj_model=adapter.mj_model, adapter=adapter)
+        reference = MujocoReferenceFrames(adapter=adapter)
+        viewer_3d = RobotViewer3D(adapter, adapter.load_warning)
+        viewer_2d_skeleton = Stickman2DViewer(adapter)
+        self.connect_model_viewer_signals(viewer_3d, viewer_2d_skeleton)
+        self.viewer_3d_stack.addWidget(viewer_3d)
+        self.viewer_2d_skeleton_stack.addWidget(viewer_2d_skeleton)
+        session = RobotModelSession(
+            adapter, backend, reference, viewer_3d, viewer_2d_skeleton,
+            Trajectory(), -1,
+        )
+        self.model_sessions[model_key] = session
+        self.finish_model_loading_ui()
+        self.activate_model_session(model_key, session)
+
+    def on_model_load_failed(self, model_key, error):
+        self.model_loaders.pop(model_key, None)
+        self.finish_model_loading_ui()
+        self.status_text.setText(f"Could not load {model_key}: {error}")
+        index = self.controls.model_box.findData(self.model_key)
+        self.controls.model_box.blockSignals(True)
+        self.controls.model_box.setCurrentIndex(index)
+        self.controls.model_box.blockSignals(False)
+
+    def finish_model_loading_ui(self):
+        self.controls.model_box.setEnabled(True)
+        self.statusBar().clearMessage()
+        if self.model_loading_dialog is not None:
+            self.model_loading_dialog.close()
+            self.model_loading_dialog.deleteLater()
+            self.model_loading_dialog = None
+
+    def activate_model_session(self, model_key, session):
+        current = self.model_sessions.get(self.model_key)
+        if current is not None:
+            current.trajectory = self.trajectory
+            current.active_index = self.active_index
+        self.model_key = model_key
+        self.robot_model_3d = session.adapter
+        self.robot_model_error = session.adapter.load_warning
+        self.backend_interface = session.backend
+        self.model_reference = session.reference
+        self.viewer_3d = session.viewer_3d
+        self.viewer_2d_stickman = session.viewer_2d_skeleton
+        self.trajectory = session.trajectory
+        self.active_index = session.active_index
+        self.viewer_3d_stack.setCurrentWidget(self.viewer_3d)
+        self.viewer_2d_skeleton_stack.setCurrentWidget(self.viewer_2d_stickman)
+        self.viewer_3d_mujoco.set_model_adapter(session.adapter)
+        self.controls.set_frame_names(session.adapter.trajectory_frames)
+        self.setWindowTitle(
+            f"Reference Frame Trajectory GUI — {session.adapter.model_name}"
+        )
+        self.refresh_display(apply_stickman_frame=False)
 
     # ============================================================
     # GUI interaction callbacks

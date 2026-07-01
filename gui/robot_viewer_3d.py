@@ -94,6 +94,12 @@ class RobotViewer3D(QWidget):
     def __init__(self, robot_model=None, error=None):
         super().__init__()
         self.robot_model = robot_model
+        self.frame_bindings = (
+            dict(robot_model.logical_frame_bindings)
+            if robot_model is not None and hasattr(robot_model, "logical_frame_bindings")
+            else dict(FRAME_BINDINGS)
+        )
+        self.reverse_bindings = {value: key for key, value in self.frame_bindings.items()}
         self.robot_state = robot_model.create_state() if robot_model else None
         self.current_time = 0.0
         self.state_timeline = (
@@ -103,7 +109,14 @@ class RobotViewer3D(QWidget):
         self.ghost_renderer = TrajectoryGhostRenderer(robot_model) if robot_model else None
         self.collision_checker = CollisionChecker(robot_model) if robot_model else None
         self.collision_solver = (
-            CollisionAwareIKSolver(robot_model, self.collision_checker)
+            CollisionAwareIKSolver(
+                robot_model,
+                self.collision_checker,
+                orientation_weight=(
+                    0.0 if getattr(robot_model, "model_type", None) == "quadruped"
+                    else 0.25
+                ),
+            )
             if robot_model else None
         )
         self.robot_trajectory = []
@@ -111,6 +124,7 @@ class RobotViewer3D(QWidget):
         self.joint_controls = {}
         self._syncing_target = False
         self.canvas = RobotCanvas3D()
+        self.canvas.geometry_progress.connect(self._on_geometry_progress)
         self.canvas.target_dragged.connect(self.target_dragged.emit)
         self.canvas.target_transform_dragged.connect(self._on_transform_moved)
         self.canvas.transform_drag_finished.connect(
@@ -160,7 +174,7 @@ class RobotViewer3D(QWidget):
         target_layout = QFormLayout(target_group)
         self.target_box = QComboBox()
         if self.robot_model:
-            for frame_name, (kind, name) in FRAME_BINDINGS.items():
+            for frame_name, (kind, name) in self.frame_bindings.items():
                 try:
                     self.robot_state.resolve_object(name, kind)
                 except KeyError:
@@ -261,12 +275,22 @@ class RobotViewer3D(QWidget):
         target_group.setEnabled(enabled)
         trajectory_group.setEnabled(enabled)
 
+    def _on_geometry_progress(self, complete, total):
+        if total <= 0:
+            return
+        if complete < total:
+            self.status_label.setText(
+                f"Preparing 3D geometry… {complete}/{total}"
+            )
+        else:
+            self.status_label.setText("3D geometry ready.")
+
     def update_scene(self, trajectory, active_frame=None, show_trajectory_lines=True):
         # The live gizmo owns its quaternion. The legacy editor only exposes
         # yaw, so ordinary status refreshes must not reset a ring rotation.
         self.canvas.update_scene(trajectory, None, show_trajectory_lines)
         if active_frame is not None:
-            binding = FRAME_BINDINGS.get(active_frame.frame_name)
+            binding = self.frame_bindings.get(active_frame.frame_name)
             if binding is not None:
                 self.select_target(*binding, emit=False)
 
@@ -288,7 +312,7 @@ class RobotViewer3D(QWidget):
             return
         kind, name = self._selected_target()
         self._set_target_to_selected_pose()
-        frame_name = REVERSE_BINDINGS.get((kind, name))
+        frame_name = self.reverse_bindings.get((kind, name))
         if frame_name and not self._syncing_target:
             self.target_frame_changed.emit(frame_name)
 
@@ -495,6 +519,9 @@ class RobotViewer3D(QWidget):
             return
         qposes = []
         for configuration in states:
+            if getattr(configuration, "qpos", None) is not None:
+                qposes.append(configuration.qpos.copy())
+                continue
             qpos = self.robot_state.get_qpos()
             if len(qpos) >= 7:
                 qpos[:7] = [configuration.base_x, configuration.base_y, configuration.base_z,

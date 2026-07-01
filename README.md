@@ -2,7 +2,8 @@
 # GhostGUI
 
 A lightweight graphical interface for editing reference-frame and robot-state
-trajectories against the G1 MuJoCo model.
+trajectories against registered MuJoCo robot models. Unitree G1 and Go2 are
+included.
 
 ## Setup and run
 
@@ -13,7 +14,28 @@ pip install PySide6 PyOpenGL numpy mujoco
 python3 run_gui.py
 ```
 
-The live **3D View** tab loads `models/g1_29dof.xml`, exposes all controllable
+Choose the model from the **Robot model** control, or start directly with Go2:
+
+```bash
+python3 run_gui.py --model go2
+```
+
+G1 uses its MJCF and original visual meshes. Go2 ships with the prepared
+`models/go2/go2.xml`, so customer devices do not convert its source URDF during
+startup. The prepared model retains its 12 joints, limits, collision shapes,
+foot sites, lighting, colors, and kinematic tree.
+
+Model files are loaded off the GUI thread when switching. Each loaded model
+keeps its own in-memory editor/viewer session, including its OpenGL context, so
+switching back is immediate. OpenGL geometry is compiled incrementally during
+the first 3D display instead of blocking the Qt event loop.
+
+User-imported URDF models are converted once into a versioned, content-addressed
+cache under `~/.cache/ghostgui/models/` (override with
+`GHOSTGUI_CACHE_DIR`). Changing the URDF, a resolved mesh, MuJoCo version, or
+GhostGUI cache format creates a fresh cache entry automatically.
+
+The live **3D View** tab loads the selected registry model, exposes its controllable
 joint sliders, supports free TCP translation from the central sphere, X/Y/Z
 arrow translation, and X/Y/Z ring rotation with MuJoCo Jacobian IK, and can
 generate/play a simple qpos trajectory with
@@ -25,8 +47,8 @@ The **Reset 3D Pose** button is a one-shot action: it pauses playback, cancels a
 active gizmo drag, and restores model home qpos at the currently selected GUI
 time only. It does not replace or repeatedly modify the playback list. Changing
 `Time [s]` loads or creates an independent 3D
-qpos keyframe, so edits at `0.2s` do not modify `0s`. Selecting `pelvis` drives
-the model's floating root joint and is still checked for collisions.
+qpos keyframe, so edits at `0.2s` do not modify `0s`. Selecting G1 `pelvis` or
+Go2 `base` drives the model's floating root joint and is still checked for collisions.
 The existing 2D editors and separate **3D MuJoCo** CSV player remain available.
 
 Right-drag rotates the live 3D camera and the mouse wheel zooms. Gizmo axes are
@@ -57,3 +79,15 @@ Run the model/state sanity checks with:
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+## Manual model checks
+
+- G1: run `python3 run_gui.py --model g1`; confirm 29 joint sliders, the
+  humanoid kinematic skeleton, logical hand/foot targets, gizmo dragging,
+  reset, timeline states, and ghosts.
+- Go2: run `python3 run_gui.py --model go2`; confirm 12 joint sliders, the
+  base/four-leg skeleton, `FL/FR/RL/RR_foot` targets, lit ground, and colored
+  collision geometry.
+- Path independence: from another directory run
+  `python3 /path/to/ghostgui/run_gui.py --model go2`. Registry paths are
+  anchored to the source tree, not the shell working directory.
