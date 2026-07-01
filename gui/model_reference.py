@@ -29,9 +29,9 @@ REFERENCE_FRAME_BINDINGS = {
 
 
 class MujocoReferenceFrames:
-    def __init__(self, model_path=MODEL_PATH):
+    def __init__(self, model_path=MODEL_PATH, mj_model=None):
         self.model_path = Path(model_path)
-        self.model = None
+        self.model = mj_model
         self.data = None
         self.error = None
         self.load()
@@ -41,12 +41,13 @@ class MujocoReferenceFrames:
             self.error = "mujoco Python package is not installed."
             return
 
-        if not self.model_path.exists():
+        if self.model is None and not self.model_path.exists():
             self.error = f"Robot model not found: {self.model_path}"
             return
 
         try:
-            self.model = mujoco.MjModel.from_xml_path(str(self.model_path))
+            if self.model is None:
+                self.model = mujoco.MjModel.from_xml_path(str(self.model_path))
             self.data = mujoco.MjData(self.model)
 
             if self.model.nkey > 0:

@@ -12,6 +12,8 @@ Updated project flow:
     5. Backend maps robot to each target frame
 """
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -21,17 +23,20 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QGroupBox,
     QTabWidget,
+    QSplitter,
 )
 
 from .trajectory import Trajectory
 from .trajectory import SampledTrajectory
 from .controls import TrajectoryControlPanel
 from .viewer_2d import RobotCanvas
-from .viewer_3d import RobotCanvas3D
+from .robot_model_3d import RobotModel3D
+from .robot_viewer_3d import RobotViewer3D
 from .viewer_2d_stickman import Stickman2DViewer
 from .viewer_3d_mujoco import Mujoco3DViewerPanel
 from .backend_interface import BackendInterface
 from .model_reference import MujocoReferenceFrames
+from .collapsible_sidebar import CollapsibleSidebar
 
 
 class RobotGuiMainWindow(QMainWindow):
@@ -46,37 +51,88 @@ class RobotGuiMainWindow(QMainWindow):
         self.trajectory = Trajectory()
         self.active_index = -1
 
-        # Backend
-        self.backend_interface = BackendInterface()
-        self.model_reference = MujocoReferenceFrames()
+        # One immutable MuJoCo model is shared by FK, IK, and rendering. Each
+        # subsystem owns its own MjData so live UI and batch solves stay isolated.
+        self.robot_model_3d = None
+        self.robot_model_error = None
+        try:
+            self.robot_model_3d = RobotModel3D()
+        except Exception as exc:
+            self.robot_model_error = str(exc)
+
+        shared_mj_model = (
+            self.robot_model_3d.mj_model if self.robot_model_3d else None
+        )
+        self.backend_interface = BackendInterface(mj_model=shared_mj_model)
+        self.model_reference = MujocoReferenceFrames(mj_model=shared_mj_model)
 
         # GUI widgets
         self.controls = TrajectoryControlPanel()
         self.viewer_2d = RobotCanvas()
-        self.viewer_3d = RobotCanvas3D()
+        self.viewer_3d = RobotViewer3D(
+            robot_model=self.robot_model_3d,
+            error=self.robot_model_error,
+        )
         self.viewer_2d_stickman = Stickman2DViewer()
         self.viewer_3d_mujoco = Mujoco3DViewerPanel()
         self.viewer_tabs = self.build_viewer_tabs()
         self.status_panel = self.build_status_panel()
+        self.left_sidebar = CollapsibleSidebar(
+            "Frames",
+            self.controls,
+            side="left",
+            minimum_expanded_width=300,
+            maximum_expanded_width=560,
+        )
+        self.right_sidebar = CollapsibleSidebar(
+            "Status",
+            self.status_panel,
+            side="right",
+            minimum_expanded_width=350,
+            maximum_expanded_width=520,
+        )
 
         self.connect_signals()
-        self.set_current_frame_to_model_reference("pelvis", emit_pose_changed=False)
+        self.set_current_frame_to_model_reference(
+            self.controls.frame_box.currentText(),
+            emit_pose_changed=False,
+        )
 
         # --------------------------------------------------------
         # Layout
         # --------------------------------------------------------
-        central = QWidget()
-        layout = QHBoxLayout()
+        # Persistent splitter children resize/hide in place. The 3D viewer is
+        # never recreated, so collapsing a sidebar retains its OpenGL context.
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setHandleWidth(5)
+        self.main_splitter.addWidget(self.left_sidebar)
+        self.main_splitter.addWidget(self.viewer_tabs)
+        self.main_splitter.addWidget(self.right_sidebar)
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setStretchFactor(2, 0)
+        self.main_splitter.setSizes([380, 900, 390])
+        self.main_splitter.splitterMoved.connect(self.remember_sidebar_widths)
+        self.setCentralWidget(self.main_splitter)
 
-        layout.addWidget(self.controls)
-        layout.addWidget(self.viewer_tabs, stretch=1)
-        layout.addWidget(self.status_panel)
-
-        central.setLayout(layout)
-        self.setCentralWidget(central)
+        self.toggle_left_shortcut = QShortcut(QKeySequence("Ctrl+["), self)
+        self.toggle_left_shortcut.activated.connect(
+            self.left_sidebar.toggle_collapsed
+        )
+        self.toggle_right_shortcut = QShortcut(QKeySequence("Ctrl+]"), self)
+        self.toggle_right_shortcut.activated.connect(
+            self.right_sidebar.toggle_collapsed
+        )
 
         # Initial view
         self.refresh_display()
+
+    def remember_sidebar_widths(self, position=None, index=None):
+        sizes = self.main_splitter.sizes()
+        if len(sizes) == 3:
+            self.left_sidebar.remember_width(sizes[0])
+            self.right_sidebar.remember_width(sizes[2])
 
     # ============================================================
     # Build right status/debug panel
@@ -120,9 +176,15 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.trajectory_lines_changed.connect(
             self.on_trajectory_lines_changed
         )
+        self.controls.time_changed.connect(self.on_time_changed)
 
         self.viewer_2d.target_dragged.connect(self.on_target_dragged)
         self.viewer_3d.target_dragged.connect(self.on_target_dragged)
+        self.viewer_3d.target_pose_dragged.connect(self.on_target_pose_dragged)
+        self.viewer_3d.target_pose_drag_finished.connect(
+            self.on_target_pose_drag_finished
+        )
+        self.viewer_3d.target_frame_changed.connect(self.on_3d_target_frame_changed)
         self.viewer_2d_stickman.target_dragged.connect(self.on_target_dragged)
 
     # ============================================================
@@ -139,6 +201,21 @@ class RobotGuiMainWindow(QMainWindow):
 
         self.refresh_display()
 
+    def on_time_changed(self, time):
+        """Load or create the editable qpos keyframe for this GUI time."""
+        frame_name = self.controls.frame_box.currentText()
+        target = self.trajectory.targets_at_time(time).get(frame_name)
+        if target is not None:
+            self.controls.set_position_values(
+                x=target.x,
+                y=target.y,
+                z=target.z,
+                yaw=target.yaw,
+                emit_pose_changed=False,
+            )
+        self.refresh_display()
+        self.viewer_3d.set_current_time(time)
+
     def on_target_dragged(self, x, z):
         """
         Called when user drags the red reference frame in the viewer.
@@ -147,6 +224,30 @@ class RobotGuiMainWindow(QMainWindow):
         """
 
         self.controls.set_position_from_viewer(x, z)
+
+    def on_target_pose_dragged(self, x, y, z):
+        """Sync controls without repainting every viewer on every mouse event."""
+        # A full refresh here previously scheduled the 2D, 3D, stickman, table,
+        # and status panel repeatedly during one drag. The live canvas already
+        # updated its transforms; refresh the rest once on mouse release.
+        self.controls.set_position_values(
+            x=x, y=y, z=z, emit_pose_changed=False
+        )
+
+    def on_target_pose_drag_finished(self, x, y, z):
+        self.controls.set_position_values(
+            x=x, y=y, z=z, emit_pose_changed=False
+        )
+        # A completed 3D edit is an intentional keyframe edit. Upsert the
+        # selected logical target at the active time while RobotViewer3D stores
+        # the corresponding accepted qpos in its time-keyed state timeline.
+        frame = self.controls.current_frame()
+        self.active_index = self.trajectory.upsert_frame(frame)
+        self.refresh_display()
+
+    def on_3d_target_frame_changed(self, frame_name):
+        """Map common 3D body/site selections back to the 2D frame concept."""
+        self.controls.frame_box.setCurrentText(frame_name)
 
     def on_trajectory_lines_changed(self, checked):
         self.refresh_display()
@@ -267,6 +368,7 @@ class RobotGuiMainWindow(QMainWindow):
         sampled_trajectory = SampledTrajectory(samples=sampled_tracks)
 
         result_states = self.backend_interface.solve_trajectory(sampled_trajectory)
+        self.viewer_3d.load_backend_states(result_states)
 
         csv_path = "pelvis_base_trajectory_uniform_dt.csv"
         self.backend_interface.export_last_solution_csv(csv_path)
