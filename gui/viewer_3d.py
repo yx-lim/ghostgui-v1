@@ -11,16 +11,24 @@ The editor shares the same small contract as the 2D side view:
 
 import math
 
+import numpy as np
+
 from OpenGL import GL
+from OpenGL import GLU
 from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtGui import QMatrix4x4, QVector3D
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from .trajectory_colors import gl_color_for_frame
+from .trajectory import rpy_to_quat
+from .transform_gizmo import GizmoInteractionState, TransformGizmo
 
 
 class RobotCanvas3D(QOpenGLWidget):
     target_dragged = Signal(float, float)
+    target_pose_dragged = Signal(float, float, float)
+    target_transform_dragged = Signal(object, object)
+    transform_drag_finished = Signal()
 
     def __init__(self):
         super().__init__()
@@ -47,6 +55,40 @@ class RobotCanvas3D(QOpenGLWidget):
         self._model_view = QMatrix4x4()
         self._projection = QMatrix4x4()
         self._viewport = QRect(0, 0, 1, 1)
+        self.robot_state = None
+        self.ghost_renderer = None
+        self.show_ghosts = False
+        self.ghost_alpha = 0.18
+        self.use_model_colors = True
+        self._geom_lists = []
+        self._quadric = None
+        self.gizmo = TransformGizmo(
+            (self.target_x, self.target_y, self.target_z)
+        )
+        self._geometry_build_count = 0
+
+    def set_robot_state(self, robot_state, ghost_renderer=None):
+        self.robot_state = robot_state
+        self.ghost_renderer = ghost_renderer
+        if self.isValid():
+            self.makeCurrent()
+            self._build_robot_geometry()
+            self.doneCurrent()
+        self.update()
+
+    def set_ghost_options(self, visible, alpha=0.18):
+        self.show_ghosts = bool(visible)
+        self.ghost_alpha = max(0.02, min(0.8, float(alpha)))
+        self.update()
+
+    def set_use_model_colors(self, enabled):
+        self.use_model_colors = bool(enabled)
+        self.update()
+
+    def set_target_pose(self, position, quaternion=None):
+        self.target_x, self.target_y, self.target_z = map(float, position)
+        self.gizmo.set_pose(position, quaternion)
+        self.update()
 
     # ============================================================
     # Scene API
@@ -61,6 +103,14 @@ class RobotCanvas3D(QOpenGLWidget):
             self.target_y = active_frame.y
             self.target_z = active_frame.z
             self.target_yaw = active_frame.yaw
+            self.gizmo.set_pose(
+                (active_frame.x, active_frame.y, active_frame.z),
+                rpy_to_quat(
+                    active_frame.roll,
+                    active_frame.pitch,
+                    active_frame.yaw,
+                ),
+            )
 
         self.update()
 
@@ -73,6 +123,18 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glEnable(GL.GL_DEPTH_TEST)
         GL.glEnable(GL.GL_POINT_SMOOTH)
         GL.glPointSize(8.0)
+        GL.glEnable(GL.GL_NORMALIZE)
+        GL.glEnable(GL.GL_BLEND)
+        GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
+        GL.glEnable(GL.GL_COLOR_MATERIAL)
+        GL.glColorMaterial(GL.GL_FRONT_AND_BACK, GL.GL_AMBIENT_AND_DIFFUSE)
+        GL.glShadeModel(GL.GL_SMOOTH)
+        GL.glLightfv(GL.GL_LIGHT0, GL.GL_AMBIENT, (0.28, 0.28, 0.28, 1.0))
+        GL.glLightfv(GL.GL_LIGHT0, GL.GL_DIFFUSE, (0.78, 0.78, 0.78, 1.0))
+        GL.glLightfv(GL.GL_LIGHT0, GL.GL_SPECULAR, (0.5, 0.5, 0.5, 1.0))
+        self._quadric = GLU.gluNewQuadric()
+        GLU.gluQuadricNormals(self._quadric, GLU.GLU_SMOOTH)
+        self._build_robot_geometry()
 
     def resizeGL(self, width, height):
         GL.glViewport(0, 0, width, height)
@@ -90,8 +152,191 @@ class RobotCanvas3D(QOpenGLWidget):
 
         self.draw_ground_grid()
         self.draw_world_axes()
+        GL.glEnable(GL.GL_LIGHT0)
+        GL.glEnable(GL.GL_LIGHTING)
+        GL.glLightfv(GL.GL_LIGHT0, GL.GL_POSITION, (2.0, -3.0, 5.0, 1.0))
+        self.draw_trajectory_ghosts()
+        self.draw_robot()
+        GL.glDisable(GL.GL_LIGHTING)
+        GL.glDisable(GL.GL_LIGHT0)
         self.draw_trajectory()
-        self.draw_target_frame()
+        self.draw_transform_gizmo()
+
+    def _build_robot_geometry(self):
+        """Compile local geom topology once; FK only changes draw transforms."""
+        if self.robot_state is None or self._geom_lists:
+            return
+        model = self.robot_state.mj_model
+        self._geom_lists = [None] * model.ngeom
+        for geom_id in range(model.ngeom):
+            # Group 2 is the model's visual geometry. Drawing group 3 collision
+            # capsules over the same links caused overlapping surfaces/flicker.
+            if int(model.geom_group[geom_id]) != 2:
+                continue
+            list_id = GL.glGenLists(1)
+            GL.glNewList(list_id, GL.GL_COMPILE)
+            self._draw_local_geom(model, geom_id)
+            GL.glEndList()
+            self._geom_lists[geom_id] = list_id
+        self._geometry_build_count += 1
+
+    def _draw_local_geom(self, model, geom_id):
+        import mujoco
+
+        geom_type = int(model.geom_type[geom_id])
+        size = model.geom_size[geom_id]
+        if geom_type == int(mujoco.mjtGeom.mjGEOM_MESH):
+            mesh_id = int(model.geom_dataid[geom_id])
+            vertex_start = int(model.mesh_vertadr[mesh_id])
+            face_start = int(model.mesh_faceadr[mesh_id])
+            vertices = model.mesh_vert[
+                vertex_start:vertex_start + int(model.mesh_vertnum[mesh_id])
+            ]
+            normal_start = int(model.mesh_normaladr[mesh_id])
+            normals = model.mesh_normal[
+                normal_start:normal_start + int(model.mesh_normalnum[mesh_id])
+            ]
+            faces = model.mesh_face[
+                face_start:face_start + int(model.mesh_facenum[mesh_id])
+            ]
+            face_normals = model.mesh_facenormal[
+                face_start:face_start + int(model.mesh_facenum[mesh_id])
+            ]
+            GL.glBegin(GL.GL_TRIANGLES)
+            for face, normal_ids in zip(faces, face_normals):
+                fallback_normal = np.cross(
+                    vertices[int(face[1])] - vertices[int(face[0])],
+                    vertices[int(face[2])] - vertices[int(face[0])],
+                )
+                fallback_norm = float(np.linalg.norm(fallback_normal))
+                if fallback_norm > 1e-12:
+                    fallback_normal /= fallback_norm
+                for vertex_id, normal_id in zip(face, normal_ids):
+                    if int(normal_id) >= 0:
+                        GL.glNormal3fv(normals[int(normal_id)])
+                    elif fallback_norm > 1e-12:
+                        GL.glNormal3fv(fallback_normal)
+                    GL.glVertex3fv(vertices[int(vertex_id)])
+            GL.glEnd()
+            return
+        if self._quadric is None:
+            return
+        if geom_type == int(mujoco.mjtGeom.mjGEOM_SPHERE):
+            GLU.gluSphere(self._quadric, float(size[0]), 12, 8)
+        elif geom_type == int(mujoco.mjtGeom.mjGEOM_ELLIPSOID):
+            GL.glPushMatrix()
+            GL.glScalef(float(size[0]), float(size[1]), float(size[2]))
+            GLU.gluSphere(self._quadric, 1.0, 12, 8)
+            GL.glPopMatrix()
+        elif geom_type in (
+            int(mujoco.mjtGeom.mjGEOM_CAPSULE),
+            int(mujoco.mjtGeom.mjGEOM_CYLINDER),
+        ):
+            radius, half_length = float(size[0]), float(size[1])
+            GL.glTranslatef(0.0, 0.0, -half_length)
+            GLU.gluCylinder(self._quadric, radius, radius, 2.0 * half_length, 12, 1)
+            if geom_type == int(mujoco.mjtGeom.mjGEOM_CAPSULE):
+                GLU.gluSphere(self._quadric, radius, 12, 8)
+                GL.glTranslatef(0.0, 0.0, 2.0 * half_length)
+                GLU.gluSphere(self._quadric, radius, 12, 8)
+        elif geom_type == int(mujoco.mjtGeom.mjGEOM_BOX):
+            x, y, z = (float(v) for v in size)
+            vertices = [
+                (-x, -y, -z), (x, -y, -z), (x, y, -z), (-x, y, -z),
+                (-x, -y, z), (x, -y, z), (x, y, z), (-x, y, z),
+            ]
+            faces = [
+                ((0, 1, 2, 3), (0, 0, -1)),
+                ((4, 7, 6, 5), (0, 0, 1)),
+                ((0, 4, 5, 1), (0, -1, 0)),
+                ((1, 5, 6, 2), (1, 0, 0)),
+                ((2, 6, 7, 3), (0, 1, 0)),
+                ((4, 0, 3, 7), (-1, 0, 0)),
+            ]
+            GL.glBegin(GL.GL_QUADS)
+            for face, normal in faces:
+                GL.glNormal3fv(normal)
+                for vertex in face:
+                    GL.glVertex3fv(vertices[vertex])
+            GL.glEnd()
+
+    @staticmethod
+    def _transform_matrix(position, rotation):
+        matrix = [0.0] * 16
+        rotation = rotation.reshape(3, 3)
+        for row in range(3):
+            for column in range(3):
+                matrix[column * 4 + row] = float(rotation[row, column])
+        matrix[15] = 1.0
+        matrix[12:15] = [float(v) for v in position]
+        return matrix
+
+    def _draw_robot_transforms(self, positions, rotations, alpha_scale=1.0):
+        if self.robot_state is None or not self._geom_lists:
+            return
+        model = self.robot_state.mj_model
+        for geom_id, list_id in enumerate(self._geom_lists):
+            if list_id is None:
+                continue
+            if self.use_model_colors:
+                rgba = self.robot_state.robot_model.get_geom_rgba(geom_id)
+            else:
+                rgba = (0.55, 0.55, 0.55, 1.0)
+            self._apply_geom_material(model, geom_id)
+            GL.glColor4f(float(rgba[0]), float(rgba[1]), float(rgba[2]),
+                         float(rgba[3]) * alpha_scale)
+            GL.glPushMatrix()
+            GL.glMultMatrixf(self._transform_matrix(positions[geom_id], rotations[geom_id]))
+            GL.glCallList(list_id)
+            GL.glPopMatrix()
+
+    @staticmethod
+    def _apply_geom_material(model, geom_id):
+        material_id = int(model.geom_matid[geom_id])
+        if material_id >= 0:
+            specular = float(model.mat_specular[material_id])
+            shininess = float(model.mat_shininess[material_id]) * 128.0
+            emission = float(model.mat_emission[material_id])
+        else:
+            specular, shininess, emission = 0.2, 32.0, 0.0
+        GL.glMaterialfv(
+            GL.GL_FRONT_AND_BACK,
+            GL.GL_SPECULAR,
+            (specular, specular, specular, 1.0),
+        )
+        GL.glMaterialf(
+            GL.GL_FRONT_AND_BACK,
+            GL.GL_SHININESS,
+            max(0.0, min(128.0, shininess)),
+        )
+        GL.glMaterialfv(
+            GL.GL_FRONT_AND_BACK,
+            GL.GL_EMISSION,
+            (emission, emission, emission, 1.0),
+        )
+
+    def draw_robot(self):
+        if self.robot_state is None:
+            return
+        data = self.robot_state.mj_data
+        self._draw_robot_transforms(data.geom_xpos, data.geom_xmat)
+
+    def draw_trajectory_ghosts(self):
+        if not self.show_ghosts or self.ghost_renderer is None:
+            return
+        GL.glDepthMask(GL.GL_FALSE)
+        for positions, rotations in self.ghost_renderer.transforms:
+            # The animated main pose may exactly equal one cached waypoint.
+            # Skipping that duplicate avoids coincident transparent surfaces.
+            if self.robot_state is not None and np.allclose(
+                positions,
+                self.robot_state.mj_data.geom_xpos,
+                atol=1e-8,
+                rtol=0.0,
+            ):
+                continue
+            self._draw_robot_transforms(positions, rotations, self.ghost_alpha)
+        GL.glDepthMask(GL.GL_TRUE)
 
     def configure_camera(self):
         width = max(1, self.width())
@@ -204,26 +449,63 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glVertex3f(x, y, z)
         GL.glEnd()
 
-        arrow_len = 0.35
-        yaw = self.target_yaw
-
-        GL.glLineWidth(4.0)
-        GL.glColor3f(1.0, 0.12, 0.08)
-        GL.glBegin(GL.GL_LINES)
-        GL.glVertex3f(x, y, z)
-        GL.glVertex3f(
-            x + arrow_len * math.cos(yaw),
-            y + arrow_len * math.sin(yaw),
-            z,
+    def draw_transform_gizmo(self):
+        origin = self.gizmo.position
+        colors = {
+            "x": (0.9, 0.1, 0.1),
+            "y": (0.1, 0.8, 0.2),
+            "z": (0.2, 0.45, 1.0),
+        }
+        GL.glDisable(GL.GL_DEPTH_TEST)
+        sphere_active = self.gizmo.state in (
+            GizmoInteractionState.HOVER_TRANSLATE_FREE,
+            GizmoInteractionState.DRAG_TRANSLATE_FREE,
         )
+        sphere_color = (1.0, 0.9, 0.15) if sphere_active else (0.95, 0.75, 0.2)
+        GL.glColor3f(*sphere_color)
+        if self._quadric is not None:
+            GL.glPushMatrix()
+            GL.glTranslatef(*map(float, origin))
+            GLU.gluSphere(self._quadric, self.gizmo.sphere_radius, 16, 10)
+            GL.glPopMatrix()
+
+        GL.glLineWidth(5.0)
+        GL.glBegin(GL.GL_LINES)
+        for axis, delta in (("x", (self.gizmo.arrow_length, 0.0, 0.0)),
+                            ("y", (0.0, self.gizmo.arrow_length, 0.0)),
+                            ("z", (0.0, 0.0, self.gizmo.arrow_length))):
+            GL.glColor3f(*self._gizmo_color(axis, "TRANSLATE", colors[axis]))
+            axis_start = np.asarray(origin) + np.asarray(delta) / self.gizmo.arrow_length * (
+                self.gizmo.sphere_radius * 1.25
+            )
+            GL.glVertex3fv(axis_start)
+            GL.glVertex3f(*(origin[i] + delta[i] for i in range(3)))
         GL.glEnd()
 
-        GL.glLineWidth(2.0)
-        GL.glColor3f(1.0, 0.35, 0.30)
-        GL.glBegin(GL.GL_LINES)
-        GL.glVertex3f(x, y, 0.0)
-        GL.glVertex3f(x, y, z)
+        # Large endpoint dots are the visible/pickable arrowheads.
+        GL.glPointSize(11.0)
+        GL.glBegin(GL.GL_POINTS)
+        for axis, delta in (("x", (self.gizmo.arrow_length, 0.0, 0.0)),
+                            ("y", (0.0, self.gizmo.arrow_length, 0.0)),
+                            ("z", (0.0, 0.0, self.gizmo.arrow_length))):
+            GL.glColor3f(*self._gizmo_color(axis, "TRANSLATE", colors[axis]))
+            GL.glVertex3f(*(origin[i] + delta[i] for i in range(3)))
         GL.glEnd()
+
+        GL.glLineWidth(2.5)
+        for axis in ("x", "y", "z"):
+            GL.glColor3f(*self._gizmo_color(axis, "ROTATE", colors[axis]))
+            GL.glBegin(GL.GL_LINE_LOOP)
+            for point in self.gizmo.ring_points(axis):
+                GL.glVertex3fv(point)
+            GL.glEnd()
+        GL.glEnable(GL.GL_DEPTH_TEST)
+
+    def _gizmo_color(self, axis, operation, base_color):
+        state_name = self.gizmo.state.name
+        if operation in state_name and state_name.endswith(axis.upper()):
+            return (1.0, 0.9, 0.15)
+        return base_color
 
     # ============================================================
     # Mouse editing
@@ -233,15 +515,13 @@ class RobotCanvas3D(QOpenGLWidget):
         self.last_mouse_pos = event.position()
 
         if event.button() == Qt.MouseButton.LeftButton:
-            target_sx, target_sy = self.project_point(
-                self.target_x,
-                self.target_y,
-                self.target_z,
-            )
-            dx = event.position().x() - target_sx
-            dy = event.position().y() - target_sy
-            if math.sqrt(dx * dx + dy * dy) < 32:
-                self.dragging_target = True
+            if self.gizmo.begin_drag(
+                event.position().x(),
+                event.position().y(),
+                self.project_point,
+                self.screen_ray,
+            ):
+                self.update()
                 return
 
         if event.button() == Qt.MouseButton.RightButton:
@@ -251,13 +531,15 @@ class RobotCanvas3D(QOpenGLWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self.dragging_target:
-            x, z = self.screen_to_edit_plane(event.position().x(), event.position().y())
-
-            self.target_x = x
-            self.target_z = max(0.0, z)
-            self.target_dragged.emit(self.target_x, self.target_z)
-            self.update()
+        if self.gizmo.is_dragging:
+            position, quaternion = self.gizmo.drag(
+                event.position().x(),
+                event.position().y(),
+                self.project_point,
+                self.screen_ray,
+            )
+            self.target_x, self.target_y, self.target_z = map(float, position)
+            self.target_transform_dragged.emit(position, quaternion)
             return
 
         if self.rotating_camera and self.last_mouse_pos is not None:
@@ -268,13 +550,40 @@ class RobotCanvas3D(QOpenGLWidget):
             self.update()
             return
 
+        old_state = self.gizmo.state
+        new_state = self.gizmo.hover(
+            event.position().x(), event.position().y(), self.project_point
+        )
+        if new_state != old_state:
+            self.setCursor(
+                Qt.CursorShape.OpenHandCursor
+                if new_state != GizmoInteractionState.NONE
+                else Qt.CursorShape.ArrowCursor
+            )
+            self.update()
+
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        transform_was_dragging = self.gizmo.is_dragging
         self.dragging_target = False
         self.rotating_camera = False
         self.last_mouse_pos = None
+        self.gizmo.end_drag()
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.update()
+        if transform_was_dragging:
+            self.transform_drag_finished.emit()
         super().mouseReleaseEvent(event)
+
+    def cancel_transform_drag(self):
+        """Cancel interaction state without emitting a completed edit."""
+        self.gizmo.end_drag()
+        self.dragging_target = False
+        self.rotating_camera = False
+        self.last_mouse_pos = None
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.update()
 
     def wheelEvent(self, event):
         steps = event.angleDelta().y() / 120.0
@@ -290,6 +599,22 @@ class RobotCanvas3D(QOpenGLWidget):
         point = QVector3D(x, y, z)
         screen = point.project(self._model_view, self._projection, self._viewport)
         return screen.x(), self.height() - screen.y()
+
+    def screen_ray(self, sx, sy):
+        self.configure_camera()
+        near = QVector3D(sx, self.height() - sy, 0.0).unproject(
+            self._model_view, self._projection, self._viewport
+        )
+        far = QVector3D(sx, self.height() - sy, 1.0).unproject(
+            self._model_view, self._projection, self._viewport
+        )
+        origin = np.array([near.x(), near.y(), near.z()], dtype=float)
+        direction = np.array(
+            [far.x() - near.x(), far.y() - near.y(), far.z() - near.z()],
+            dtype=float,
+        )
+        direction /= max(1e-12, float(np.linalg.norm(direction)))
+        return origin, direction
 
     def screen_to_edit_plane(self, sx, sy):
         """

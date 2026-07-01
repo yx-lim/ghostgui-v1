@@ -238,6 +238,17 @@ class Trajectory:
         self._sort_track(frame.frame_name)
         return self.index_of_frame(frame)
 
+    def upsert_frame(self, frame, tolerance=1e-6):
+        """Insert or replace one logical target keyframe at the same time."""
+        self.ensure_track(frame.frame_name)
+        track = self.tracks[frame.frame_name]
+        for index, existing in enumerate(track):
+            if abs(existing.time - frame.time) <= tolerance:
+                track[index] = frame
+                self._sort_track(frame.frame_name)
+                return self.index_of_frame(frame)
+        return self.add_frame(frame)
+
     def update_frame(self, index, frame):
         """
         Replace an existing keyframe selected from the flattened display.

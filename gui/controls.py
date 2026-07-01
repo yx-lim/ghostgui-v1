@@ -15,6 +15,8 @@ The GUI now edits:
     - trajectory keyframe table
 """
 
+import math
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget,
@@ -42,6 +44,7 @@ class LabeledSlider(QWidget):
 
         self.name = name
         self.scale = scale
+        self.decimals = max(2, int(math.ceil(math.log10(max(1, scale)))))
         self._syncing = False
 
         layout = QVBoxLayout()
@@ -55,7 +58,7 @@ class LabeledSlider(QWidget):
         self.slider.setMaximum(max_value)
         self.slider.setValue(initial_value)
 
-        self.input.setDecimals(2)
+        self.input.setDecimals(self.decimals)
         self.input.setRange(min_value / self.scale, max_value / self.scale)
         self.input.setSingleStep(1 / self.scale)
         self.input.setValue(initial_value / self.scale)
@@ -101,7 +104,7 @@ class LabeledSlider(QWidget):
         self.value_changed.emit(self.value())
 
     def update_label(self):
-        self.label.setText(f"{self.name}: {self.value():.2f}")
+        self.label.setText(f"{self.name}: {self.value():.{self.decimals}f}")
 
 
 class TrajectoryControlPanel(QGroupBox):
@@ -133,6 +136,7 @@ class TrajectoryControlPanel(QGroupBox):
     keyframe_selected = Signal(int)
     frame_name_changed = Signal(str)
     trajectory_lines_changed = Signal(bool)
+    time_changed = Signal(float)
 
     def __init__(self):
         super().__init__("Reference Frame Trajectory Editor")
@@ -156,6 +160,9 @@ class TrajectoryControlPanel(QGroupBox):
             "left_hand",
             "right_hand",
         ])
+        # A hand is the most useful default for the 3D transform gizmo. The
+        # user can still select pelvis/feet exactly as before.
+        self.frame_box.setCurrentText("left_hand")
         self.frame_box.currentTextChanged.connect(self.frame_name_changed.emit)
         layout.addWidget(self.frame_box)
 
@@ -186,26 +193,26 @@ class TrajectoryControlPanel(QGroupBox):
 
         self.x_slider = LabeledSlider(
             "Target X [m]",
-            min_value=-200,
-            max_value=200,
+            min_value=-2000,
+            max_value=2000,
             initial_value=0,
-            scale=100,
+            scale=1000,
         )
 
         self.y_slider = LabeledSlider(
             "Target Y [m]",
-            min_value=-100,
-            max_value=100,
+            min_value=-1000,
+            max_value=1000,
             initial_value=0,
-            scale=100,
+            scale=1000,
         )
 
         self.z_slider = LabeledSlider(
             "Target Z [m]",
             min_value=0,
-            max_value=200,
-            initial_value=90,
-            scale=100,
+            max_value=2000,
+            initial_value=900,
+            scale=1000,
         )
 
         self.yaw_slider = LabeledSlider(
@@ -227,6 +234,15 @@ class TrajectoryControlPanel(QGroupBox):
         self.y_slider.value_changed.connect(self.emit_pose_changed)
         self.z_slider.value_changed.connect(self.emit_pose_changed)
         self.yaw_slider.value_changed.connect(self.emit_pose_changed)
+        # Commit timeline selection once per interaction. Connecting the raw
+        # valueChanged signal would create a qpos keyframe at every intermediate
+        # slider tick while scrubbing from (for example) 0.0 to 0.2 seconds.
+        self.time_slider.slider.sliderReleased.connect(
+            lambda: self.emit_time_changed(self.time_slider.value())
+        )
+        self.time_slider.input.editingFinished.connect(
+            lambda: self.emit_time_changed(self.time_slider.value())
+        )
 
         # --------------------------------------------------------
         # Trajectory display options
@@ -291,6 +307,10 @@ class TrajectoryControlPanel(QGroupBox):
             self.yaw_slider.value(),
         )
 
+    def emit_time_changed(self, value):
+        if not self._suppress_pose_changed:
+            self.time_changed.emit(float(value))
+
     def current_frame(self):
         """
         Convert GUI values into a TargetFrame object.
@@ -332,6 +352,7 @@ class TrajectoryControlPanel(QGroupBox):
         finally:
             self._suppress_pose_changed = False
 
+        self.time_changed.emit(self.time_slider.value())
         self.emit_pose_changed()
 
     def set_position_from_viewer(self, x, z, emit_pose_changed=True):
@@ -341,7 +362,9 @@ class TrajectoryControlPanel(QGroupBox):
 
         self.set_position_values(x=x, z=z, emit_pose_changed=emit_pose_changed)
 
-    def set_position_values(self, x=None, y=None, z=None, emit_pose_changed=True):
+    def set_position_values(
+        self, x=None, y=None, z=None, yaw=None, emit_pose_changed=True
+    ):
         """
         Set target position controls, optionally preserving untouched axes.
         """
@@ -355,6 +378,8 @@ class TrajectoryControlPanel(QGroupBox):
                 self.y_slider.set_value(y)
             if z is not None:
                 self.z_slider.set_value(z)
+            if yaw is not None:
+                self.yaw_slider.set_value(yaw)
         finally:
             self._suppress_pose_changed = False
 

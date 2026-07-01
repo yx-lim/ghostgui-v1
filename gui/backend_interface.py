@@ -468,7 +468,7 @@ class MujocoIKBackend(PythonTrajectoryBackend):
     Jacobians and damped least squares.
     """
 
-    def __init__(self, model_path=MODEL_PATH):
+    def __init__(self, model_path=MODEL_PATH, mj_model=None):
         super().__init__()
 
         if not MUJOCO_IK_AVAILABLE:
@@ -476,10 +476,12 @@ class MujocoIKBackend(PythonTrajectoryBackend):
 
         self.model_path = Path(model_path)
 
-        if not self.model_path.exists():
+        if mj_model is None and not self.model_path.exists():
             raise FileNotFoundError(self.model_path)
 
-        self.model = mujoco.MjModel.from_xml_path(str(self.model_path))
+        self.model = mj_model
+        if self.model is None:
+            self.model = mujoco.MjModel.from_xml_path(str(self.model_path))
         self.data = mujoco.MjData(self.model)
 
         self.joint_qpos_addresses = {}
@@ -749,7 +751,7 @@ class MujocoIKBackend(PythonTrajectoryBackend):
 
 
 class BackendInterface:
-    def __init__(self):
+    def __init__(self, mj_model=None):
         self.grouped_fallback_backend = PythonTrajectoryBackend()
         self.ik_backend = None
         self.ik_error = None
@@ -757,7 +759,7 @@ class BackendInterface:
 
         if MUJOCO_IK_AVAILABLE:
             try:
-                self.backend = MujocoIKBackend()
+                self.backend = MujocoIKBackend(mj_model=mj_model)
                 self.ik_backend = self.backend
                 self.using_cpp_backend = False
                 self.using_mujoco_ik_backend = True
