@@ -297,6 +297,82 @@ class MuJoCoRobotAdapter(RobotModel3D):
             return "body", body
         return None
 
+    def logical_frame_for_body(self, body_name):
+        """Map a picked MuJoCo body to the nearest editable logical frame."""
+        body_id = self._body_id(body_name)
+        if body_id is None:
+            return None
+        owner_by_logical = {}
+        for logical, (kind, object_name) in self.logical_frame_bindings.items():
+            if kind == "body":
+                owner = object_name
+            else:
+                site_id = mujoco.mj_name2id(
+                    self.mj_model, mujoco.mjtObj.mjOBJ_SITE, object_name
+                )
+                if site_id < 0:
+                    continue
+                owner_id = int(self.mj_model.site_bodyid[site_id])
+                owner = mujoco.mj_id2name(
+                    self.mj_model, mujoco.mjtObj.mjOBJ_BODY, owner_id
+                )
+            owner_by_logical[logical] = owner
+            if owner == body_name:
+                return logical
+
+        plain = self.plain_name(body_name).lower()
+        semantic = None
+        if any(token in plain for token in ("hand", "palm", "wrist", "elbow", "shoulder", "arm")):
+            semantic = "hand"
+        elif any(token in plain for token in ("foot", "ankle", "calf", "knee", "thigh", "hip", "leg")):
+            semantic = "foot"
+        elif any(token in plain for token in ("pelvis", "base", "root")):
+            semantic = "base"
+        elif any(token in plain for token in ("torso", "trunk", "waist")):
+            semantic = "torso"
+
+        side = None
+        for token in ("left", "right", "fl", "fr", "rl", "rr"):
+            if plain.startswith(token + "_") or f"/{token}_" in body_name.lower():
+                side = token
+                break
+
+        def ancestors(name):
+            result = {}
+            distance = 0
+            while name is not None and name not in result:
+                result[name] = distance
+                name = self.get_parent_body(name)
+                distance += 1
+            return result
+
+        picked_ancestors = ancestors(body_name)
+        scored = []
+        for logical, owner in owner_by_logical.items():
+            owner_ancestors = ancestors(owner)
+            common = set(picked_ancestors) & set(owner_ancestors)
+            if not common:
+                continue
+            distance = min(
+                picked_ancestors[name] + owner_ancestors[name] for name in common
+            )
+            lower = logical.lower()
+            penalty = 0
+            if semantic == "hand" and "hand" not in lower:
+                penalty += 100
+            elif semantic == "foot" and "foot" not in lower:
+                penalty += 100
+            elif semantic == "base" and not any(x in lower for x in ("pelvis", "base")):
+                penalty += 100
+            elif semantic == "torso" and not any(x in lower for x in ("torso", "trunk")):
+                penalty += 100
+            if side and not lower.startswith(side):
+                aliases = {"left": "l", "right": "r"}
+                if not lower.startswith(aliases.get(side, side)):
+                    penalty += 50
+            scored.append((penalty + distance, logical))
+        return min(scored)[1] if scored else None
+
     def get_body_names(self):
         return list(self.body_names)
 

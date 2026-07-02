@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -90,6 +92,7 @@ class RobotViewer3D(QWidget):
     target_pose_dragged = Signal(float, float, float)
     target_pose_drag_finished = Signal(float, float, float)
     target_frame_changed = Signal(str)
+    preview_cancelled = Signal()
 
     def __init__(self, robot_model=None, error=None):
         super().__init__()
@@ -100,7 +103,12 @@ class RobotViewer3D(QWidget):
             else dict(FRAME_BINDINGS)
         )
         self.reverse_bindings = {value: key for key, value in self.frame_bindings.items()}
-        self.robot_state = robot_model.create_state() if robot_model else None
+        self.committed_state = robot_model.create_state() if robot_model else None
+        self.preview_state = robot_model.create_state() if robot_model else None
+        # Compatibility alias: external readers historically used robot_state.
+        # It now always means the timeline-backed committed state.
+        self.robot_state = self.committed_state
+        self.preview_active = False
         self.current_time = 0.0
         self.state_timeline = (
             RobotStateTimeline(robot_model, initial_qpos=self.robot_state.get_qpos())
@@ -130,6 +138,7 @@ class RobotViewer3D(QWidget):
         self.canvas.transform_drag_finished.connect(
             self._on_transform_drag_finished
         )
+        self.canvas.body_double_clicked.connect(self._on_body_double_clicked)
         self.last_valid_target_position = None
         self.last_valid_target_quaternion = None
         self.play_timer = QTimer(self)
@@ -137,7 +146,9 @@ class RobotViewer3D(QWidget):
         self.play_timer.timeout.connect(self._advance_frame)
         self._build_ui(error)
         if self.robot_state:
-            self.canvas.set_robot_state(self.robot_state, self.ghost_renderer)
+            self.canvas.set_robot_states(
+                self.committed_state, self.preview_state, self.ghost_renderer
+            )
             self._set_target_to_selected_pose()
 
     def _build_ui(self, error):
@@ -201,6 +212,19 @@ class RobotViewer3D(QWidget):
         self.root_pose_label = QLabel()
         target_layout.addRow("Root pose", self.root_pose_label)
         panel.addWidget(target_group)
+
+        preview_group = QGroupBox("Preview workflow")
+        preview_layout = QHBoxLayout(preview_group)
+        self.plan_preview_button = QPushButton("Plan Preview")
+        self.accept_preview_button = QPushButton("Accept Preview")
+        self.cancel_preview_button = QPushButton("Cancel Preview")
+        self.plan_preview_button.clicked.connect(self.plan_preview)
+        self.accept_preview_button.clicked.connect(self.accept_preview)
+        self.cancel_preview_button.clicked.connect(self.cancel_preview)
+        preview_layout.addWidget(self.plan_preview_button)
+        preview_layout.addWidget(self.accept_preview_button)
+        preview_layout.addWidget(self.cancel_preview_button)
+        panel.addWidget(preview_group)
 
         trajectory_group = QGroupBox("Trajectory / ghosts")
         trajectory_layout = QFormLayout(trajectory_group)
@@ -274,6 +298,7 @@ class RobotViewer3D(QWidget):
         self.reset_button.setEnabled(enabled)
         target_group.setEnabled(enabled)
         trajectory_group.setEnabled(enabled)
+        preview_group.setEnabled(enabled)
 
     def _on_geometry_progress(self, complete, total):
         if total <= 0:
@@ -321,7 +346,8 @@ class RobotViewer3D(QWidget):
         if not name:
             return
         try:
-            position, quaternion = self.robot_state.get_body_pose(name, kind)
+            state = self.preview_state if self.preview_active else self.committed_state
+            position, quaternion = state.get_body_pose(name, kind)
         except KeyError as exc:
             self.status_label.setText(str(exc))
             return
@@ -331,29 +357,41 @@ class RobotViewer3D(QWidget):
         self._update_root_pose_label()
 
     def _joint_changed(self, name, value):
-        self.robot_state.set_joint_value(name, value)
-        self.update_current_keyframe_from_robot_state()
+        self.begin_preview()
+        self.preview_state.set_joint_value(name, value)
         self._set_target_to_selected_pose()
-        self.status_label.setText(f"FK updated: {name} = {value:+.3f} rad")
+        self.status_label.setText(
+            f"Preview FK: {name} = {value:+.3f} rad; Accept Preview to commit"
+        )
 
     def _sync_joint_controls(self):
+        state = self.preview_state if self.preview_active else self.committed_state
         for name, control in self.joint_controls.items():
-            control.set_value(self.robot_state.get_joint_value(name))
+            control.set_value(state.get_joint_value(name))
+
+    def begin_preview(self):
+        if not self.robot_state or self.preview_active:
+            return
+        self.preview_state.set_qpos(self.committed_state.get_qpos())
+        self.preview_active = True
+        self.canvas.set_preview_visible(True)
+        self._update_root_pose_label()
 
     def _on_transform_moved(self, position, quaternion):
         kind, name = self._selected_target()
         if not name:
             self.status_label.setText("Target pose moved; no body/site is selected.")
             return
+        self.begin_preview()
         if self.last_valid_target_position is None:
-            current_position, current_quaternion = self.robot_state.get_body_pose(
+            current_position, current_quaternion = self.preview_state.get_body_pose(
                 name, kind
             )
             self.last_valid_target_position = current_position
             self.last_valid_target_quaternion = current_quaternion
 
         result = self.collision_solver.solve_drag(
-            self.robot_state.get_qpos(),
+            self.preview_state.get_qpos(),
             self.last_valid_target_position,
             self.last_valid_target_quaternion,
             position,
@@ -362,10 +400,9 @@ class RobotViewer3D(QWidget):
             kind=kind,
         )
         if result.success:
-            self.robot_state.set_qpos(result.qpos)
+            self.preview_state.set_qpos(result.qpos)
             self.last_valid_target_position = result.position.copy()
             self.last_valid_target_quaternion = result.quaternion.copy()
-            self.update_current_keyframe_from_robot_state(refresh_ghosts=False)
 
         # Whether fully accepted, clamped, or rejected, snap the handle back to
         # the last collision-free pose rather than displaying an invalid target.
@@ -377,7 +414,7 @@ class RobotViewer3D(QWidget):
         self.status_label.setText(
             f"{'TCP free translate; ' if self.canvas.gizmo.state.name == 'DRAG_TRANSLATE_FREE' else ''}"
             f"{result.status}; accepted={result.accepted_fraction:.0%}; "
-            f"IK error={result.ik_error:.4f}"
+            f"IK error={result.ik_error:.4f}; preview not committed"
         )
         self.target_pose_dragged.emit(
             *map(float, self.last_valid_target_position)
@@ -395,10 +432,77 @@ class RobotViewer3D(QWidget):
 
     def _on_transform_drag_finished(self):
         if self.last_valid_target_position is not None:
-            self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
+            self.status_label.setText(
+                "Preview ready. Plan, Accept, or Cancel; committed robot is unchanged."
+            )
+
+    def plan_preview(self):
+        if not self.preview_active:
+            self.status_label.setText("No preview changes to plan.")
+            return
+        start = self.committed_state.get_qpos()
+        goal = self.preview_state.get_qpos()
+        planned = [
+            self.state_timeline._interpolate(start, goal, alpha)
+            for alpha in np.linspace(0.0, 1.0, 40)
+        ]
+        self.robot_trajectory = planned
+        self.ghost_trajectory = list(planned)
+        self.frame_slider.blockSignals(True)
+        self.frame_slider.setRange(0, len(planned) - 1)
+        self.frame_slider.setValue(0)
+        self.frame_slider.blockSignals(False)
+        self.show_ghosts.setChecked(True)
+        self._rebuild_ghosts()
+        self.status_label.setText(
+            "Planned committed-to-preview path; no timeline state was changed."
+        )
+
+    def accept_preview(self):
+        if not self.preview_active:
+            self.status_label.setText("No preview changes to accept.")
+            return
+        self.committed_state.set_qpos(self.preview_state.get_qpos())
+        self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
+        self.preview_state.set_qpos(self.committed_state.get_qpos())
+        self.preview_active = False
+        self.canvas.set_preview_visible(False)
+        self._sync_joint_controls()
+        self._set_target_to_selected_pose()
+        self.status_label.setText(
+            f"Accepted preview into committed keyframe at t={self.current_time:.2f} s"
+        )
+        if self.last_valid_target_position is not None:
             self.target_pose_drag_finished.emit(
                 *map(float, self.last_valid_target_position)
             )
+
+    def cancel_preview(self):
+        if not self.robot_state:
+            return
+        self.preview_state.set_qpos(self.committed_state.get_qpos())
+        self.preview_active = False
+        self.canvas.set_preview_visible(False)
+        self._sync_joint_controls()
+        self._set_target_to_selected_pose()
+        self.status_label.setText("Preview discarded; committed state is unchanged.")
+        self.preview_cancelled.emit()
+
+    def _on_body_double_clicked(self, body_name):
+        logical = (
+            self.robot_model.logical_frame_for_body(body_name)
+            if hasattr(self.robot_model, "logical_frame_for_body") else None
+        )
+        binding = self.frame_bindings.get(logical) if logical else None
+        if binding is None or not self.select_target(*binding, emit=False):
+            self.status_label.setText(
+                f"Body {body_name!r} has no nearby editable trajectory frame."
+            )
+            return
+        self.target_frame_changed.emit(logical)
+        self.status_label.setText(
+            f"Selected {logical} from double-clicked body {body_name}."
+        )
 
     def get_current_time(self):
         return self.current_time
@@ -419,7 +523,10 @@ class RobotViewer3D(QWidget):
     def set_robot_state_for_current_time(self, qpos):
         if not self.robot_state:
             return
-        self.robot_state.set_qpos(qpos)
+        self.committed_state.set_qpos(qpos)
+        self.preview_state.set_qpos(qpos)
+        self.preview_active = False
+        self.canvas.set_preview_visible(False)
         self._sync_joint_controls()
         self._set_target_to_selected_pose()
         self.canvas.update()
@@ -427,7 +534,9 @@ class RobotViewer3D(QWidget):
     def update_current_keyframe_from_robot_state(self, refresh_ghosts=True):
         if not self.state_timeline or not self.robot_state:
             return
-        self.state_timeline.set_state(self.current_time, self.robot_state.get_qpos())
+        self.state_timeline.set_state(
+            self.current_time, self.committed_state.get_qpos()
+        )
         self._update_timeline_label()
         if refresh_ghosts:
             self._refresh_timeline_trajectory()
@@ -454,7 +563,10 @@ class RobotViewer3D(QWidget):
         was_playing = self.play_timer.isActive()
         self.pause_playback()
         self.canvas.cancel_transform_drag()
-        self.robot_state.reset_to_default()
+        self.committed_state.reset_to_default()
+        self.preview_state.set_qpos(self.committed_state.get_qpos())
+        self.preview_active = False
+        self.canvas.set_preview_visible(False)
         self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
         self._sync_joint_controls()
         self._set_target_to_selected_pose()
@@ -492,8 +604,10 @@ class RobotViewer3D(QWidget):
             self.root_pose_label.setText("fixed root")
             return
         address = free_joints[0].qpos_address
-        x, y, z = self.robot_state.mj_data.qpos[address:address + 3]
-        self.root_pose_label.setText(f"{x:+.3f}, {y:+.3f}, {z:+.3f} m")
+        state = self.preview_state if self.preview_active else self.committed_state
+        x, y, z = state.mj_data.qpos[address:address + 3]
+        suffix = " (preview)" if self.preview_active else " (committed)"
+        self.root_pose_label.setText(f"{x:+.3f}, {y:+.3f}, {z:+.3f} m{suffix}")
 
     def set_robot_trajectory(self, qposes):
         if not self.robot_state:
@@ -559,7 +673,10 @@ class RobotViewer3D(QWidget):
         if not self.robot_trajectory:
             return
         index = max(0, min(len(self.robot_trajectory) - 1, int(index)))
-        self.robot_state.set_qpos(self.robot_trajectory[index])
+        self.committed_state.set_qpos(self.robot_trajectory[index])
+        self.preview_state.set_qpos(self.committed_state.get_qpos())
+        self.preview_active = False
+        self.canvas.set_preview_visible(False)
         self._sync_joint_controls()
         self._set_target_to_selected_pose()
 

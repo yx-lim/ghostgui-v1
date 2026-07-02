@@ -100,6 +100,76 @@ class RobotModelAdapterTests(unittest.TestCase):
         self.assertTrue(result.success, result.status)
         self.assertEqual(result.accepted_fraction, 1.0)
 
+    def test_go2_viewer_drag_is_preview_only_until_accept(self):
+        window = RobotGuiMainWindow("go2")
+        try:
+            viewer = window.viewer_3d
+            kind, name = viewer.robot_model.resolve_logical_frame("FL_foot")
+            viewer.select_target(kind, name, emit=False)
+            viewer._set_target_to_selected_pose()
+            committed = viewer.committed_state.get_qpos()
+            position = viewer.last_valid_target_position.copy()
+            quaternion = viewer.last_valid_target_quaternion.copy()
+            viewer._on_transform_moved(
+                position + np.array([0.02, 0.0, 0.0]), quaternion
+            )
+            np.testing.assert_allclose(viewer.committed_state.get_qpos(), committed)
+            self.assertFalse(np.allclose(viewer.preview_state.get_qpos(), committed))
+            viewer.accept_preview()
+            np.testing.assert_allclose(
+                viewer.committed_state.get_qpos(), viewer.preview_state.get_qpos()
+            )
+        finally:
+            window.close()
+
+    def test_picked_bodies_map_to_logical_frames_for_both_models(self):
+        g1 = MuJoCoRobotAdapter("g1")
+        self.assertEqual(
+            g1.logical_frame_for_body("robot/left_wrist_yaw_link"), "left_hand"
+        )
+        self.assertEqual(
+            g1.logical_frame_for_body("robot/right_ankle_roll_link"), "right_foot"
+        )
+        go2 = MuJoCoRobotAdapter("go2")
+        self.assertEqual(go2.logical_frame_for_body("FL_hip"), "FL_foot")
+        self.assertEqual(go2.logical_frame_for_body("base"), "base")
+
+    def test_ray_pick_returns_a_robot_body(self):
+        adapter = MuJoCoRobotAdapter("go2")
+        state = adapter.create_state()
+        canvas = RobotCanvas3D()
+        canvas.set_robot_states(state, adapter.create_state())
+        geom_id = mujoco.mj_name2id(
+            adapter.mj_model, mujoco.mjtObj.mjOBJ_GEOM, "FL_foot_geom"
+        )
+        center = state.mj_data.geom_xpos[geom_id]
+        picked = canvas.pick_robot_body_from_ray(
+            center + np.array([0.0, 2.0, 0.0]), np.array([0.0, -1.0, 0.0])
+        )
+        self.assertIsNotNone(picked)
+        self.assertEqual(adapter.logical_frame_for_body(picked), "FL_foot")
+
+    def test_double_click_body_selection_updates_frame_editor(self):
+        g1_window = RobotGuiMainWindow("g1")
+        go2_window = RobotGuiMainWindow("go2")
+        try:
+            g1_window.viewer_3d._on_body_double_clicked(
+                "robot/left_wrist_yaw_link"
+            )
+            self.assertEqual(g1_window.controls.frame_box.currentText(), "left_hand")
+            self.assertEqual(
+                g1_window.viewer_3d._selected_target(),
+                ("site", "robot/left_palm"),
+            )
+            go2_window.viewer_3d._on_body_double_clicked("FR_thigh")
+            self.assertEqual(go2_window.controls.frame_box.currentText(), "FR_foot")
+            self.assertEqual(
+                go2_window.viewer_3d._selected_target(), ("site", "FR_foot")
+            )
+        finally:
+            g1_window.close()
+            go2_window.close()
+
     def test_generated_skeleton_uses_ik_and_whole_body_follow(self):
         window = RobotGuiMainWindow("go2")
         try:

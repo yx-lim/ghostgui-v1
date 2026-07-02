@@ -43,6 +43,22 @@ transparent ghosts. Drag IK is solved in a temporary state and accepted only
 when MuJoCo reports no self/environment collision; the collision-substep control
 sets how finely motion is clamped at a contact boundary.
 
+3D edits use a MoveIt-style preview workflow. The model-colored robot is the
+committed timeline state and remains fixed while dragging. A semi-transparent
+orange robot follows collision-aware IK and joint-slider edits. **Plan Preview**
+shows a committed-to-preview ghost path without saving it, **Accept Preview**
+writes the orange pose into only the current timeline keyframe, and **Cancel
+Preview** discards it. Changing timeline time also discards an unaccepted
+preview. Joint sliders edit the preview rather than silently changing committed
+qpos.
+
+Double-click a rendered robot body to select its nearest logical trajectory
+frame. G1 hands, wrists, feet, ankles, pelvis, and torso map to their configured
+frames; Go2 base and leg bodies map to `base` or the corresponding
+`FL/FR/RL/RR_foot`. Picking uses the closest MuJoCo geom bounding sphere, so very
+small or overlapping decorative geometry may resolve to its nearest editable
+parent/child frame.
+
 The **Reset 3D Pose** button is a one-shot action: it pauses playback, cancels an
 active gizmo drag, and restores model home qpos at the currently selected GUI
 time only. It does not replace or repeatedly modify the playback list. Changing
@@ -84,7 +100,8 @@ python3 -m unittest discover -s tests -v
 
 - G1: run `python3 run_gui.py --model g1`; confirm 29 joint sliders, the
   humanoid kinematic skeleton, logical hand/foot targets, gizmo dragging,
-  reset, timeline states, and ghosts.
+  orange preview, Plan/Accept/Cancel, double-click selection, reset, timeline
+  states, and ghosts.
 - Go2: run `python3 run_gui.py --model go2`; confirm 12 joint sliders, the
   base/four-leg skeleton, `FL/FR/RL/RR_foot` targets, lit ground, and colored
   collision geometry.

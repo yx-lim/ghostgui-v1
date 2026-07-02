@@ -255,6 +255,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.on_target_pose_drag_finished
         )
         viewer_3d.target_frame_changed.connect(self.on_3d_target_frame_changed)
+        viewer_3d.preview_cancelled.connect(self.on_preview_cancelled)
         viewer_2d_skeleton.target_dragged.connect(self.on_target_dragged)
 
     def on_model_changed(self, model_key):
@@ -401,7 +402,34 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_3d_target_frame_changed(self, frame_name):
         """Map common 3D body/site selections back to the 2D frame concept."""
+        self.controls.frame_box.blockSignals(True)
         self.controls.frame_box.setCurrentText(frame_name)
+        self.controls.frame_box.blockSignals(False)
+        binding = self.robot_model_3d.resolve_logical_frame(frame_name)
+        if binding is not None:
+            kind, name = binding
+            state = (
+                self.viewer_3d.preview_state
+                if self.viewer_3d.preview_active
+                else self.viewer_3d.committed_state
+            )
+            position, _ = state.get_body_pose(name, kind)
+            self.controls.set_position_values(
+                x=float(position[0]), y=float(position[1]), z=float(position[2]),
+                emit_pose_changed=False,
+            )
+        self.refresh_display(apply_stickman_frame=False)
+
+    def on_preview_cancelled(self):
+        kind, name = self.viewer_3d._selected_target()
+        if not name:
+            return
+        position, _ = self.viewer_3d.committed_state.get_body_pose(name, kind)
+        self.controls.set_position_values(
+            x=float(position[0]), y=float(position[1]), z=float(position[2]),
+            emit_pose_changed=False,
+        )
+        self.refresh_display(apply_stickman_frame=False)
 
     def on_trajectory_lines_changed(self, checked):
         self.refresh_display()

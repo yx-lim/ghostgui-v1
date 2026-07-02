@@ -88,7 +88,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.robot_model.home_qpos,
         )
 
-    def test_pelvis_drag_updates_free_root_and_current_keyframe(self):
+    def test_pelvis_drag_updates_preview_only_until_accept(self):
         self.viewer.select_target("body", "robot/pelvis", emit=False)
         self.viewer._set_target_to_selected_pose()
         start = self.viewer.last_valid_target_position.copy()
@@ -99,11 +99,85 @@ class RobotViewerTimelineTests(unittest.TestCase):
         root_address = next(
             iter(self.viewer.robot_model.free_joints_by_body.values())
         ).qpos_address
+        self.assertAlmostEqual(self.viewer.committed_state.get_qpos()[root_address], start[0])
         self.assertAlmostEqual(
-            self.viewer.robot_state.get_qpos()[root_address], start[0] + 0.01
+            self.viewer.get_current_keyframe()[root_address], start[0]
+        )
+        self.assertAlmostEqual(
+            self.viewer.preview_state.get_qpos()[root_address], start[0] + 0.01
+        )
+        self.assertTrue(self.viewer.preview_active)
+        self.assertTrue(self.viewer.canvas.preview_visible)
+        self.viewer.accept_preview()
+        self.assertAlmostEqual(
+            self.viewer.committed_state.get_qpos()[root_address], start[0] + 0.01
         )
         self.assertAlmostEqual(
             self.viewer.get_current_keyframe()[root_address], start[0] + 0.01
+        )
+        self.assertFalse(self.viewer.preview_active)
+
+    def test_cancel_discards_preview_without_touching_committed(self):
+        before = self.viewer.committed_state.get_qpos()
+        name = self.viewer.preview_state.get_joint_names()[-1]
+        old_value = self.viewer.preview_state.get_joint_value(name)
+        self.viewer._joint_changed(name, old_value + 0.05)
+        self.assertTrue(self.viewer.preview_active)
+        self.assertFalse(np.allclose(self.viewer.preview_state.get_qpos(), before))
+        self.viewer.cancel_preview()
+        np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), before)
+        np.testing.assert_allclose(self.viewer.preview_state.get_qpos(), before)
+        np.testing.assert_allclose(self.viewer.get_current_keyframe(), before)
+
+    def test_plan_creates_ghost_path_without_committing(self):
+        before = self.viewer.committed_state.get_qpos()
+        name = self.viewer.preview_state.get_joint_names()[-1]
+        self.viewer._joint_changed(
+            name, self.viewer.preview_state.get_joint_value(name) + 0.05
+        )
+        preview = self.viewer.preview_state.get_qpos()
+        self.viewer.plan_preview()
+        self.assertEqual(len(self.viewer.robot_trajectory), 40)
+        np.testing.assert_allclose(self.viewer.robot_trajectory[0], before)
+        np.testing.assert_allclose(self.viewer.robot_trajectory[-1], preview)
+        np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), before)
+        np.testing.assert_allclose(self.viewer.get_current_keyframe(), before)
+        self.assertTrue(self.viewer.preview_active)
+
+    def test_accept_preview_is_timeline_local(self):
+        at_zero = self.viewer.committed_state.get_qpos()
+        self.viewer.set_current_time(0.2)
+        name = self.viewer.preview_state.get_joint_names()[-1]
+        value = self.viewer.preview_state.get_joint_value(name) + 0.05
+        self.viewer._joint_changed(name, value)
+        self.viewer.accept_preview()
+        accepted = self.viewer.get_current_keyframe()
+        self.viewer.set_current_time(0.0)
+        np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), at_zero)
+        self.viewer.set_current_time(0.2)
+        np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), accepted)
+
+    def test_joint_slider_edits_preview_not_committed(self):
+        before = self.viewer.committed_state.get_qpos()
+        name = self.viewer.preview_state.get_joint_names()[0]
+        self.viewer._joint_changed(
+            name, self.viewer.preview_state.get_joint_value(name) + 0.03
+        )
+        np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), before)
+        self.assertFalse(np.allclose(self.viewer.preview_state.get_qpos(), before))
+
+    def test_timeline_change_discards_unaccepted_preview(self):
+        name = self.viewer.preview_state.get_joint_names()[0]
+        self.viewer._joint_changed(
+            name, self.viewer.preview_state.get_joint_value(name) + 0.03
+        )
+        self.assertTrue(self.viewer.preview_active)
+        self.viewer.set_current_time(0.2)
+        self.assertFalse(self.viewer.preview_active)
+        self.assertFalse(self.viewer.canvas.preview_visible)
+        np.testing.assert_allclose(
+            self.viewer.preview_state.get_qpos(),
+            self.viewer.committed_state.get_qpos(),
         )
 
     def test_logical_pelvis_selection_maps_to_mujoco_pelvis(self):

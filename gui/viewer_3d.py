@@ -30,6 +30,7 @@ class RobotCanvas3D(QOpenGLWidget):
     target_transform_dragged = Signal(object, object)
     transform_drag_finished = Signal()
     geometry_progress = Signal(int, int)
+    body_double_clicked = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -57,6 +58,8 @@ class RobotCanvas3D(QOpenGLWidget):
         self._projection = QMatrix4x4()
         self._viewport = QRect(0, 0, 1, 1)
         self.robot_state = None
+        self.preview_state = None
+        self.preview_visible = False
         self.ghost_renderer = None
         self.show_ghosts = False
         self.ghost_alpha = 0.18
@@ -74,10 +77,20 @@ class RobotCanvas3D(QOpenGLWidget):
         self._geometry_timer.timeout.connect(self._compile_next_geometry)
 
     def set_robot_state(self, robot_state, ghost_renderer=None):
-        self.robot_state = robot_state
+        self.set_robot_states(robot_state, None, ghost_renderer)
+
+    def set_robot_states(
+        self, committed_state, preview_state=None, ghost_renderer=None
+    ):
+        self.robot_state = committed_state
+        self.preview_state = preview_state
         self.ghost_renderer = ghost_renderer
         if self.isValid():
             self._build_robot_geometry()
+        self.update()
+
+    def set_preview_visible(self, visible):
+        self.preview_visible = bool(visible and self.preview_state is not None)
         self.update()
 
     def set_ghost_options(self, visible, alpha=0.18):
@@ -165,6 +178,7 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glLightfv(GL.GL_LIGHT0, GL.GL_POSITION, (2.0, -3.0, 5.0, 1.0))
         self.draw_trajectory_ghosts()
         self.draw_robot()
+        self.draw_preview_robot()
         GL.glDisable(GL.GL_LIGHTING)
         GL.glDisable(GL.GL_LIGHT0)
         self.draw_trajectory()
@@ -309,14 +323,18 @@ class RobotCanvas3D(QOpenGLWidget):
         matrix[12:15] = [float(v) for v in position]
         return matrix
 
-    def _draw_robot_transforms(self, positions, rotations, alpha_scale=1.0):
+    def _draw_robot_transforms(
+        self, positions, rotations, alpha_scale=1.0, color_override=None
+    ):
         if self.robot_state is None or not self._geom_lists:
             return
         model = self.robot_state.mj_model
         for geom_id, list_id in enumerate(self._geom_lists):
             if list_id is None:
                 continue
-            if self.use_model_colors:
+            if color_override is not None:
+                rgba = color_override
+            elif self.use_model_colors:
                 rgba = self.robot_state.robot_model.get_geom_rgba(geom_id)
             else:
                 rgba = (0.55, 0.55, 0.55, 1.0)
@@ -358,6 +376,19 @@ class RobotCanvas3D(QOpenGLWidget):
             return
         data = self.robot_state.mj_data
         self._draw_robot_transforms(data.geom_xpos, data.geom_xmat)
+
+    def draw_preview_robot(self):
+        if not self.preview_visible or self.preview_state is None:
+            return
+        data = self.preview_state.mj_data
+        GL.glDepthMask(GL.GL_FALSE)
+        self._draw_robot_transforms(
+            data.geom_xpos,
+            data.geom_xmat,
+            alpha_scale=0.48,
+            color_override=(1.0, 0.38, 0.04, 1.0),
+        )
+        GL.glDepthMask(GL.GL_TRUE)
 
     def draw_trajectory_ghosts(self):
         if not self.show_ghosts or self.ghost_renderer is None:
@@ -568,6 +599,17 @@ class RobotCanvas3D(QOpenGLWidget):
 
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            body_name = self.pick_robot_body(
+                event.position().x(), event.position().y()
+            )
+            if body_name:
+                self.body_double_clicked.emit(body_name)
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
+
     def mouseMoveEvent(self, event):
         if self.gizmo.is_dragging:
             position, quaternion = self.gizmo.drag(
@@ -653,6 +695,50 @@ class RobotCanvas3D(QOpenGLWidget):
         )
         direction /= max(1e-12, float(np.linalg.norm(direction)))
         return origin, direction
+
+    def pick_robot_body(self, sx, sy):
+        return self.pick_robot_body_from_ray(*self.screen_ray(sx, sy))
+
+    def pick_robot_body_from_ray(self, origin, direction):
+        """Return the closest MuJoCo body hit by geom bounding spheres."""
+        if self.robot_state is None:
+            return None
+        origin = np.asarray(origin, dtype=float)
+        direction = np.asarray(direction, dtype=float)
+        direction /= max(1e-12, float(np.linalg.norm(direction)))
+        model = self.robot_state.mj_model
+        data = (
+            self.preview_state.mj_data
+            if self.preview_visible and self.preview_state is not None
+            else self.robot_state.mj_data
+        )
+        best = None
+        for geom_id in self.render_geom_ids(model):
+            body_id = int(model.geom_bodyid[geom_id])
+            if body_id == 0:
+                continue
+            center = np.asarray(data.geom_xpos[geom_id], dtype=float)
+            radius = max(0.015, float(model.geom_rbound[geom_id]))
+            offset = origin - center
+            b = float(np.dot(offset, direction))
+            c = float(np.dot(offset, offset) - radius * radius)
+            discriminant = b * b - c
+            if discriminant < 0.0:
+                continue
+            root = math.sqrt(discriminant)
+            distance = -b - root
+            if distance < 0.0:
+                distance = -b + root
+            if distance < 0.0:
+                continue
+            if best is None or distance < best[0]:
+                best = (distance, body_id)
+        if best is None:
+            return None
+        import mujoco
+        return mujoco.mj_id2name(
+            model, mujoco.mjtObj.mjOBJ_BODY, best[1]
+        )
 
     def screen_to_edit_plane(self, sx, sy):
         """
