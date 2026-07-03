@@ -67,6 +67,17 @@ qpos keyframe, so edits at `0.2s` do not modify `0s`. Selecting G1 `pelvis` or
 Go2 `base` drives the model's floating root joint and is still checked for collisions.
 The existing 2D editors and separate **3D MuJoCo** CSV player remain available.
 
+The 3D sidebar's **IK controls** tab provides weighted damped-least-squares
+settings, independent per-joint influence sliders, and model-aware presets.
+Influence `0` locks a joint for limb IK, `1` is normal, and values above `1`
+prefer that joint. The task controls combine TCP position/orientation, posture
+preservation, planted feet, root/base orientation, and home-pose regularization
+in the orange preview state. Posture and regularization are opt-in so the
+default TCP drag retains the model's full kinematic range. Task priority levels
+are recorded (`locks=1`,
+`TCP=2`, `posture/regularization=3`), but this version intentionally uses one
+weighted task stack rather than claiming strict null-space hierarchy.
+
 Right-drag rotates the live 3D camera and the mouse wheel zooms. Gizmo axes are
 world-aligned; a local-frame mode is a future extension.
 

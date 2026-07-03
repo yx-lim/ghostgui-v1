@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSpinBox,
     QSplitter,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +32,12 @@ from .collision_checker import CollisionAwareIKSolver, CollisionChecker
 from .trajectory import rpy_to_quat
 from .viewer_3d import RobotCanvas3D
 from .collapsible_sidebar import CollapsibleSidebar
+from .ik_tasks import (
+    FootLockTask,
+    JointRegularizationTask,
+    PostureTask,
+    RootPoseTask,
+)
 
 
 FRAME_BINDINGS = {
@@ -85,6 +92,38 @@ class JointControl(QWidget):
         self.value_label.setText(f"{float(value):+.3f} rad")
 
 
+class IKInfluenceControl(QWidget):
+    value_changed = Signal(str, float)
+
+    def __init__(self, name, value=1.0):
+        super().__init__()
+        self.name = name
+        self._syncing = False
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(0, 300)
+        self.value_label = QLabel()
+        self.value_label.setMinimumWidth(38)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(QLabel(name), 1)
+        layout.addWidget(self.slider, 2)
+        layout.addWidget(self.value_label)
+        self.slider.valueChanged.connect(self._changed)
+        self.set_value(value)
+
+    def _changed(self, raw):
+        value = raw / 100.0
+        self.value_label.setText(f"{value:.2f}")
+        if not self._syncing:
+            self.value_changed.emit(self.name, value)
+
+    def set_value(self, value):
+        self._syncing = True
+        self.slider.setValue(round(max(0.0, min(3.0, float(value))) * 100.0))
+        self._syncing = False
+        self.value_label.setText(f"{float(value):.2f}")
+
+
 class RobotViewer3D(QWidget):
     """Live FK/IK/trajectory viewer. It preserves the old canvas contract."""
 
@@ -130,6 +169,16 @@ class RobotViewer3D(QWidget):
         self.robot_trajectory = []
         self.ghost_trajectory = []
         self.joint_controls = {}
+        self.ik_influence_controls = {}
+        self.ik_joint_weights = {
+            name: 1.0 for name in (
+                robot_model.get_joint_names() if robot_model else []
+            )
+        }
+        self.preview_reference_qpos = None
+        self.foot_lock_targets = {}
+        self.root_lock_target = None
+        self._last_ik_status = None
         self._syncing_target = False
         self.canvas = RobotCanvas3D()
         self.canvas.geometry_progress.connect(self._on_geometry_progress)
@@ -253,6 +302,7 @@ class RobotViewer3D(QWidget):
         trajectory_layout.addRow("Ghost alpha", self.ghost_alpha)
         panel.addWidget(trajectory_group)
 
+        editor_tabs = QTabWidget()
         joint_group = QGroupBox("Controllable joints")
         joint_layout = QVBoxLayout(joint_group)
         if self.robot_state:
@@ -271,7 +321,9 @@ class RobotViewer3D(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(joint_group)
-        panel.addWidget(scroll, 1)
+        editor_tabs.addTab(scroll, "Joint angles")
+        editor_tabs.addTab(self._build_ik_settings_widget(), "IK controls")
+        panel.addWidget(editor_tabs, 1)
         self.controls_sidebar = CollapsibleSidebar(
             "3D",
             controls,
@@ -299,6 +351,111 @@ class RobotViewer3D(QWidget):
         target_group.setEnabled(enabled)
         trajectory_group.setEnabled(enabled)
         preview_group.setEnabled(enabled)
+
+    def _build_ik_settings_widget(self):
+        content = QWidget()
+        layout = QVBoxLayout(content)
+
+        solver_group = QGroupBox("Solver settings")
+        solver_layout = QFormLayout(solver_group)
+        self.ik_damping = QDoubleSpinBox()
+        self.ik_damping.setRange(0.001, 1.0)
+        self.ik_damping.setDecimals(4)
+        self.ik_damping.setValue(0.04)
+        self.ik_max_iterations = QSpinBox()
+        self.ik_max_iterations.setRange(1, 300)
+        self.ik_max_iterations.setValue(80)
+        self.ik_step_size = QDoubleSpinBox()
+        self.ik_step_size.setRange(0.01, 1.0)
+        self.ik_step_size.setValue(0.7)
+        self.ik_max_step = QDoubleSpinBox()
+        self.ik_max_step.setRange(0.001, 0.5)
+        self.ik_max_step.setDecimals(3)
+        self.ik_max_step.setValue(0.08)
+        self.ik_position_tolerance = QDoubleSpinBox()
+        self.ik_position_tolerance.setRange(0.0001, 0.1)
+        self.ik_position_tolerance.setDecimals(4)
+        self.ik_position_tolerance.setValue(0.005)
+        self.ik_orientation_tolerance = QDoubleSpinBox()
+        self.ik_orientation_tolerance.setRange(0.001, 1.0)
+        self.ik_orientation_tolerance.setDecimals(3)
+        self.ik_orientation_tolerance.setValue(0.03)
+        solver_layout.addRow("Damping", self.ik_damping)
+        solver_layout.addRow("Max iterations", self.ik_max_iterations)
+        solver_layout.addRow("Step size", self.ik_step_size)
+        solver_layout.addRow("Max joint step", self.ik_max_step)
+        solver_layout.addRow("Position tolerance", self.ik_position_tolerance)
+        solver_layout.addRow("Orientation tolerance", self.ik_orientation_tolerance)
+        layout.addWidget(solver_group)
+
+        task_group = QGroupBox("Weighted tasks (priority metadata; weighted v1)")
+        task_layout = QFormLayout(task_group)
+        self.ik_task_controls = {}
+        defaults = {
+            "tcp_position": (True, 1.0),
+            "tcp_orientation": (
+                self.robot_model.model_type != "quadruped", 0.25
+            ),
+            # Secondary pose objectives are opt-in. Enabling them by default
+            # makes an ordinary TCP drag settle at a weighted compromise and
+            # look like an artificial range limit.
+            "posture": (False, 0.05),
+            "foot_lock": (False, 0.5),
+            "root_orientation": (True, 0.1),
+            "regularization": (False, 0.01),
+        }
+        labels = {
+            "tcp_position": "TCP position",
+            "tcp_orientation": "TCP orientation",
+            "posture": "Posture preservation",
+            "foot_lock": "Foot lock",
+            "root_orientation": "Root/base upright",
+            "regularization": "Joint regularization",
+        }
+        for key, (enabled, weight) in defaults.items():
+            checkbox = QCheckBox()
+            checkbox.setChecked(enabled)
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 10.0)
+            spin.setDecimals(3)
+            spin.setValue(weight)
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(checkbox)
+            row_layout.addWidget(spin)
+            self.ik_task_controls[key] = (checkbox, spin)
+            task_layout.addRow(labels[key], row)
+        layout.addWidget(task_group)
+
+        influence_group = QGroupBox("Per-joint IK influence (0=locked, 1=normal)")
+        influence_layout = QVBoxLayout(influence_group)
+        preset_row = QHBoxLayout()
+        self.ik_preset_box = QComboBox()
+        presets = ["All joints normal", "Root locked", "Selected limb only", "Feet planted"]
+        if self.robot_model.model_type == "humanoid":
+            presets.extend(("Upper body only", "Legs only"))
+        elif self.robot_model.model_type == "quadruped":
+            presets.append("Quadruped legs only")
+        self.ik_preset_box.addItems(presets)
+        apply_preset = QPushButton("Apply")
+        apply_preset.clicked.connect(self.apply_ik_preset)
+        preset_row.addWidget(self.ik_preset_box, 1)
+        preset_row.addWidget(apply_preset)
+        influence_layout.addLayout(preset_row)
+        for name in self.robot_model.get_joint_names():
+            control = IKInfluenceControl(name, 1.0)
+            control.value_changed.connect(self._ik_influence_changed)
+            self.ik_influence_controls[name] = control
+            influence_layout.addWidget(control)
+        influence_layout.addStretch()
+        layout.addWidget(influence_group)
+        layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(content)
+        return scroll
 
     def _on_geometry_progress(self, complete, total):
         if total <= 0:
@@ -369,10 +526,138 @@ class RobotViewer3D(QWidget):
         for name, control in self.joint_controls.items():
             control.set_value(state.get_joint_value(name))
 
+    def _ik_influence_changed(self, name, value):
+        self.ik_joint_weights[name] = float(value)
+        state = "locked" if value <= 1e-9 else f"influence {value:.2f}"
+        self.status_label.setText(f"IK joint {name}: {state}")
+
+    def _set_all_ik_influences(self, selector):
+        for name, control in self.ik_influence_controls.items():
+            value = float(selector(name))
+            self.ik_joint_weights[name] = value
+            control.set_value(value)
+
+    def apply_ik_preset(self):
+        preset = self.ik_preset_box.currentText()
+        if preset == "All joints normal":
+            self._set_all_ik_influences(lambda name: 1.0)
+        elif preset == "Root locked":
+            # Floating roots are already excluded from limb IK. Keep actuated
+            # joints normal and make that hard-lock explicit in status.
+            self._set_all_ik_influences(lambda name: 1.0)
+        elif preset == "Upper body only":
+            tokens = ("waist", "shoulder", "elbow", "wrist", "arm")
+            self._set_all_ik_influences(
+                lambda name: 1.0 if any(token in name.lower() for token in tokens) else 0.0
+            )
+        elif preset in ("Legs only", "Quadruped legs only"):
+            tokens = ("hip", "thigh", "knee", "calf", "ankle", "leg")
+            self._set_all_ik_influences(
+                lambda name: 1.0 if any(token in name.lower() for token in tokens) else 0.0
+            )
+        elif preset == "Selected limb only":
+            kind, object_name = self._selected_target()
+            logical = self.reverse_bindings.get((kind, object_name), "")
+            lower = logical.lower()
+            side = next(
+                (token for token in ("left", "right", "fl", "fr", "rl", "rr")
+                 if lower.startswith(token)),
+                "",
+            )
+            limb_tokens = (
+                ("shoulder", "elbow", "wrist", "arm")
+                if "hand" in lower else
+                ("hip", "thigh", "knee", "calf", "ankle", "leg")
+            )
+            self._set_all_ik_influences(lambda name: 1.0 if (
+                (not side or name.lower().startswith(side))
+                and any(token in name.lower() for token in limb_tokens)
+            ) else 0.0)
+        elif preset == "Feet planted":
+            self._set_all_ik_influences(lambda name: 1.0)
+            checkbox, spin = self.ik_task_controls["foot_lock"]
+            checkbox.setChecked(True)
+            spin.setValue(max(1.0, spin.value()))
+        self.status_label.setText(f"Applied IK preset: {preset}")
+
+    def _task_setting(self, name):
+        checkbox, spin = self.ik_task_controls[name]
+        return checkbox.isChecked(), float(spin.value())
+
+    def _solver_settings(self):
+        return {
+            "damping": self.ik_damping.value(),
+            "max_iterations": self.ik_max_iterations.value(),
+            "step_size": self.ik_step_size.value(),
+            "max_step": self.ik_max_step.value(),
+            "position_tolerance": self.ik_position_tolerance.value(),
+            "orientation_tolerance": self.ik_orientation_tolerance.value(),
+        }
+
+    def _capture_secondary_targets(self):
+        self.preview_reference_qpos = self.committed_state.get_qpos()
+        self.foot_lock_targets = {}
+        for logical, (kind, name) in self.frame_bindings.items():
+            if "foot" not in logical.lower():
+                continue
+            position, quaternion = self.committed_state.get_body_pose(name, kind)
+            self.foot_lock_targets[logical] = (
+                kind, name, position.copy(), quaternion.copy()
+            )
+        root_name = self.robot_model.root_body
+        self.root_lock_target = (
+            self.committed_state.get_body_pose(root_name, "body")
+            if root_name else None
+        )
+
+    def _secondary_ik_tasks(self):
+        tasks = []
+        posture_enabled, posture_weight = self._task_setting("posture")
+        if posture_enabled and posture_weight > 0.0:
+            tasks.append(PostureTask(
+                name="Posture preservation", weight=posture_weight,
+                priority=3, enabled=True, required=False, tolerance=0.2,
+                reference_qpos=self.preview_reference_qpos,
+            ))
+        regularization_enabled, regularization_weight = self._task_setting(
+            "regularization"
+        )
+        if regularization_enabled and regularization_weight > 0.0:
+            tasks.append(JointRegularizationTask(
+                name="Joint regularization", weight=regularization_weight,
+                priority=3, enabled=True, required=False, tolerance=0.3,
+                reference_qpos=self.robot_model.home_qpos,
+            ))
+        selected = self.reverse_bindings.get(self._selected_target())
+        foot_enabled, foot_weight = self._task_setting("foot_lock")
+        if foot_enabled and foot_weight > 0.0:
+            for logical, (kind, name, position, _) in self.foot_lock_targets.items():
+                if logical == selected:
+                    continue
+                tasks.append(FootLockTask(
+                    name=f"Lock {logical}", weight=foot_weight,
+                    priority=1, enabled=True, required=False, tolerance=0.005,
+                    object_name=name, kind=kind, target_position=position,
+                ))
+        root_enabled, root_weight = self._task_setting("root_orientation")
+        if (
+            root_enabled and root_weight > 0.0
+            and self.root_lock_target is not None and self.robot_model.root_body
+        ):
+            _, quaternion = self.root_lock_target
+            tasks.append(RootPoseTask(
+                name="Root/base upright", weight=root_weight,
+                priority=1, enabled=True, required=False, tolerance=0.05,
+                object_name=self.robot_model.root_body, kind="body",
+                target_quaternion=quaternion,
+            ))
+        return tasks
+
     def begin_preview(self):
         if not self.robot_state or self.preview_active:
             return
         self.preview_state.set_qpos(self.committed_state.get_qpos())
+        self._capture_secondary_targets()
         self.preview_active = True
         self.canvas.set_preview_visible(True)
         self._update_root_pose_label()
@@ -390,6 +675,21 @@ class RobotViewer3D(QWidget):
             self.last_valid_target_position = current_position
             self.last_valid_target_quaternion = current_quaternion
 
+        secondary_tasks = self._secondary_ik_tasks()
+        tcp_position_enabled, tcp_position_weight = self._task_setting(
+            "tcp_position"
+        )
+        tcp_orientation_enabled, tcp_orientation_weight = self._task_setting(
+            "tcp_orientation"
+        )
+        selected_task_count = int(
+            tcp_position_enabled and tcp_position_weight > 0.0
+        ) + int(tcp_orientation_enabled and tcp_orientation_weight > 0.0)
+        _, selected_object_id = self.preview_state.resolve_object(name, kind)
+        is_free_root = (
+            kind == "body"
+            and self.robot_model.free_joint_for_body(selected_object_id) is not None
+        )
         result = self.collision_solver.solve_drag(
             self.preview_state.get_qpos(),
             self.last_valid_target_position,
@@ -398,6 +698,15 @@ class RobotViewer3D(QWidget):
             quaternion,
             object_name=name,
             kind=kind,
+            joint_weights=self.ik_joint_weights,
+            secondary_tasks=secondary_tasks,
+            solver_settings=self._solver_settings(),
+            tcp_position_weight=(
+                tcp_position_weight if tcp_position_enabled else 0.0
+            ),
+            tcp_orientation_weight=(
+                tcp_orientation_weight if tcp_orientation_enabled else 0.0
+            ),
         )
         if result.success:
             self.preview_state.set_qpos(result.qpos)
@@ -411,11 +720,20 @@ class RobotViewer3D(QWidget):
             self.last_valid_target_quaternion,
         )
         self._sync_joint_controls()
-        self.status_label.setText(
+        logical_frame = self.reverse_bindings.get((kind, name), name)
+        model_name = getattr(
+            self.robot_model, "model_name", self.robot_model.model_path.stem
+        )
+        active_task_count = selected_task_count + (
+            0 if is_free_root else len(secondary_tasks)
+        )
+        self._last_ik_status = (
             f"{'TCP free translate; ' if self.canvas.gizmo.state.name == 'DRAG_TRANSLATE_FREE' else ''}"
             f"{result.status}; accepted={result.accepted_fraction:.0%}; "
-            f"IK error={result.ik_error:.4f}; preview not committed"
+            f"IK error={result.ik_error:.4f}; tasks={active_task_count}; "
+            f"frame={logical_frame}; model={model_name}; preview not committed"
         )
+        self.status_label.setText(self._last_ik_status)
         self.target_pose_dragged.emit(
             *map(float, self.last_valid_target_position)
         )
@@ -432,8 +750,9 @@ class RobotViewer3D(QWidget):
 
     def _on_transform_drag_finished(self):
         if self.last_valid_target_position is not None:
+            detail = self._last_ik_status or "Preview pose updated"
             self.status_label.setText(
-                "Preview ready. Plan, Accept, or Cancel; committed robot is unchanged."
+                f"{detail}; ready to Plan, Accept, or Cancel"
             )
 
     def plan_preview(self):

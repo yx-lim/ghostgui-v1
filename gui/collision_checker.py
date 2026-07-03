@@ -8,6 +8,7 @@ import mujoco
 import numpy as np
 
 from .transform_gizmo import quaternion_slerp
+from .ik_tasks import TCPOrientationTask, TCPPositionTask
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,11 @@ class CollisionAwareIKSolver:
         *,
         object_name,
         kind=None,
+        joint_weights=None,
+        secondary_tasks=None,
+        solver_settings=None,
+        tcp_position_weight=1.0,
+        tcp_orientation_weight=None,
     ):
         start_position = np.asarray(start_position, dtype=float)
         proposed_position = np.asarray(proposed_position, dtype=float)
@@ -117,6 +123,20 @@ class CollisionAwareIKSolver:
         last_error = 0.0
         blocked_collisions = []
         blocked_reason = None
+        settings = dict(solver_settings or {})
+        orientation_weight = (
+            self.orientation_weight
+            if tcp_orientation_weight is None else float(tcp_orientation_weight)
+        )
+        if tcp_position_weight <= 0.0 and orientation_weight <= 0.0:
+            return DragSolveResult(
+                accepted_qpos,
+                accepted_position,
+                accepted_quaternion,
+                0.0,
+                False,
+                "IK blocked drag: selected TCP tasks are disabled",
+            )
 
         for step in range(1, self.collision_drag_substeps + 1):
             fraction = step / self.collision_drag_substeps
@@ -127,14 +147,81 @@ class CollisionAwareIKSolver:
                 start_quaternion, proposed_quaternion, fraction
             )
             self.candidate_state.set_qpos(accepted_qpos)
-            ik_result = self.candidate_state.solve_ik(
-                object_name,
-                candidate_position,
-                candidate_quaternion,
-                kind=kind,
-                tolerance=self.ik_tolerance,
-                orientation_weight=self.orientation_weight,
-            )
+            if not hasattr(self.candidate_state, "solve_weighted_tasks"):
+                ik_result = self.candidate_state.solve_ik(
+                    object_name,
+                    candidate_position,
+                    candidate_quaternion,
+                    kind=kind,
+                    tolerance=self.ik_tolerance,
+                    orientation_weight=orientation_weight,
+                )
+                resolved_kind = kind
+                object_id = None
+                free_root = None
+            else:
+                resolved_kind, object_id = self.candidate_state.resolve_object(
+                    object_name, kind
+                )
+                free_root = (
+                    self.robot_model.free_joint_for_body(object_id)
+                    if resolved_kind == "body" else None
+                )
+            if (
+                hasattr(self.candidate_state, "solve_weighted_tasks")
+                and free_root is not None
+            ):
+                current_position, _ = self.candidate_state.get_body_pose(
+                    object_name, resolved_kind
+                )
+                ik_result = self.candidate_state.solve_ik(
+                    object_name,
+                    (
+                        candidate_position
+                        if tcp_position_weight > 0.0 else current_position
+                    ),
+                    candidate_quaternion if orientation_weight > 0.0 else None,
+                    kind=resolved_kind,
+                    tolerance=float(settings.get(
+                        "position_tolerance", self.ik_tolerance
+                    )),
+                    orientation_weight=orientation_weight,
+                )
+            elif hasattr(self.candidate_state, "solve_weighted_tasks"):
+                tasks = [TCPPositionTask(
+                    name="Selected TCP position",
+                    weight=float(tcp_position_weight),
+                    priority=2,
+                    required=True,
+                    tolerance=float(settings.get(
+                        "position_tolerance", self.ik_tolerance
+                    )),
+                    object_name=object_name,
+                    kind=resolved_kind,
+                    target_position=candidate_position,
+                )]
+                if orientation_weight > 0.0:
+                    tasks.append(TCPOrientationTask(
+                        name="Selected TCP orientation",
+                        weight=orientation_weight,
+                        priority=2,
+                        required=True,
+                        tolerance=float(settings.get(
+                            "orientation_tolerance", 0.03
+                        )),
+                        object_name=object_name,
+                        kind=resolved_kind,
+                        target_quaternion=candidate_quaternion,
+                    ))
+                tasks.extend(secondary_tasks or [])
+                ik_result = self.candidate_state.solve_weighted_tasks(
+                    tasks,
+                    joint_weights=joint_weights,
+                    max_iterations=int(settings.get("max_iterations", 80)),
+                    damping=float(settings.get("damping", 0.04)),
+                    step_size=float(settings.get("step_size", 0.7)),
+                    max_step=float(settings.get("max_step", 0.08)),
+                )
             last_error = ik_result.error
             if not ik_result.success:
                 blocked_reason = f"IK blocked drag: {ik_result.message}"
@@ -151,8 +238,17 @@ class CollisionAwareIKSolver:
                 break
 
             accepted_qpos = self.candidate_state.get_qpos()
-            accepted_position = candidate_position
-            accepted_quaternion = candidate_quaternion
+            solved_position, solved_quaternion = self.candidate_state.get_body_pose(
+                object_name, resolved_kind
+            ) if hasattr(self.candidate_state, "get_body_pose") else (
+                candidate_position, candidate_quaternion
+            )
+            accepted_position = (
+                candidate_position if tcp_position_weight > 0.0 else solved_position
+            )
+            accepted_quaternion = (
+                candidate_quaternion if orientation_weight > 0.0 else solved_quaternion
+            )
             accepted_fraction = fraction
 
         if blocked_reason is not None:
@@ -172,7 +268,7 @@ class CollisionAwareIKSolver:
             accepted_quaternion,
             1.0,
             True,
-            "IK converged; state is collision-free",
+            f"{ik_result.message}; state is collision-free",
             last_error,
             [],
         )

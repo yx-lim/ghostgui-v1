@@ -292,8 +292,10 @@ class RobotState3D:
         position_weight: float = 1.0,
         orientation_weight: float = 0.2,
         tolerance: float = 0.005,
+        orientation_tolerance: float = 0.03,
         step_size: float = 0.7,
         max_step: float = 0.08,
+        joint_weights: Optional[Mapping[str, float]] = None,
     ) -> IKResult:
         """Damped least-squares body/site IK over controllable scalar joints."""
         try:
@@ -349,62 +351,127 @@ class RobotState3D:
                 0,
                 "Selected root body has no movable MuJoCo free joint",
             )
-        target_rotation = None
-        if target_quaternion is not None and orientation_weight > 0.0:
-            target_rotation = np.empty(9, dtype=float)
-            mujoco.mju_quat2Mat(
-                target_rotation, np.asarray(target_quaternion, dtype=float)
-            )
-            target_rotation = target_rotation.reshape(3, 3)
+        from .ik_tasks import TCPOrientationTask, TCPPositionTask
 
+        tasks = [TCPPositionTask(
+            name="TCP position",
+            weight=position_weight,
+            priority=2,
+            required=True,
+            tolerance=tolerance,
+            object_name=object_name,
+            kind=kind,
+            target_position=target_position,
+        )]
+        if target_quaternion is not None and orientation_weight > 0.0:
+            tasks.append(TCPOrientationTask(
+                name="TCP orientation",
+                weight=orientation_weight,
+                priority=2,
+                required=True,
+                tolerance=orientation_tolerance,
+                object_name=object_name,
+                kind=kind,
+                target_quaternion=target_quaternion,
+            ))
+        return self.solve_weighted_tasks(
+            tasks,
+            joint_weights=joint_weights,
+            max_iterations=max_iterations,
+            damping=damping,
+            step_size=step_size,
+            max_step=max_step,
+        )
+
+    def solve_weighted_tasks(
+        self,
+        tasks,
+        *,
+        joint_weights: Optional[Mapping[str, float]] = None,
+        max_iterations: int = 80,
+        damping: float = 0.04,
+        step_size: float = 0.7,
+        max_step: float = 0.08,
+    ) -> IKResult:
+        """Weighted multi-task DLS over controllable scalar joints.
+
+        Tasks carry priority metadata, but v1 intentionally solves one weighted
+        stack. Strict null-space priority projection is a future extension.
+        """
         joints = list(self.robot_model.joints.values())
         dofs = [joint.dof_address for joint in joints]
-        jacp = np.zeros((3, self.mj_model.nv), dtype=float)
-        jacr = np.zeros((3, self.mj_model.nv), dtype=float)
-        error_norm = float("inf")
+        qpos_addresses = [joint.qpos_address for joint in joints]
+        influence = np.array([
+            max(0.0, float((joint_weights or {}).get(joint.name, 1.0)))
+            for joint in joints
+        ])
+        enabled_tasks = sorted(
+            (task for task in tasks if task.enabled and task.weight > 0.0),
+            key=lambda task: task.priority,
+        )
+        if not enabled_tasks:
+            return IKResult(True, 0.0, 0, "No enabled IK tasks")
+        if not np.any(influence > 1e-12):
+            return IKResult(False, float("inf"), 0, "All IK joints are locked")
 
-        for iteration in range(max_iterations):
+        final_error = float("inf")
+        active_count = len(enabled_tasks)
+        for iteration in range(max(1, int(max_iterations))):
             self.forward_kinematics()
-            if kind == "site":
-                current_position = self.mj_data.site_xpos[object_id].copy()
-                current_rotation = self.mj_data.site_xmat[object_id].reshape(3, 3)
-                mujoco.mj_jacSite(self.mj_model, self.mj_data, jacp, jacr, object_id)
-            else:
-                current_position = self.mj_data.xpos[object_id].copy()
-                current_rotation = self.mj_data.xmat[object_id].reshape(3, 3)
-                mujoco.mj_jacBody(self.mj_model, self.mj_data, jacp, jacr, object_id)
-
-            blocks = [(target_position - current_position) * position_weight]
-            jacobian_blocks = [jacp[:, dofs] * position_weight]
-            if target_rotation is not None:
-                orientation_error = 0.5 * sum(
-                    np.cross(current_rotation[:, axis], target_rotation[:, axis])
-                    for axis in range(3)
+            linearizations = [
+                task.linearize(self.mj_model, self.mj_data, dofs, qpos_addresses)
+                for task in enabled_tasks
+            ]
+            required = [item for item in linearizations if item.required]
+            convergence_set = required or linearizations
+            final_error = max(
+                (item.error_norm for item in convergence_set), default=0.0
+            )
+            if all(
+                item.error_norm <= item.tolerance for item in convergence_set
+            ):
+                return IKResult(
+                    True, final_error, iteration,
+                    f"Weighted IK converged ({active_count} active tasks)",
                 )
-                blocks.append(orientation_error * orientation_weight)
-                jacobian_blocks.append(jacr[:, dofs] * orientation_weight)
 
-            error = np.concatenate(blocks)
-            error_norm = float(np.linalg.norm(error))
-            if error_norm < tolerance:
-                return IKResult(True, error_norm, iteration, "IK converged")
-
-            jacobian = np.vstack(jacobian_blocks)
-            lhs = jacobian.T @ jacobian + damping * damping * np.eye(len(joints))
-            rhs = jacobian.T @ error
+            error = np.concatenate([item.error for item in linearizations])
+            jacobian = np.vstack([item.jacobian for item in linearizations])
+            weighted_jacobian = jacobian * influence[np.newaxis, :]
+            lhs = (
+                weighted_jacobian @ jacobian.T
+                + float(damping) ** 2 * np.eye(jacobian.shape[0])
+            )
             try:
-                delta = np.linalg.solve(lhs, rhs)
+                task_delta = np.linalg.solve(lhs, error)
             except np.linalg.LinAlgError:
-                delta = np.linalg.lstsq(lhs, rhs, rcond=None)[0]
-            delta = np.clip(delta, -max_step, max_step)
+                task_delta = np.linalg.lstsq(lhs, error, rcond=None)[0]
+            delta = influence * (jacobian.T @ task_delta)
+            delta = np.clip(delta, -float(max_step), float(max_step))
             for joint, amount in zip(joints, delta):
-                self.mj_data.qpos[joint.qpos_address] += step_size * amount
+                self.mj_data.qpos[joint.qpos_address] += float(step_size) * amount
             self._clamp_joints()
 
         self.forward_kinematics()
-        success = error_norm < tolerance * 2.0
-        message = "IK reached tolerance" if success else "Target moved; IK did not converge"
-        return IKResult(success, error_norm, max_iterations, message)
+        linearizations = [
+            task.linearize(self.mj_model, self.mj_data, dofs, qpos_addresses)
+            for task in enabled_tasks
+        ]
+        required = [item for item in linearizations if item.required]
+        convergence_set = required or linearizations
+        final_error = max(
+            (item.error_norm for item in convergence_set), default=0.0
+        )
+        success = all(
+            item.error_norm <= item.tolerance * 2.0
+            for item in convergence_set
+        )
+        message = (
+            f"Weighted IK reached tolerance ({active_count} active tasks)"
+            if success else
+            f"Weighted IK did not converge ({active_count} active tasks)"
+        )
+        return IKResult(success, final_error, max_iterations, message)
 
 
 class RobotStateTimeline:
