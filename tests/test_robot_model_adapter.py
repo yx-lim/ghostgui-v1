@@ -4,15 +4,20 @@ import numpy as np
 import mujoco
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from OpenGL import GL
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from gui.main_window import RobotGuiMainWindow
 from gui.robot_model_adapter import MuJoCoRobotAdapter
 from gui.viewer_3d import RobotCanvas3D
 from gui.collision_checker import CollisionAwareIKSolver, CollisionChecker
+from gui.model_assets import resolve_mesh_path, validate_model_assets
+from gui.robot_model_registry import ROBOT_MODELS
 
 
 class RobotModelAdapterTests(unittest.TestCase):
@@ -40,8 +45,9 @@ class RobotModelAdapterTests(unittest.TestCase):
             adapter.resolve_logical_frame("RR_foot"), ("site", "RR_foot")
         )
         self.assertIn(("base", "FL_hip"), adapter.get_kinematic_edges())
-        self.assertIsNone(adapter.load_warning)
-        self.assertEqual(adapter.model_path.name, "go2.xml")
+        self.assertIn("converted 17 COLLADA visual references", adapter.load_warning)
+        self.assertEqual(adapter.model_path.name, "go2_description.urdf")
+        self.assertGreater(adapter.mj_model.nmesh, 0)
 
     def test_go2_window_uses_go2_controls_and_skeleton(self):
         window = RobotGuiMainWindow("go2")
@@ -62,16 +68,76 @@ class RobotModelAdapterTests(unittest.TestCase):
         finally:
             window.close()
 
-    def test_go2_collision_geometries_are_rendered_when_visual_group_is_absent(self):
+    def test_go2_real_mesh_visuals_are_rendered_instead_of_collision_primitives(self):
         adapter = MuJoCoRobotAdapter("go2")
-        self.assertFalse(any(
-            int(adapter.mj_model.geom_group[index]) == 2
-            for index in range(adapter.mj_model.ngeom)
+        render_ids = RobotCanvas3D.render_geom_ids(adapter.mj_model)
+        self.assertGreater(len(render_ids), 0)
+        self.assertTrue(all(
+            int(adapter.mj_model.geom_type[index])
+            == int(mujoco.mjtGeom.mjGEOM_MESH)
+            for index in render_ids
         ))
-        self.assertEqual(
-            RobotCanvas3D.render_geom_ids(adapter.mj_model),
-            set(range(adapter.mj_model.ngeom)),
+        self.assertTrue(all(
+            int(adapter.mj_model.geom_group[index]) == 1
+            for index in render_ids
+        ))
+
+    def test_registered_mesh_assets_resolve_without_current_working_directory(self):
+        for key, info in ROBOT_MODELS.items():
+            with self.subTest(model=key):
+                results = validate_model_assets(info.model_path, info.package_map)
+                self.assertGreater(len(results), 0)
+                self.assertTrue(all(result.error is None for result in results))
+        resolved = resolve_mesh_path(
+            "package://go2_description/dae/base.dae",
+            Path("/tmp"),
+            ROBOT_MODELS["go2"].package_map,
         )
+        self.assertIsNone(resolved.error)
+        self.assertEqual(resolved.path.name, "base.dae")
+
+    def test_missing_mesh_has_actionable_error(self):
+        result = resolve_mesh_path("package://missing/dae/nope.dae", Path("/tmp"))
+        self.assertIsNone(result.path)
+        self.assertIn("unresolved mesh", result.error)
+
+    def test_canvas_is_opaque_and_preview_alpha_is_clamped(self):
+        canvas = RobotCanvas3D()
+        try:
+            self.assertEqual(canvas.format().alphaBufferSize(), 0)
+            self.assertTrue(canvas.testAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent))
+            self.assertFalse(canvas.testAttribute(
+                Qt.WidgetAttribute.WA_TranslucentBackground
+            ))
+            canvas.set_preview_alpha(5.0)
+            self.assertEqual(canvas.preview_alpha, 1.0)
+            canvas.set_preview_alpha(0.0)
+            self.assertEqual(canvas.preview_alpha, 0.1)
+        finally:
+            canvas.close()
+
+    def test_transparent_pass_preserves_framebuffer_alpha_and_restores_state(self):
+        with (
+            patch.object(GL, "glEnable") as enable,
+            patch.object(GL, "glDisable") as disable,
+            patch.object(GL, "glBlendFuncSeparate") as blend,
+            patch.object(GL, "glDepthMask") as depth_mask,
+            patch.object(GL, "glColorMask") as color_mask,
+        ):
+            RobotCanvas3D._begin_transparent_pass()
+            blend.assert_called_once_with(
+                GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA, GL.GL_ZERO, GL.GL_ONE
+            )
+            color_mask.assert_called_with(
+                GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE, GL.GL_FALSE
+            )
+            RobotCanvas3D._end_transparent_pass()
+            color_mask.assert_called_with(
+                GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE
+            )
+            depth_mask.assert_called_with(GL.GL_TRUE)
+            disable.assert_called_with(GL.GL_BLEND)
+            enable.assert_called_with(GL.GL_BLEND)
 
     def test_go2_runtime_has_lit_scene_and_distinct_model_colors(self):
         adapter = MuJoCoRobotAdapter("go2")
@@ -139,8 +205,15 @@ class RobotModelAdapterTests(unittest.TestCase):
         state = adapter.create_state()
         canvas = RobotCanvas3D()
         canvas.set_robot_states(state, adapter.create_state())
-        geom_id = mujoco.mj_name2id(
-            adapter.mj_model, mujoco.mjtObj.mjOBJ_GEOM, "FL_foot_geom"
+        calf_id = mujoco.mj_name2id(
+            adapter.mj_model, mujoco.mjtObj.mjOBJ_BODY, "FL_calf"
+        )
+        geom_id = min(
+            (
+                index for index in RobotCanvas3D.render_geom_ids(adapter.mj_model)
+                if int(adapter.mj_model.geom_bodyid[index]) == calf_id
+            ),
+            key=lambda index: state.mj_data.geom_xpos[index][2],
         )
         center = state.mj_data.geom_xpos[geom_id]
         picked = canvas.pick_robot_body_from_ray(

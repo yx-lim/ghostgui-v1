@@ -20,10 +20,13 @@ Choose the model from the **Robot model** control, or start directly with Go2:
 python3 run_gui.py --model go2
 ```
 
-G1 uses its MJCF and original visual meshes. Go2 ships with the prepared
-`models/go2/go2.xml`, so customer devices do not convert its source URDF during
-startup. The prepared model retains its 12 joints, limits, collision shapes,
-foot sites, lighting, colors, and kinematic tree.
+G1 loads its MJCF and original STL visual meshes directly. Go2 loads its ROS
+URDF, resolves the vendored `package://go2_description/dae/...` assets, and
+converts the DAE material parts to MuJoCo-compatible OBJ files once in the
+versioned model cache. The runtime model retains its 12 joints, limits,
+collision shapes, foot sites, lighting, visual meshes, colors, and kinematic
+tree. Missing or unsupported visual assets fail with an explicit path/format
+message instead of silently displaying collision primitives.
 
 Model files are loaded off the GUI thread when switching. Each loaded model
 keeps its own in-memory editor/viewer session, including its OpenGL context, so
@@ -50,7 +53,8 @@ shows a committed-to-preview ghost path without saving it, **Accept Preview**
 writes the orange pose into only the current timeline keyframe, and **Cancel
 Preview** discards it. Changing timeline time also discards an unaccepted
 preview. Joint sliders edit the preview rather than silently changing committed
-qpos.
+qpos. **Alpha** adjusts only the orange preview (`0.1–1.0`); the OpenGL scene
+and Qt window remain opaque.
 
 Double-click a rendered robot body to select its nearest logical trajectory
 frame. G1 hands, wrists, feet, ankles, pelvis, and torso map to their configured
@@ -114,8 +118,10 @@ python3 -m unittest discover -s tests -v
   orange preview, Plan/Accept/Cancel, double-click selection, reset, timeline
   states, and ghosts.
 - Go2: run `python3 run_gui.py --model go2`; confirm 12 joint sliders, the
-  base/four-leg skeleton, `FL/FR/RL/RR_foot` targets, lit ground, and colored
-  collision geometry.
+  base/four-leg skeleton, `FL/FR/RL/RR_foot` targets, lit ground, and detailed
+  colored mesh geometry rather than boxes/capsules.
+- Preview: drag a hand or foot and vary **Alpha**; confirm only the orange robot
+  becomes transparent and the dark 3D background never exposes the desktop.
 - Path independence: from another directory run
   `python3 /path/to/ghostgui/run_gui.py --model go2`. Registry paths are
   anchored to the source tree, not the shell working directory.

@@ -13,9 +13,10 @@ import numpy as np
 
 from .robot_model_3d import RobotModel3D
 from .robot_model_registry import RobotModelInfo, get_model_info
+from .model_assets import prepare_urdf_visual_meshes, resolve_mesh_path
 
 
-MODEL_CACHE_VERSION = 1
+MODEL_CACHE_VERSION = 3
 
 
 class MuJoCoRobotAdapter(RobotModel3D):
@@ -36,6 +37,7 @@ class MuJoCoRobotAdapter(RobotModel3D):
         self.model_type = self.info.model_type
         self.model_path = Path(model_path or self.info.model_path).resolve()
         self.asset_root = self.model_path.parent
+        self.package_map = dict(self.info.package_map)
         self.load_warning = None
         self.runtime_model_path = self._prepare_model_path(self.model_path)
         super().__init__(self.runtime_model_path)
@@ -89,11 +91,23 @@ class MuJoCoRobotAdapter(RobotModel3D):
             except (OSError, ValueError):
                 pass
 
-        visual_count = 0
-        for link in root.findall("link"):
-            for visual in list(link.findall("visual")):
-                link.remove(visual)
-                visual_count += 1
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            visual_count, dae_count, mesh_part_count = prepare_urdf_visual_meshes(
+                root, path, cache_dir, self.package_map
+            )
+        except (OSError, RuntimeError, ET.ParseError) as exc:
+            raise RuntimeError(f"Failed to prepare visual meshes for {path}: {exc}") from exc
+        # MuJoCo's URDF importer discards visual geoms by default. Keep the
+        # resolved/converted meshes alongside collision geoms in the runtime
+        # MJCF; the renderer selects the resulting visual group.
+        mujoco_extension = root.find("mujoco")
+        if mujoco_extension is None:
+            mujoco_extension = ET.SubElement(root, "mujoco")
+        compiler_extension = mujoco_extension.find("compiler")
+        if compiler_extension is None:
+            compiler_extension = ET.SubElement(mujoco_extension, "compiler")
+        compiler_extension.set("discardvisual", "false")
         # MuJoCo fixes a plain URDF root to the world. Add an explicit floating
         # parent so root editing has the same well-defined semantics as MJCF.
         child_links = {
@@ -115,19 +129,22 @@ class MuJoCoRobotAdapter(RobotModel3D):
             ET.SubElement(floating, "child", {"link": root_link})
             root.insert(0, floating)
             root.insert(0, world_link)
-        cache_dir.mkdir(parents=True, exist_ok=True)
         sanitized_path = cache_dir / "source_collision.urdf"
         ET.ElementTree(root).write(sanitized_path, encoding="unicode")
         runtime_path = self._build_urdf_runtime_mjcf(
             sanitized_path, cache_dir, runtime_path
         )
-        if visual_count:
+        if dae_count:
             self.load_warning = (
-                f"{path.name}: {visual_count} unsupported URDF visual blocks were "
-                "omitted; using colored collision geometry."
+                f"{path.name}: converted {dae_count} COLLADA visual references "
+                f"into {mesh_part_count} unique cached OBJ material parts."
             )
+        elif visual_count:
+            self.load_warning = f"{path.name}: loaded {visual_count} visual meshes."
         else:
-            self.load_warning = f"{path.name}: using converted URDF collision geometry."
+            self.load_warning = (
+                f"{path.name}: no visual meshes found; using collision geometry."
+            )
         metadata_path.write_text(json.dumps({
             "cache_version": MODEL_CACHE_VERSION,
             "source": str(path),
@@ -144,16 +161,11 @@ class MuJoCoRobotAdapter(RobotModel3D):
         for mesh in root.findall(".//mesh"):
             filename = mesh.attrib.get("filename", "")
             digest.update(filename.encode())
-            candidates = []
-            if filename.startswith("package://"):
-                parts = filename[len("package://"):].split("/", 1)
-                relative = parts[1] if len(parts) == 2 else parts[0]
-                candidates.extend((path.parent / relative, path.parent / Path(relative).name))
-            else:
-                candidates.append(path.parent / filename)
-            asset = next((item for item in candidates if item.is_file()), None)
-            if asset is not None:
-                digest.update(asset.read_bytes())
+            resolved = resolve_mesh_path(filename, path.parent, self.package_map)
+            if resolved.path is not None:
+                digest.update(resolved.path.read_bytes())
+            elif resolved.error:
+                digest.update(resolved.error.encode())
         return digest.hexdigest()[:24]
 
     def _build_urdf_runtime_mjcf(self, urdf_path, cache_dir, mjcf_path=None):
@@ -220,9 +232,16 @@ class MuJoCoRobotAdapter(RobotModel3D):
             else:
                 color = "0.28 0.32 0.38 1"
             for geom in body.findall("geom"):
-                geom.set("rgba", color)
+                # URDF visual meshes are group 1 and already carry the DAE
+                # material color produced by prepare_urdf_visual_meshes.
+                # Only recolor collision/fallback primitives.
+                if geom.get("group") != "1":
+                    geom.set("rgba", color)
             if body_name and "calf" in body_name:
-                geoms = body.findall("geom")
+                geoms = [
+                    geom for geom in body.findall("geom")
+                    if geom.get("group") != "1"
+                ]
                 if geoms:
                     geoms[-1].set("rgba", "0.05 0.06 0.08 1")
 

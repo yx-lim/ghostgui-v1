@@ -18,6 +18,7 @@ class RobotModelInfo:
     root_body_candidates: tuple[str, ...]
     root_joint_candidates: tuple[str, ...] = ()
     logical_frames: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    package_map: dict[str, Path] = field(default_factory=dict)
     ignored_body_tokens: tuple[str, ...] = (
         "camera", "imu", "radar", "rotor", "logo", "sensor", "contour",
         "constraint", "support",
@@ -46,7 +47,7 @@ ROBOT_MODELS = {
         key="go2",
         display_name="Unitree Go2",
         model_type="quadruped",
-        model_path=PROJECT_ROOT / "models" / "go2" / "go2.xml",
+        model_path=PROJECT_ROOT / "models" / "go2_description.urdf",
         root_body_candidates=("base", "trunk", "base_link", "world"),
         root_joint_candidates=("floating_base", "root", "freejoint"),
         logical_frames={
@@ -56,6 +57,11 @@ ROBOT_MODELS = {
             "FR_foot": ("FR_foot", "FR_calf"),
             "RL_foot": ("RL_foot", "RL_calf"),
             "RR_foot": ("RR_foot", "RR_calf"),
+        },
+        package_map={
+            # The vendored ROS package stores its DAE files in a flattened
+            # directory instead of go2_description/dae.
+            "go2_description": PROJECT_ROOT / "models" / "go2_assets",
         },
         home_joints={
             **{f"{leg}_thigh_joint": 0.8 for leg in ("FL", "FR", "RL", "RR")},

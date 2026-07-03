@@ -16,7 +16,7 @@ import numpy as np
 from OpenGL import GL
 from OpenGL import GLU
 from PySide6.QtCore import QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QMatrix4x4, QVector3D
+from PySide6.QtGui import QMatrix4x4, QSurfaceFormat, QVector3D
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from .trajectory_colors import gl_color_for_frame
@@ -34,6 +34,13 @@ class RobotCanvas3D(QOpenGLWidget):
 
     def __init__(self):
         super().__init__()
+
+        # This widget is an opaque scene. Request no composited alpha channel
+        # and tell Qt not to expose the desktop through transparent GL pixels.
+        surface_format = QSurfaceFormat(self.format())
+        surface_format.setAlphaBufferSize(0)
+        self.setFormat(surface_format)
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
 
         self.setMinimumSize(650, 500)
         self.setMouseTracking(True)
@@ -60,11 +67,13 @@ class RobotCanvas3D(QOpenGLWidget):
         self.robot_state = None
         self.preview_state = None
         self.preview_visible = False
+        self.preview_alpha = 0.65
         self.ghost_renderer = None
         self.show_ghosts = False
         self.ghost_alpha = 0.18
         self.use_model_colors = True
         self._geom_lists = []
+        self._mesh_display_lists = {}
         self._quadric = None
         self.gizmo = TransformGizmo(
             (self.target_x, self.target_y, self.target_z)
@@ -91,6 +100,10 @@ class RobotCanvas3D(QOpenGLWidget):
 
     def set_preview_visible(self, visible):
         self.preview_visible = bool(visible and self.preview_state is not None)
+        self.update()
+
+    def set_preview_alpha(self, alpha):
+        self.preview_alpha = max(0.1, min(1.0, float(alpha)))
         self.update()
 
     def set_ghost_options(self, visible, alpha=0.18):
@@ -141,8 +154,7 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glEnable(GL.GL_POINT_SMOOTH)
         GL.glPointSize(8.0)
         GL.glEnable(GL.GL_NORMALIZE)
-        GL.glEnable(GL.GL_BLEND)
-        GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
+        GL.glDisable(GL.GL_BLEND)
         GL.glEnable(GL.GL_COLOR_MATERIAL)
         GL.glColorMaterial(GL.GL_FRONT_AND_BACK, GL.GL_AMBIENT_AND_DIFFUSE)
         GL.glShadeModel(GL.GL_SMOOTH)
@@ -154,6 +166,7 @@ class RobotCanvas3D(QOpenGLWidget):
         # Display lists belong to this OpenGL context. A restored/cached widget
         # keeps them; a genuinely new context rebuilds them incrementally.
         self._geom_lists = []
+        self._mesh_display_lists = {}
         self._geometry_queue = []
         self._build_robot_geometry()
 
@@ -161,6 +174,12 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glViewport(0, 0, width, height)
 
     def paintGL(self):
+        # Reassert an opaque framebuffer on every frame. Transparent robot
+        # passes preserve destination alpha rather than changing window alpha.
+        GL.glClearColor(0.08, 0.09, 0.10, 1.0)
+        GL.glColorMask(GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE)
+        GL.glDepthMask(GL.GL_TRUE)
+        GL.glDisable(GL.GL_BLEND)
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
 
         self.configure_camera()
@@ -176,8 +195,8 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glEnable(GL.GL_LIGHT0)
         GL.glEnable(GL.GL_LIGHTING)
         GL.glLightfv(GL.GL_LIGHT0, GL.GL_POSITION, (2.0, -3.0, 5.0, 1.0))
-        self.draw_trajectory_ghosts()
         self.draw_robot()
+        self.draw_trajectory_ghosts()
         self.draw_preview_robot()
         GL.glDisable(GL.GL_LIGHTING)
         GL.glDisable(GL.GL_LIGHT0)
@@ -191,9 +210,8 @@ class RobotCanvas3D(QOpenGLWidget):
         model = self.robot_state.mj_model
         self._geom_lists = [None] * model.ngeom
         render_ids = self.render_geom_ids(model)
-        # Native MJCF models usually separate visual (group 2) and collision
-        # geometry.  A sanitized URDF such as Go2 only has collision geometry;
-        # in that case it is also the best available render geometry.
+        # Native MJCF models usually use visual group 2; imported URDF visuals
+        # use non-colliding group 1. render_geom_ids handles both conventions.
         self._geometry_queue = sorted(render_ids)
         self._geometry_total = len(self._geometry_queue)
         self.geometry_progress.emit(0, self._geometry_total)
@@ -208,6 +226,16 @@ class RobotCanvas3D(QOpenGLWidget):
             return
         geom_id = self._geometry_queue.pop(0)
         model = self.robot_state.mj_model
+        import mujoco
+        mesh_id = (
+            int(model.geom_dataid[geom_id])
+            if int(model.geom_type[geom_id]) == int(mujoco.mjtGeom.mjGEOM_MESH)
+            else None
+        )
+        if mesh_id is not None and mesh_id in self._mesh_display_lists:
+            self._geom_lists[geom_id] = self._mesh_display_lists[mesh_id]
+            self._finish_geometry_item()
+            return
         self.makeCurrent()
         try:
             list_id = GL.glGenLists(1)
@@ -215,8 +243,13 @@ class RobotCanvas3D(QOpenGLWidget):
             self._draw_local_geom(model, geom_id)
             GL.glEndList()
             self._geom_lists[geom_id] = list_id
+            if mesh_id is not None:
+                self._mesh_display_lists[mesh_id] = list_id
         finally:
             self.doneCurrent()
+        self._finish_geometry_item()
+
+    def _finish_geometry_item(self):
         complete = self._geometry_total - len(self._geometry_queue)
         self.geometry_progress.emit(complete, self._geometry_total)
         self.update()
@@ -230,6 +263,15 @@ class RobotCanvas3D(QOpenGLWidget):
             geom_id for geom_id in range(model.ngeom)
             if int(model.geom_group[geom_id]) == 2
         }
+        if not visual_ids:
+            # MuJoCo imports URDF <visual> elements as non-colliding group-1
+            # geoms. Prefer those over the primitive collision shapes.
+            visual_ids = {
+                geom_id for geom_id in range(model.ngeom)
+                if int(model.geom_group[geom_id]) == 1
+                and int(model.geom_contype[geom_id]) == 0
+                and int(model.geom_conaffinity[geom_id]) == 0
+            }
         return visual_ids or set(range(model.ngeom))
 
     def _draw_local_geom(self, model, geom_id):
@@ -381,31 +423,63 @@ class RobotCanvas3D(QOpenGLWidget):
         if not self.preview_visible or self.preview_state is None:
             return
         data = self.preview_state.mj_data
-        GL.glDepthMask(GL.GL_FALSE)
-        self._draw_robot_transforms(
-            data.geom_xpos,
-            data.geom_xmat,
-            alpha_scale=0.48,
-            color_override=(1.0, 0.38, 0.04, 1.0),
-        )
-        GL.glDepthMask(GL.GL_TRUE)
+        if self.preview_alpha >= 0.999:
+            self._draw_robot_transforms(
+                data.geom_xpos,
+                data.geom_xmat,
+                color_override=(1.0, 0.38, 0.04, 1.0),
+            )
+            return
+        self._begin_transparent_pass()
+        try:
+            self._draw_robot_transforms(
+                data.geom_xpos,
+                data.geom_xmat,
+                alpha_scale=self.preview_alpha,
+                color_override=(1.0, 0.38, 0.04, 1.0),
+            )
+        finally:
+            self._end_transparent_pass()
 
     def draw_trajectory_ghosts(self):
         if not self.show_ghosts or self.ghost_renderer is None:
             return
+        self._begin_transparent_pass()
+        try:
+            for positions, rotations in self.ghost_renderer.transforms:
+                # The animated main pose may exactly equal one cached waypoint.
+                # Skipping that duplicate avoids coincident transparent surfaces.
+                if self.robot_state is not None and np.allclose(
+                    positions,
+                    self.robot_state.mj_data.geom_xpos,
+                    atol=1e-8,
+                    rtol=0.0,
+                ):
+                    continue
+                self._draw_robot_transforms(positions, rotations, self.ghost_alpha)
+        finally:
+            self._end_transparent_pass()
+
+    @staticmethod
+    def _begin_transparent_pass():
+        GL.glEnable(GL.GL_BLEND)
+        GL.glBlendFuncSeparate(
+            GL.GL_SRC_ALPHA,
+            GL.GL_ONE_MINUS_SRC_ALPHA,
+            GL.GL_ZERO,
+            GL.GL_ONE,
+        )
         GL.glDepthMask(GL.GL_FALSE)
-        for positions, rotations in self.ghost_renderer.transforms:
-            # The animated main pose may exactly equal one cached waypoint.
-            # Skipping that duplicate avoids coincident transparent surfaces.
-            if self.robot_state is not None and np.allclose(
-                positions,
-                self.robot_state.mj_data.geom_xpos,
-                atol=1e-8,
-                rtol=0.0,
-            ):
-                continue
-            self._draw_robot_transforms(positions, rotations, self.ghost_alpha)
+        # Preserve the opaque alpha written by glClear. Standard blending also
+        # blends destination alpha, which made QOpenGLWidget composite desktop
+        # pixels through the preview on some window managers.
+        GL.glColorMask(GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE, GL.GL_FALSE)
+
+    @staticmethod
+    def _end_transparent_pass():
+        GL.glColorMask(GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE)
         GL.glDepthMask(GL.GL_TRUE)
+        GL.glDisable(GL.GL_BLEND)
 
     def configure_camera(self):
         width = max(1, self.width())
