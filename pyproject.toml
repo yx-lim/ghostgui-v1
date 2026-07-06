@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ghostgui"
+version = "0.1.0"
+description = "Reference-frame and robot-state trajectory editor for MuJoCo robots"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "mujoco>=3.0",
+  "numpy>=1.26",
+  "PyOpenGL>=3.1.7",
+  "PySide6>=6.6",
+]
+
+[project.scripts]
+ghostgui = "run_gui:main"
+
+[tool.setuptools]
+py-modules = ["run_gui"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["application*", "backend*", "core*", "gui*", "scripts*"]
+
+[tool.setuptools.package-data]
+backend = ["*.cpp", "*.hpp"]
+
+[tool.setuptools.data-files]
+"models" = ["models/*.xml", "models/*.urdf"]
+"models/assets" = ["models/assets/*.STL", "models/assets/*.stl"]
+"models/go2_assets" = ["models/go2_assets/*.dae"]
+

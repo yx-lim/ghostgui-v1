@@ -12,14 +12,10 @@ Updated project flow:
     5. Backend maps robot to each target frame
 """
 
-from dataclasses import dataclass
-
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QMainWindow,
-    QWidget,
-    QHBoxLayout,
     QVBoxLayout,
     QLabel,
     QTextEdit,
@@ -30,46 +26,18 @@ from PySide6.QtWidgets import (
     QProgressDialog,
 )
 
-from .trajectory import Trajectory
-from .trajectory import SampledTrajectory
+from core.trajectory.model import Trajectory, SampledTrajectory
 from .controls import TrajectoryControlPanel
-from .viewer_2d import RobotCanvas
-from .robot_viewer_3d import RobotViewer3D
-from .viewer_2d_stickman import Stickman2DViewer
-from .viewer_3d_mujoco import Mujoco3DViewerPanel
-from .backend_interface import BackendInterface
-from .model_reference import MujocoReferenceFrames
+from .viewers.reference_frame_2d import RobotCanvas
+from .panels.robot_editor_3d import RobotViewer3D
+from .viewers.skeleton_2d import Stickman2DViewer
+from .panels.mujoco_player import Mujoco3DViewerPanel
+from backend.interface import BackendInterface
 from .collapsible_sidebar import CollapsibleSidebar
-from .robot_model_adapter import MuJoCoRobotAdapter
-from .robot_model_registry import ROBOT_MODELS
-
-
-@dataclass
-class RobotModelSession:
-    adapter: object
-    backend: object
-    reference: object
-    viewer_3d: object
-    viewer_2d_skeleton: object
-    trajectory: object
-    active_index: int = -1
-
-
-class ModelLoadThread(QThread):
-    loaded = Signal(str, object)
-    failed = Signal(str, str)
-
-    def __init__(self, model_key, parent=None):
-        super().__init__(parent)
-        self.model_key = model_key
-
-    def run(self):
-        try:
-            adapter = MuJoCoRobotAdapter(self.model_key)
-        except Exception as exc:
-            self.failed.emit(self.model_key, str(exc))
-            return
-        self.loaded.emit(self.model_key, adapter)
+from core.models.adapter import MuJoCoRobotAdapter
+from core.models.registry import ROBOT_MODELS
+from application.model_sessions import ModelSessionManager, RobotModelSession
+from application.project import ProjectDocument
 
 
 class RobotGuiMainWindow(QMainWindow):
@@ -81,7 +49,10 @@ class RobotGuiMainWindow(QMainWindow):
         # --------------------------------------------------------
         # Core data
         # --------------------------------------------------------
-        self.trajectory = Trajectory()
+        self.trajectory = Trajectory(
+            ROBOT_MODELS[model_key].logical_frames if model_key in ROBOT_MODELS
+            else ("pelvis",)
+        )
         self.active_index = -1
 
         # One immutable MuJoCo model is shared by FK, IK, and rendering. Each
@@ -105,8 +76,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.backend_interface = BackendInterface(
             mj_model=shared_mj_model, adapter=self.robot_model_3d
         )
-        self.model_reference = MujocoReferenceFrames(
-            mj_model=shared_mj_model, adapter=self.robot_model_3d
+        self.model_reference = (
+            self.robot_model_3d.create_state() if self.robot_model_3d else None
         )
 
         # GUI widgets
@@ -124,18 +95,28 @@ class RobotGuiMainWindow(QMainWindow):
         )
         self.viewer_2d_stickman = Stickman2DViewer(self.robot_model_3d)
         self.viewer_3d_mujoco = Mujoco3DViewerPanel(self.robot_model_3d)
-        self.model_sessions = {
-            model_key: RobotModelSession(
+        self.session_manager = ModelSessionManager(self)
+        self.session_manager.loaded.connect(self.on_model_loaded)
+        self.session_manager.failed.connect(self.on_model_load_failed)
+        initial_project = ProjectDocument(
+            model_key=model_key,
+            target_trajectory=self.trajectory,
+            robot_state_timeline=self.viewer_3d.state_timeline,
+        )
+        self.session_manager.register(
+            model_key, RobotModelSession(
                 adapter=self.robot_model_3d,
                 backend=self.backend_interface,
                 reference=self.model_reference,
                 viewer_3d=self.viewer_3d,
                 viewer_2d_skeleton=self.viewer_2d_stickman,
-                trajectory=self.trajectory,
+                project=initial_project,
                 active_index=self.active_index,
             )
-        }
-        self.model_loaders = {}
+        )
+        # Compatibility aliases for existing integrations/tests.
+        self.model_sessions = self.session_manager.sessions
+        self.model_loaders = self.session_manager.loaders
         self.model_loading_dialog = None
         self.viewer_tabs = self.build_viewer_tabs()
         self.status_panel = self.build_status_panel()
@@ -262,11 +243,11 @@ class RobotGuiMainWindow(QMainWindow):
         """Swap model-owned widgets while retaining the surrounding app."""
         if model_key == self.model_key:
             return
-        cached = self.model_sessions.get(model_key)
+        cached = self.session_manager.get(model_key)
         if cached is not None:
             self.activate_model_session(model_key, cached)
             return
-        if model_key in self.model_loaders:
+        if self.session_manager.is_loading(model_key):
             return
         self.controls.model_box.setEnabled(False)
         self.statusBar().showMessage(f"Loading {ROBOT_MODELS[model_key].display_name}…")
@@ -278,32 +259,35 @@ class RobotGuiMainWindow(QMainWindow):
         self.model_loading_dialog.setWindowModality(Qt.WindowModality.NonModal)
         self.model_loading_dialog.setMinimumDuration(0)
         self.model_loading_dialog.show()
-        loader = ModelLoadThread(model_key, self)
-        loader.loaded.connect(self.on_model_loaded)
-        loader.failed.connect(self.on_model_load_failed)
-        loader.finished.connect(loader.deleteLater)
-        self.model_loaders[model_key] = loader
-        loader.start()
+        self.session_manager.load(model_key)
 
     def on_model_loaded(self, model_key, adapter):
-        self.model_loaders.pop(model_key, None)
         backend = BackendInterface(mj_model=adapter.mj_model, adapter=adapter)
-        reference = MujocoReferenceFrames(adapter=adapter)
+        reference = adapter.create_state()
         viewer_3d = RobotViewer3D(adapter, adapter.load_warning)
         viewer_2d_skeleton = Stickman2DViewer(adapter)
         self.connect_model_viewer_signals(viewer_3d, viewer_2d_skeleton)
         self.viewer_3d_stack.addWidget(viewer_3d)
         self.viewer_2d_skeleton_stack.addWidget(viewer_2d_skeleton)
-        session = RobotModelSession(
-            adapter, backend, reference, viewer_3d, viewer_2d_skeleton,
-            Trajectory(), -1,
+        project = ProjectDocument(
+            model_key=model_key,
+            target_trajectory=Trajectory(adapter.trajectory_frames),
+            robot_state_timeline=viewer_3d.state_timeline,
         )
-        self.model_sessions[model_key] = session
+        session = RobotModelSession(
+            adapter=adapter,
+            backend=backend,
+            reference=reference,
+            viewer_3d=viewer_3d,
+            viewer_2d_skeleton=viewer_2d_skeleton,
+            project=project,
+            active_index=-1,
+        )
+        self.session_manager.register(model_key, session)
         self.finish_model_loading_ui()
         self.activate_model_session(model_key, session)
 
     def on_model_load_failed(self, model_key, error):
-        self.model_loaders.pop(model_key, None)
         self.finish_model_loading_ui()
         self.status_text.setText(f"Could not load {model_key}: {error}")
         index = self.controls.model_box.findData(self.model_key)
@@ -525,11 +509,14 @@ class RobotGuiMainWindow(QMainWindow):
         frame_name,
         emit_pose_changed=True,
     ):
-        position = self.model_reference.position_for_frame(frame_name)
-
-        if position is None:
+        binding = self.robot_model_3d.resolve_logical_frame(frame_name)
+        if binding is None or self.model_reference is None:
             return False
-
+        kind, object_name = binding
+        try:
+            position, _ = self.model_reference.get_body_pose(object_name, kind)
+        except KeyError:
+            return False
         x, y, z = position
         self.controls.set_position_values(
             x=x,

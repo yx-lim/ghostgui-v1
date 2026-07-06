@@ -2,7 +2,7 @@ import unittest
 
 try:
     import numpy as np
-    from gui.robot_model_3d import (
+    from core.models.model import (
         DEFAULT_MODEL_PATH,
         RobotModel3D,
         RobotStateTimeline,

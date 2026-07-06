@@ -14,6 +14,13 @@ pip install PySide6 PyOpenGL numpy mujoco
 python3 run_gui.py
 ```
 
+For an editable package install with the `ghostgui` command:
+
+```bash
+pip install -e .
+ghostgui --model g1
+```
+
 Choose the model from the **Robot model** control, or start directly with Go2:
 
 ```bash
@@ -96,14 +103,23 @@ textured visual materials in other models currently fall back to material RGBA.
 
 ```
 ghostgui/
-├── README.md
-├── backend/
+├── application/       # project, preview, and model-session orchestration
+├── core/              # model, state, IK, collision, assets, trajectory
+├── backend/           # Python backends plus retained native C++ sources
 ├── gui/
+│   ├── panels/
+│   ├── viewers/
+│   └── widgets/
+├── README.md
 ├── models/
 ├── scripts/
 ├── tests/
+├── pyproject.toml
 └── run_gui.py
 ```
+
+See [the architecture overview](docs/architecture.md) for dependency rules and
+state ownership.
 
 Run the model/state sanity checks with:
 

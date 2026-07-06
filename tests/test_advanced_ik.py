@@ -7,9 +7,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from gui.ik_tasks import FootLockTask, JointRegularizationTask, PostureTask, RootPoseTask
+from core.ik.tasks import FootLockTask, JointRegularizationTask, PostureTask, RootPoseTask
 from gui.main_window import RobotGuiMainWindow
-from gui.robot_model_adapter import MuJoCoRobotAdapter
+from core.models.adapter import MuJoCoRobotAdapter
 
 
 class AdvancedIKTests(unittest.TestCase):

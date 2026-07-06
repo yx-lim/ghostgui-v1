@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
 )
 
-from .trajectory import TargetFrame
+from core.trajectory.model import TargetFrame
 
 
 class LabeledSlider(QWidget):
