@@ -116,6 +116,7 @@ class PythonRobotConfiguration:
     joint_positions: list = None
 
     ik_error: float = 0.0
+    orientation_error: float = 0.0
     success: bool = True
     status: str = "Python fallback"
     qpos: object = None
@@ -184,6 +185,7 @@ class PythonTrajectoryBackend:
             joint_names=self.joint_names,
             joint_positions=q_prev.joint_positions.copy(),
             ik_error=q_prev.ik_error,
+            orientation_error=q_prev.orientation_error,
             success=q_prev.success,
             status=q_prev.status,
         )
@@ -462,11 +464,11 @@ class PythonTrajectoryBackend:
 
 class MujocoIKBackend(PythonTrajectoryBackend):
     """
-    Position-only MuJoCo IK backend.
+    MuJoCo pose IK backend.
 
     Pelvis/base/root targets set the floating base directly. Other active
     target frames are solved against real MuJoCo bodies/sites using position
-    Jacobians and damped least squares.
+    and rotation Jacobians with damped least squares.
     """
 
     def __init__(self, model_path=MODEL_PATH, mj_model=None, adapter=None):
@@ -570,7 +572,7 @@ class MujocoIKBackend(PythonTrajectoryBackend):
                 )
 
     def backend_label(self):
-        return "MuJoCo position IK backend"
+        return "MuJoCo pose IK backend"
 
     def qpos_to_configuration(self, time=0.0, status="MuJoCo IK"):
         q = PythonRobotConfiguration(
@@ -638,20 +640,35 @@ class MujocoIKBackend(PythonTrajectoryBackend):
         tasks = []
 
         for frame_name, target in active_targets.items():
+            if frame_name in ("pelvis", "base", "root"):
+                continue
             binding = self.task_bindings.get(frame_name)
             if binding is None:
                 continue
 
             kind, object_id, weight = binding
             desired = np.array([target.x, target.y, target.z], dtype=float)
-            tasks.append((frame_name, kind, object_id, weight, desired))
+            desired_quaternion = np.asarray(
+                rpy_to_quaternion(target.roll, target.pitch, target.yaw),
+                dtype=float,
+            )
+            tasks.append((
+                frame_name, kind, object_id, weight,
+                desired, desired_quaternion,
+            ))
 
         return tasks
 
-    def current_task_position(self, kind, object_id):
+    def current_task_pose(self, kind, object_id):
         if kind == "site":
-            return self.data.site_xpos[object_id].copy()
-        return self.data.xpos[object_id].copy()
+            return (
+                self.data.site_xpos[object_id].copy(),
+                self.data.site_xmat[object_id].reshape(3, 3).copy(),
+            )
+        return (
+            self.data.xpos[object_id].copy(),
+            self.data.xmat[object_id].reshape(3, 3).copy(),
+        )
 
     def task_jacobian(self, kind, object_id):
         jacp = np.zeros((3, self.model.nv), dtype=float)
@@ -667,13 +684,30 @@ class MujocoIKBackend(PythonTrajectoryBackend):
             for name in self.joint_names
             if name in self.joint_dof_addresses
         ]
-        return jacp[:, dof_addresses]
+        return jacp[:, dof_addresses], jacr[:, dof_addresses]
 
-    def solve_position_ik(
+    @staticmethod
+    def orientation_error(rotation, target_quaternion):
+        target_rotation = np.empty(9, dtype=float)
+        mujoco.mju_quat2Mat(target_rotation, target_quaternion)
+        target_rotation = target_rotation.reshape(3, 3)
+        error = 0.5 * sum(
+            np.cross(rotation[:, axis], target_rotation[:, axis])
+            for axis in range(3)
+        )
+        relative = rotation.T @ target_rotation
+        angle = math.acos(float(np.clip(
+            (np.trace(relative) - 1.0) * 0.5, -1.0, 1.0
+        )))
+        return error, angle
+
+    def solve_pose_ik(
         self,
         active_targets,
         max_iterations=80,
         tolerance=0.005,
+        orientation_tolerance=0.03,
+        orientation_weight=0.25,
         damping=0.04,
         step_size=0.7,
         max_step=0.08,
@@ -682,6 +716,7 @@ class MujocoIKBackend(PythonTrajectoryBackend):
 
         if not tasks:
             mujoco.mj_forward(self.model, self.data)
+            self.last_orientation_error = 0.0
             return 0.0, True, 0
 
         joint_names = [
@@ -691,7 +726,8 @@ class MujocoIKBackend(PythonTrajectoryBackend):
             and name in self.joint_dof_addresses
         ]
 
-        final_error = 0.0
+        final_position_error = 0.0
+        final_orientation_error = 0.0
 
         for iteration in range(max_iterations):
             mujoco.mj_forward(self.model, self.data)
@@ -699,19 +735,36 @@ class MujocoIKBackend(PythonTrajectoryBackend):
             error_blocks = []
             jacobian_blocks = []
 
-            for _, kind, object_id, weight, desired in tasks:
-                current = self.current_task_position(kind, object_id)
-                error_blocks.append((desired - current) * weight)
-                jacobian_blocks.append(
-                    self.task_jacobian(kind, object_id) * weight
+            position_errors = []
+            orientation_errors = []
+            for (
+                _, kind, object_id, weight, desired, desired_quaternion
+            ) in tasks:
+                current, rotation = self.current_task_pose(kind, object_id)
+                position_error = desired - current
+                rotation_error, angle = self.orientation_error(
+                    rotation, desired_quaternion
                 )
+                jacp, jacr = self.task_jacobian(kind, object_id)
+                position_errors.append(float(np.linalg.norm(position_error)))
+                orientation_errors.append(angle)
+                error_blocks.append(position_error * weight)
+                jacobian_blocks.append(jacp * weight)
+                rotation_scale = weight * orientation_weight
+                error_blocks.append(rotation_error * rotation_scale)
+                jacobian_blocks.append(jacr * rotation_scale)
 
             error = np.concatenate(error_blocks)
             jacobian = np.vstack(jacobian_blocks)
-            final_error = float(np.linalg.norm(error))
+            final_position_error = max(position_errors, default=0.0)
+            final_orientation_error = max(orientation_errors, default=0.0)
 
-            if final_error < tolerance:
-                return final_error, True, iteration
+            if (
+                final_position_error < tolerance
+                and final_orientation_error < orientation_tolerance
+            ):
+                self.last_orientation_error = final_orientation_error
+                return final_position_error, True, iteration
 
             lhs = jacobian.T @ jacobian
             lhs += (damping * damping) * np.eye(lhs.shape[0])
@@ -731,7 +784,33 @@ class MujocoIKBackend(PythonTrajectoryBackend):
             self.clamp_joint_limits()
 
         mujoco.mj_forward(self.model, self.data)
-        return final_error, final_error < tolerance * 2.0, max_iterations
+        self.last_orientation_error = final_orientation_error
+        success = (
+            final_position_error < tolerance * 2.0
+            and final_orientation_error < orientation_tolerance * 2.0
+        )
+        return final_position_error, success, max_iterations
+
+    def solve_position_ik(
+        self,
+        active_targets,
+        max_iterations=80,
+        tolerance=0.005,
+        damping=0.04,
+        step_size=0.7,
+        max_step=0.08,
+    ):
+        """Compatibility entry point for callers that request position only."""
+        return self.solve_pose_ik(
+            active_targets,
+            max_iterations=max_iterations,
+            tolerance=tolerance,
+            orientation_tolerance=float("inf"),
+            orientation_weight=0.0,
+            damping=damping,
+            step_size=step_size,
+            max_step=max_step,
+        )
 
     def solve_trajectory(self, trajectory):
         if getattr(trajectory, "samples", None) is not None:
@@ -764,15 +843,18 @@ class MujocoIKBackend(PythonTrajectoryBackend):
             if pelvis_target is not None:
                 self.set_base_from_target(pelvis_target)
 
-            error, success, iterations = self.solve_position_ik(active_targets)
+            error, success, iterations = self.solve_pose_ik(active_targets)
             q = self.qpos_to_configuration(
                 time=sample["time"],
                 status=(
-                    "MuJoCo position IK: "
-                    f"error={error:.4f}, iterations={iterations}"
+                    "MuJoCo pose IK: "
+                    f"position_error={error:.4f}, "
+                    f"orientation_error={self.last_orientation_error:.4f}, "
+                    f"iterations={iterations}"
                 ),
             )
             q.ik_error = error
+            q.orientation_error = self.last_orientation_error
             q.success = success
 
             if pelvis_target is None:
@@ -814,7 +896,7 @@ class BackendInterface:
 
     def backend_name(self):
         if self.using_mujoco_ik_backend:
-            return "MuJoCo position IK backend"
+            return "MuJoCo pose IK backend"
         if self.using_cpp_backend:
             return "C++ pelvis-target to base-pose backend"
         if self.ik_error:

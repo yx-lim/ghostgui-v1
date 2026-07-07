@@ -30,8 +30,7 @@ from PySide6.QtWidgets import (
     QProgressDialog,
 )
 
-from .trajectory import Trajectory
-from .trajectory import SampledTrajectory
+from .trajectory import Trajectory, SampledTrajectory, quat_to_rpy
 from .controls import TrajectoryControlPanel
 from .viewer_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
@@ -346,7 +345,7 @@ class RobotGuiMainWindow(QMainWindow):
     # GUI interaction callbacks
     # ============================================================
 
-    def on_pose_changed(self, x, y, z, yaw):
+    def on_pose_changed(self, x, y, z, roll, pitch, yaw):
         """
         Called when sliders change.
 
@@ -365,6 +364,8 @@ class RobotGuiMainWindow(QMainWindow):
                 x=target.x,
                 y=target.y,
                 z=target.z,
+                roll=target.roll,
+                pitch=target.pitch,
                 yaw=target.yaw,
                 emit_pose_changed=False,
             )
@@ -380,18 +381,24 @@ class RobotGuiMainWindow(QMainWindow):
 
         self.controls.set_position_from_viewer(x, z)
 
-    def on_target_pose_dragged(self, x, y, z):
+    def on_target_pose_dragged(
+        self, x, y, z, roll=None, pitch=None, yaw=None
+    ):
         """Sync controls without repainting every viewer on every mouse event."""
         # A full refresh here previously scheduled the 2D, 3D, stickman, table,
         # and status panel repeatedly during one drag. The live canvas already
         # updated its transforms; refresh the rest once on mouse release.
         self.controls.set_position_values(
-            x=x, y=y, z=z, emit_pose_changed=False
+            x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw,
+            emit_pose_changed=False,
         )
 
-    def on_target_pose_drag_finished(self, x, y, z):
+    def on_target_pose_drag_finished(
+        self, x, y, z, roll=None, pitch=None, yaw=None
+    ):
         self.controls.set_position_values(
-            x=x, y=y, z=z, emit_pose_changed=False
+            x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw,
+            emit_pose_changed=False,
         )
         # A completed 3D edit is an intentional keyframe edit. Upsert the
         # selected logical target at the active time while RobotViewer3D stores
@@ -413,9 +420,11 @@ class RobotGuiMainWindow(QMainWindow):
                 if self.viewer_3d.preview_active
                 else self.viewer_3d.committed_state
             )
-            position, _ = state.get_body_pose(name, kind)
+            position, quaternion = state.get_body_pose(name, kind)
+            roll, pitch, yaw = quat_to_rpy(quaternion)
             self.controls.set_position_values(
                 x=float(position[0]), y=float(position[1]), z=float(position[2]),
+                roll=roll, pitch=pitch, yaw=yaw,
                 emit_pose_changed=False,
             )
         self.refresh_display(apply_stickman_frame=False)
@@ -424,9 +433,13 @@ class RobotGuiMainWindow(QMainWindow):
         kind, name = self.viewer_3d._selected_target()
         if not name:
             return
-        position, _ = self.viewer_3d.committed_state.get_body_pose(name, kind)
+        position, quaternion = self.viewer_3d.committed_state.get_body_pose(
+            name, kind
+        )
+        roll, pitch, yaw = quat_to_rpy(quaternion)
         self.controls.set_position_values(
             x=float(position[0]), y=float(position[1]), z=float(position[2]),
+            roll=roll, pitch=pitch, yaw=yaw,
             emit_pose_changed=False,
         )
         self.refresh_display(apply_stickman_frame=False)
@@ -525,16 +538,21 @@ class RobotGuiMainWindow(QMainWindow):
         frame_name,
         emit_pose_changed=True,
     ):
-        position = self.model_reference.position_for_frame(frame_name)
+        pose = self.model_reference.pose_for_frame(frame_name)
 
-        if position is None:
+        if pose is None:
             return False
 
+        position, quaternion = pose
         x, y, z = position
+        roll, pitch, yaw = quat_to_rpy(quaternion)
         self.controls.set_position_values(
             x=x,
             y=y,
             z=z,
+            roll=roll,
+            pitch=pitch,
+            yaw=yaw,
             emit_pose_changed=emit_pose_changed,
         )
         return True
@@ -565,6 +583,13 @@ class RobotGuiMainWindow(QMainWindow):
         if result_states:
             max_ik_error = max(state.ik_error for state in result_states)
             lines.append(f"Max IK position error: {max_ik_error:.4f} m")
+            max_orientation_error = max(
+                state.orientation_error for state in result_states
+            )
+            lines.append(
+                "Max IK orientation error: "
+                f"{max_orientation_error:.4f} rad"
+            )
         lines.append(f"Exported CSV to: {csv_path}")
         lines.append("")
         lines.append("First few sampled time groups:")

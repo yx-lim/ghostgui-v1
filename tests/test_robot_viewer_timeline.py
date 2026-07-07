@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 
 from gui.main_window import RobotGuiMainWindow
 from gui.transform_gizmo import GizmoInteractionState
+from gui.trajectory import quat_to_rpy, rpy_to_quat
 
 
 class RobotViewerTimelineTests(unittest.TestCase):
@@ -260,6 +261,42 @@ class RobotViewerTimelineTests(unittest.TestCase):
         np.testing.assert_allclose(
             self.window.robot_model_3d.mj_model.mat_rgba, before
         )
+
+    def test_controls_store_full_rpy_in_keyframe_and_table(self):
+        self.window.controls.set_position_values(
+            roll=0.12, pitch=-0.23, yaw=0.34,
+            emit_pose_changed=False,
+        )
+        self.window.on_add_keyframe()
+        frame = self.window.trajectory.frames[0]
+        self.assertAlmostEqual(frame.roll, 0.12)
+        self.assertAlmostEqual(frame.pitch, -0.23)
+        self.assertAlmostEqual(frame.yaw, 0.34)
+        headers = [
+            self.window.controls.table.horizontalHeaderItem(index).text()
+            for index in range(self.window.controls.table.columnCount())
+        ]
+        self.assertEqual(headers[-3:], ["roll", "pitch", "yaw"])
+
+    def test_accepted_3d_rotation_is_upserted_into_keyframe(self):
+        self.window.on_3d_target_frame_changed("left_hand")
+        self.viewer._set_target_to_selected_pose()
+        position = self.viewer.last_valid_target_position.copy()
+        start_rpy = quat_to_rpy(self.viewer.last_valid_target_quaternion)
+        target_rpy = (
+            start_rpy[0] + 0.05,
+            start_rpy[1] - 0.03,
+            start_rpy[2] + 0.04,
+        )
+        self.viewer._on_transform_moved(position, rpy_to_quat(*target_rpy))
+        self.assertTrue(self.viewer.preview_active)
+        self.viewer.accept_preview()
+
+        frame = self.window.trajectory.tracks["left_hand"][0]
+        solved_rpy = quat_to_rpy(self.viewer.last_valid_target_quaternion)
+        self.assertAlmostEqual(frame.roll, solved_rpy[0], delta=0.011)
+        self.assertAlmostEqual(frame.pitch, solved_rpy[1], delta=0.011)
+        self.assertAlmostEqual(frame.yaw, solved_rpy[2], delta=0.011)
 
     def test_load_edit_accept_and_save_headerless_qpos_csv(self):
         source = Path("crawl_home_qpos_t0.5.csv").resolve()

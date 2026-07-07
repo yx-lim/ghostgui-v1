@@ -33,7 +33,7 @@ from .robot_model_3d import (
     interpolate_qpos,
 )
 from .collision_checker import CollisionAwareIKSolver, CollisionChecker
-from .trajectory import rpy_to_quat
+from .trajectory import quat_to_rpy, rpy_to_quat
 from .viewer_3d import RobotCanvas3D
 from .collapsible_sidebar import CollapsibleSidebar
 from .ik_tasks import (
@@ -132,8 +132,8 @@ class RobotViewer3D(QWidget):
     """Live FK/IK/trajectory viewer. It preserves the old canvas contract."""
 
     target_dragged = Signal(float, float)
-    target_pose_dragged = Signal(float, float, float)
-    target_pose_drag_finished = Signal(float, float, float)
+    target_pose_dragged = Signal(float, float, float, float, float, float)
+    target_pose_drag_finished = Signal(float, float, float, float, float, float)
     target_frame_changed = Signal(str)
     preview_cancelled = Signal()
 
@@ -490,8 +490,8 @@ class RobotViewer3D(QWidget):
             self.status_label.setText("3D geometry ready.")
 
     def update_scene(self, trajectory, active_frame=None, show_trajectory_lines=True):
-        # The live gizmo owns its quaternion. The legacy editor only exposes
-        # yaw, so ordinary status refreshes must not reset a ring rotation.
+        # The live gizmo owns its quaternion while editing. Ordinary status
+        # refreshes must not reset an in-progress ring rotation from controls.
         self.canvas.update_scene(trajectory, None, show_trajectory_lines)
         if active_frame is not None:
             binding = self.frame_bindings.get(active_frame.frame_name)
@@ -756,8 +756,9 @@ class RobotViewer3D(QWidget):
             f"frame={logical_frame}; model={model_name}; preview not committed"
         )
         self.status_label.setText(self._last_ik_status)
+        roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
         self.target_pose_dragged.emit(
-            *map(float, self.last_valid_target_position)
+            *map(float, self.last_valid_target_position), roll, pitch, yaw
         )
 
     def _on_gizmo_moved(self, x, y, z):
@@ -814,8 +815,9 @@ class RobotViewer3D(QWidget):
             f"Accepted preview into committed keyframe at t={self.current_time:.2f} s"
         )
         if self.last_valid_target_position is not None:
+            roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
             self.target_pose_drag_finished.emit(
-                *map(float, self.last_valid_target_position)
+                *map(float, self.last_valid_target_position), roll, pitch, yaw
             )
 
     def cancel_preview(self):
@@ -916,8 +918,9 @@ class RobotViewer3D(QWidget):
             + ("; playback paused" if was_playing else "")
         )
         if self.last_valid_target_position is not None:
+            roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
             self.target_pose_drag_finished.emit(
-                *map(float, self.last_valid_target_position)
+                *map(float, self.last_valid_target_position), roll, pitch, yaw
             )
 
     def choose_qpos_csv(self):

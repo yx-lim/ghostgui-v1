@@ -10,8 +10,10 @@ from pathlib import Path
 
 try:
     import mujoco
+    import numpy as np
 except ImportError:
     mujoco = None
+    np = None
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +66,10 @@ class MujocoReferenceFrames:
             self.error = str(exc)
 
     def position_for_frame(self, frame_name):
+        pose = self.pose_for_frame(frame_name)
+        return pose[0] if pose is not None else None
+
+    def pose_for_frame(self, frame_name):
         if self.model is None or self.data is None:
             return None
 
@@ -86,6 +92,7 @@ class MujocoReferenceFrames:
             if object_id < 0:
                 return None
             pos = self.data.site_xpos[object_id]
+            rotation = self.data.site_xmat[object_id]
         else:
             object_id = mujoco.mj_name2id(
                 self.model,
@@ -95,5 +102,11 @@ class MujocoReferenceFrames:
             if object_id < 0:
                 return None
             pos = self.data.xpos[object_id]
+            rotation = self.data.xmat[object_id]
 
-        return float(pos[0]), float(pos[1]), float(pos[2])
+        quaternion = np.empty(4, dtype=float)
+        mujoco.mju_mat2Quat(quaternion, rotation)
+        return (
+            (float(pos[0]), float(pos[1]), float(pos[2])),
+            tuple(map(float, quaternion)),
+        )

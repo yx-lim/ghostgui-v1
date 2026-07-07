@@ -10,6 +10,8 @@ from PySide6.QtWidgets import QApplication
 from gui.ik_tasks import FootLockTask, JointRegularizationTask, PostureTask, RootPoseTask
 from gui.main_window import RobotGuiMainWindow
 from gui.robot_model_adapter import MuJoCoRobotAdapter
+from gui.backend_interface import MujocoIKBackend
+from gui.trajectory import TargetFrame, quat_to_rpy, rpy_to_quat
 
 
 class AdvancedIKTests(unittest.TestCase):
@@ -151,6 +153,45 @@ class AdvancedIKTests(unittest.TestCase):
                     )
                 finally:
                     window.close()
+
+    def test_batch_ik_solves_hand_position_and_orientation(self):
+        adapter = MuJoCoRobotAdapter("g1")
+        home = adapter.create_state()
+        position, quaternion = home.get_body_pose("robot/left_palm", "site")
+        roll, pitch, yaw = quat_to_rpy(quaternion)
+        target_rpy = (roll + 0.10, pitch, yaw)
+        target = TargetFrame(
+            time=0.0,
+            frame_name="left_hand",
+            x=float(position[0]),
+            y=float(position[1]),
+            z=float(position[2]),
+            roll=target_rpy[0],
+            pitch=target_rpy[1],
+            yaw=target_rpy[2],
+        )
+        backend = MujocoIKBackend(
+            mj_model=adapter.mj_model, adapter=adapter
+        )
+        result = backend.solve_grouped_trajectory([{
+            "time": 0.0,
+            "targets": {"left_hand": target},
+        }])[0]
+
+        solved = adapter.create_state()
+        solved.set_qpos(result.qpos)
+        solved_position, solved_quaternion = solved.get_body_pose(
+            "robot/left_palm", "site"
+        )
+        target_quaternion = rpy_to_quat(*target_rpy)
+        orientation_error = 2.0 * np.arccos(np.clip(
+            abs(float(np.dot(solved_quaternion, target_quaternion))),
+            -1.0,
+            1.0,
+        ))
+        self.assertTrue(result.success, result.status)
+        self.assertLess(np.linalg.norm(solved_position - position), 0.005)
+        self.assertLess(orientation_error, 0.03)
 
 
 if __name__ == "__main__":

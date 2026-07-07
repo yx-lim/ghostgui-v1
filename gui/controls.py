@@ -11,7 +11,7 @@ The GUI now edits:
     - time
     - phase
     - target frame position
-    - target frame yaw
+    - target frame roll/pitch/yaw
     - trajectory keyframe table
 """
 
@@ -128,7 +128,7 @@ class TrajectoryControlPanel(QGroupBox):
             emitted when user wants to send trajectory to backend.
     """
 
-    pose_changed = Signal(float, float, float, float)
+    pose_changed = Signal(float, float, float, float, float, float)
     add_keyframe_clicked = Signal()
     update_keyframe_clicked = Signal()
     delete_keyframe_clicked = Signal()
@@ -229,6 +229,22 @@ class TrajectoryControlPanel(QGroupBox):
             scale=1000,
         )
 
+        self.roll_slider = LabeledSlider(
+            "Target roll [rad]",
+            min_value=-314,
+            max_value=314,
+            initial_value=0,
+            scale=100,
+        )
+
+        self.pitch_slider = LabeledSlider(
+            "Target pitch [rad]",
+            min_value=-157,
+            max_value=157,
+            initial_value=0,
+            scale=100,
+        )
+
         self.yaw_slider = LabeledSlider(
             "Target yaw [rad]",
             min_value=-314,
@@ -241,12 +257,16 @@ class TrajectoryControlPanel(QGroupBox):
         layout.addWidget(self.x_slider)
         layout.addWidget(self.y_slider)
         layout.addWidget(self.z_slider)
+        layout.addWidget(self.roll_slider)
+        layout.addWidget(self.pitch_slider)
         layout.addWidget(self.yaw_slider)
 
         # Whenever pose controls change, update the viewer target marker.
         self.x_slider.value_changed.connect(self.emit_pose_changed)
         self.y_slider.value_changed.connect(self.emit_pose_changed)
         self.z_slider.value_changed.connect(self.emit_pose_changed)
+        self.roll_slider.value_changed.connect(self.emit_pose_changed)
+        self.pitch_slider.value_changed.connect(self.emit_pose_changed)
         self.yaw_slider.value_changed.connect(self.emit_pose_changed)
         # Commit timeline selection once per interaction. Connecting the raw
         # valueChanged signal would create a qpos keyframe at every intermediate
@@ -293,7 +313,7 @@ class TrajectoryControlPanel(QGroupBox):
         # Keyframe table
         # --------------------------------------------------------
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
             "time",
             "phase",
@@ -301,6 +321,8 @@ class TrajectoryControlPanel(QGroupBox):
             "x",
             "y",
             "z",
+            "roll",
+            "pitch",
             "yaw",
         ])
         self.table.cellClicked.connect(self.on_table_cell_clicked)
@@ -332,6 +354,8 @@ class TrajectoryControlPanel(QGroupBox):
             self.x_slider.value(),
             self.y_slider.value(),
             self.z_slider.value(),
+            self.roll_slider.value(),
+            self.pitch_slider.value(),
             self.yaw_slider.value(),
         )
 
@@ -351,8 +375,8 @@ class TrajectoryControlPanel(QGroupBox):
             x=self.x_slider.value(),
             y=self.y_slider.value(),
             z=self.z_slider.value(),
-            roll=0.0,
-            pitch=0.0,
+            roll=self.roll_slider.value(),
+            pitch=self.pitch_slider.value(),
             yaw=self.yaw_slider.value(),
         )
 
@@ -371,6 +395,8 @@ class TrajectoryControlPanel(QGroupBox):
             self.x_slider.set_value(frame.x)
             self.y_slider.set_value(frame.y)
             self.z_slider.set_value(frame.z)
+            self.roll_slider.set_value(frame.roll)
+            self.pitch_slider.set_value(frame.pitch)
             self.yaw_slider.set_value(frame.yaw)
 
             self.phase_box.setCurrentText(frame.phase)
@@ -391,7 +417,8 @@ class TrajectoryControlPanel(QGroupBox):
         self.set_position_values(x=x, z=z, emit_pose_changed=emit_pose_changed)
 
     def set_position_values(
-        self, x=None, y=None, z=None, yaw=None, emit_pose_changed=True
+        self, x=None, y=None, z=None, roll=None, pitch=None, yaw=None,
+        emit_pose_changed=True,
     ):
         """
         Set target position controls, optionally preserving untouched axes.
@@ -406,6 +433,10 @@ class TrajectoryControlPanel(QGroupBox):
                 self.y_slider.set_value(y)
             if z is not None:
                 self.z_slider.set_value(z)
+            if roll is not None:
+                self.roll_slider.set_value(roll)
+            if pitch is not None:
+                self.pitch_slider.set_value(pitch)
             if yaw is not None:
                 self.yaw_slider.set_value(yaw)
         finally:
@@ -429,6 +460,8 @@ class TrajectoryControlPanel(QGroupBox):
                 f"{frame.x:.2f}",
                 f"{frame.y:.2f}",
                 f"{frame.z:.2f}",
+                f"{frame.roll:.2f}",
+                f"{frame.pitch:.2f}",
                 f"{frame.yaw:.2f}",
             ]
 
