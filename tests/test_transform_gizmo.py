@@ -73,6 +73,25 @@ class TransformGizmoTests(unittest.TestCase):
                 expected = np.array([axis == "x", axis == "y", axis == "z"])
                 np.testing.assert_array_equal(changed, expected)
 
+    def test_drag_shows_only_the_selected_handle_until_release(self):
+        gizmo = TransformGizmo((0.0, 0.0, 0.0))
+        self.assertEqual(
+            gizmo.visible_handles(),
+            (True, ("x", "y", "z"), ("x", "y", "z")),
+        )
+
+        endpoint = project_isometric(gizmo.arrow_length, 0.0, 0.0)
+        self.assertTrue(
+            gizmo.begin_drag(*endpoint, project_isometric, unused_ray)
+        )
+        self.assertEqual(gizmo.visible_handles(), (False, ("x",), ()))
+
+        gizmo.end_drag()
+        self.assertEqual(
+            gizmo.visible_handles(),
+            (True, ("x", "y", "z"), ("x", "y", "z")),
+        )
+
     def test_rotation_ring_constrains_quaternion_axis(self):
         camera_setups = {
             "x": (
@@ -105,10 +124,18 @@ class TransformGizmoTests(unittest.TestCase):
                 gizmo = TransformGizmo((0.0, 0.0, 0.0))
                 self.assertTrue(gizmo.begin_drag(*start, project, ray))
                 self.assertIn("ROTATE", gizmo.state.name)
+                self.assertEqual(
+                    gizmo.visible_handles(), (False, (), (axis,))
+                )
                 _, quaternion = gizmo.drag(*end, project, ray)
                 other_vector_parts = np.delete(quaternion[1:], quaternion_index - 1)
                 np.testing.assert_allclose(other_vector_parts, 0.0, atol=1e-7)
                 self.assertAlmostEqual(abs(quaternion[quaternion_index]), math.sqrt(0.5), places=5)
+                gizmo.end_drag()
+                self.assertEqual(
+                    gizmo.visible_handles(),
+                    (True, ("x", "y", "z"), ("x", "y", "z")),
+                )
 
 
 if __name__ == "__main__":

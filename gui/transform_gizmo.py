@@ -116,9 +116,9 @@ class TransformGizmo:
         self.position = np.asarray(position, dtype=float)
         self.quaternion = normalize_quaternion(quaternion)
         self.coordinate_mode = "world"
-        self.arrow_length = 0.28
+        self.arrow_length = 0.2
         self.sphere_radius = 0.035
-        self.ring_radius = 0.20
+        self.ring_radius = 0.15
         self.pick_tolerance_pixels = 7.0
         self.state = GizmoInteractionState.NONE
         self._drag_axis = None
@@ -193,6 +193,17 @@ class TransformGizmo:
             | set(DRAG_TRANSLATE.values())
             | set(DRAG_ROTATE.values())
         )
+
+    def visible_handles(self):
+        """Return the center, translation axes, and rotation axes to draw."""
+        all_axes = tuple(AXES)
+        if not self.is_dragging:
+            return True, all_axes, all_axes
+        if self.state == GizmoInteractionState.DRAG_TRANSLATE_FREE:
+            return True, (), ()
+        if self.state in DRAG_TRANSLATE.values():
+            return False, (self._drag_axis,), ()
+        return False, (), (self._drag_axis,)
 
     def begin_drag(self, sx, sy, project, screen_ray):
         hover_state, axis = self.pick(sx, sy, project)

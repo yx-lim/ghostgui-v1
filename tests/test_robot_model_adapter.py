@@ -18,6 +18,7 @@ from gui.viewer_3d import RobotCanvas3D
 from gui.collision_checker import CollisionAwareIKSolver, CollisionChecker
 from gui.model_assets import resolve_mesh_path, validate_model_assets
 from gui.robot_model_registry import ROBOT_MODELS
+from gui.transform_gizmo import GizmoInteractionState
 
 
 class RobotModelAdapterTests(unittest.TestCase):
@@ -113,6 +114,23 @@ class RobotModelAdapterTests(unittest.TestCase):
             self.assertEqual(canvas.preview_alpha, 1.0)
             canvas.set_preview_alpha(0.0)
             self.assertEqual(canvas.preview_alpha, 0.1)
+        finally:
+            canvas.close()
+
+    def test_gizmo_highlight_applies_only_while_hovered(self):
+        canvas = RobotCanvas3D()
+        try:
+            base_color = (0.9, 0.1, 0.1)
+            canvas.gizmo.state = GizmoInteractionState.HOVER_TRANSLATE_X
+            self.assertEqual(
+                canvas._gizmo_color("x", "TRANSLATE", base_color),
+                (1.0, 0.9, 0.15),
+            )
+            canvas.gizmo.state = GizmoInteractionState.DRAG_TRANSLATE_X
+            self.assertEqual(
+                canvas._gizmo_color("x", "TRANSLATE", base_color),
+                base_color,
+            )
         finally:
             canvas.close()
 

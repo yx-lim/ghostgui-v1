@@ -594,19 +594,23 @@ class RobotCanvas3D(QOpenGLWidget):
 
     def draw_transform_gizmo(self):
         origin = self.gizmo.position
+        show_sphere, translation_axes, rotation_axes = (
+            self.gizmo.visible_handles()
+        )
         colors = {
             "x": (0.9, 0.1, 0.1),
             "y": (0.1, 0.8, 0.2),
             "z": (0.2, 0.45, 1.0),
         }
         GL.glDisable(GL.GL_DEPTH_TEST)
-        sphere_active = self.gizmo.state in (
-            GizmoInteractionState.HOVER_TRANSLATE_FREE,
-            GizmoInteractionState.DRAG_TRANSLATE_FREE,
+        sphere_hovered = (
+            self.gizmo.state == GizmoInteractionState.HOVER_TRANSLATE_FREE
         )
-        sphere_color = (1.0, 0.9, 0.15) if sphere_active else (0.95, 0.75, 0.2)
+        sphere_color = (
+            (1.0, 0.9, 0.15) if sphere_hovered else (0.95, 0.75, 0.2)
+        )
         GL.glColor3f(*sphere_color)
-        if self._quadric is not None:
+        if show_sphere and self._quadric is not None:
             GL.glPushMatrix()
             GL.glTranslatef(*map(float, origin))
             GLU.gluSphere(self._quadric, self.gizmo.sphere_radius, 16, 10)
@@ -617,6 +621,8 @@ class RobotCanvas3D(QOpenGLWidget):
         for axis, delta in (("x", (self.gizmo.arrow_length, 0.0, 0.0)),
                             ("y", (0.0, self.gizmo.arrow_length, 0.0)),
                             ("z", (0.0, 0.0, self.gizmo.arrow_length))):
+            if axis not in translation_axes:
+                continue
             GL.glColor3f(*self._gizmo_color(axis, "TRANSLATE", colors[axis]))
             axis_start = np.asarray(origin) + np.asarray(delta) / self.gizmo.arrow_length * (
                 self.gizmo.sphere_radius * 1.25
@@ -631,12 +637,14 @@ class RobotCanvas3D(QOpenGLWidget):
         for axis, delta in (("x", (self.gizmo.arrow_length, 0.0, 0.0)),
                             ("y", (0.0, self.gizmo.arrow_length, 0.0)),
                             ("z", (0.0, 0.0, self.gizmo.arrow_length))):
+            if axis not in translation_axes:
+                continue
             GL.glColor3f(*self._gizmo_color(axis, "TRANSLATE", colors[axis]))
             GL.glVertex3f(*(origin[i] + delta[i] for i in range(3)))
         GL.glEnd()
 
-        GL.glLineWidth(2.5)
-        for axis in ("x", "y", "z"):
+        GL.glLineWidth(3.6)
+        for axis in rotation_axes:
             GL.glColor3f(*self._gizmo_color(axis, "ROTATE", colors[axis]))
             GL.glBegin(GL.GL_LINE_LOOP)
             for point in self.gizmo.ring_points(axis):
@@ -646,7 +654,11 @@ class RobotCanvas3D(QOpenGLWidget):
 
     def _gizmo_color(self, axis, operation, base_color):
         state_name = self.gizmo.state.name
-        if operation in state_name and state_name.endswith(axis.upper()):
+        if (
+            state_name.startswith("HOVER_")
+            and operation in state_name
+            and state_name.endswith(axis.upper())
+        ):
             return (1.0, 0.9, 0.15)
         return base_color
 
