@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import csv
+from pathlib import Path
+
 import numpy as np
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -9,6 +12,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -230,6 +234,15 @@ class RobotViewer3D(QWidget):
         self.reset_button.clicked.connect(self.reset_robot_pose)
         panel.addWidget(self.reset_button)
 
+        pose_file_row = QHBoxLayout()
+        self.load_qpos_button = QPushButton("Load qpos CSV")
+        self.save_qpos_button = QPushButton("Save qpos CSV")
+        self.load_qpos_button.clicked.connect(self.choose_qpos_csv)
+        self.save_qpos_button.clicked.connect(self.choose_qpos_save_path)
+        pose_file_row.addWidget(self.load_qpos_button)
+        pose_file_row.addWidget(self.save_qpos_button)
+        panel.addLayout(pose_file_row)
+
         target_group = QGroupBox("End-effector transform gizmo")
         target_layout = QFormLayout(target_group)
         self.target_box = QComboBox()
@@ -355,6 +368,8 @@ class RobotViewer3D(QWidget):
 
         enabled = self.robot_state is not None
         self.reset_button.setEnabled(enabled)
+        self.load_qpos_button.setEnabled(enabled)
+        self.save_qpos_button.setEnabled(enabled)
         target_group.setEnabled(enabled)
         trajectory_group.setEnabled(enabled)
         preview_group.setEnabled(enabled)
@@ -904,6 +919,80 @@ class RobotViewer3D(QWidget):
             self.target_pose_drag_finished.emit(
                 *map(float, self.last_valid_target_position)
             )
+
+    def choose_qpos_csv(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load robot qpos",
+            str(Path.cwd()),
+            "CSV files (*.csv);;All files (*)",
+        )
+        if path:
+            try:
+                self.load_qpos_csv(path)
+            except (OSError, ValueError) as exc:
+                self.status_label.setText(f"Could not load qpos CSV: {exc}")
+
+    def choose_qpos_save_path(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save robot qpos",
+            str(Path.cwd() / "updated_qpos.csv"),
+            "CSV files (*.csv);;All files (*)",
+        )
+        if path:
+            try:
+                self.save_qpos_csv(path)
+            except OSError as exc:
+                self.status_label.setText(f"Could not save qpos CSV: {exc}")
+
+    def load_qpos_csv(self, csv_path):
+        """Load one headerless MuJoCo qpos row into the active keyframe."""
+        path = Path(csv_path).expanduser().resolve()
+        with path.open("r", newline="") as handle:
+            rows = [
+                row
+                for row in csv.reader(handle)
+                if any(cell.strip() for cell in row)
+            ]
+        if not rows:
+            raise ValueError("the file is empty")
+        try:
+            qpos = np.asarray([float(cell.strip()) for cell in rows[0]], dtype=float)
+        except ValueError as exc:
+            raise ValueError(
+                "expected a headerless row containing only qpos numbers"
+            ) from exc
+        expected = int(self.robot_model.mj_model.nq)
+        if qpos.shape != (expected,):
+            raise ValueError(
+                f"expected {expected} qpos values for this model, found {qpos.size}"
+            )
+
+        self.pause_playback()
+        self.canvas.cancel_transform_drag()
+        self.set_robot_state_for_current_time(qpos)
+        self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
+        self.status_label.setText(
+            f"Loaded {expected}-value qpos from {path.name} at "
+            f"t={self.current_time:.2f} s"
+        )
+
+    def save_qpos_csv(self, csv_path):
+        """Save the committed active keyframe as one headerless qpos row."""
+        path = Path(csv_path).expanduser()
+        if path.suffix.lower() != ".csv":
+            path = path.with_suffix(".csv")
+        path = path.resolve()
+        with path.open("w", newline="") as handle:
+            csv.writer(handle).writerow(
+                f"{value:.18e}" for value in self.committed_state.get_qpos()
+            )
+        preview_note = (
+            "; unaccepted preview was not saved" if self.preview_active else ""
+        )
+        self.status_label.setText(f"Saved committed qpos to {path}{preview_note}")
+        return path
 
     def _refresh_timeline_trajectory(self):
         if not self.state_timeline:

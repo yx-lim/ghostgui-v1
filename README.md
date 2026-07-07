@@ -71,6 +71,23 @@ qpos keyframe, so edits at `0.2s` do not modify `0s`. Selecting G1 `pelvis` or
 Go2 `base` drives the model's floating root joint and is still checked for collisions.
 The existing 2D editors and separate **3D MuJoCo** CSV player remain available.
 
+To edit a saved single-pose qpos file, open the live **3D View** tab and click
+**Load qpos CSV**. The file must contain one headerless row with exactly the
+active model's `nq` values (36 for G1), such as `crawl_home_qpos_t0.5.csv`.
+Move the robot with the transform gizmo or joint sliders, click **Accept
+Preview**, then click **Save qpos CSV** and choose a new filename. Saving writes
+the committed pose as another headerless qpos row; an unaccepted orange preview
+is deliberately not saved.
+
+Open a saved G1 pose directly in the standalone MuJoCo viewer with:
+
+```bash
+python3 scripts/view_g1_mujoco.py --csv updated_qpos.csv --model models/g1_29dof.xml
+```
+
+The player accepts both these headerless qpos pose files and the existing
+headered trajectory CSV format.
+
 The 3D sidebar's **IK controls** tab provides weighted damped-least-squares
 settings, independent per-joint influence sliders, and model-aware presets.
 Influence `0` locks a joint for limb IK, `1` is normal, and values above `1`

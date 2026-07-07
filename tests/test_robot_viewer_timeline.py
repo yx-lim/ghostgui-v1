@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+import tempfile
 import unittest
 
 import numpy as np
@@ -258,6 +260,34 @@ class RobotViewerTimelineTests(unittest.TestCase):
         np.testing.assert_allclose(
             self.window.robot_model_3d.mj_model.mat_rgba, before
         )
+
+    def test_load_edit_accept_and_save_headerless_qpos_csv(self):
+        source = Path("crawl_home_qpos_t0.5.csv").resolve()
+        expected = np.loadtxt(source, delimiter=",")
+        self.viewer.load_qpos_csv(source)
+        np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), expected)
+        np.testing.assert_allclose(self.viewer.get_current_keyframe(), expected)
+
+        joint_name = self.viewer.preview_state.get_joint_names()[-1]
+        self.viewer._joint_changed(
+            joint_name,
+            self.viewer.preview_state.get_joint_value(joint_name) + 0.02,
+        )
+        self.viewer.accept_preview()
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = self.viewer.save_qpos_csv(Path(directory) / "updated")
+            self.assertEqual(output.suffix, ".csv")
+            saved = np.loadtxt(output, delimiter=",")
+        np.testing.assert_allclose(saved, self.viewer.committed_state.get_qpos())
+        self.assertFalse(np.allclose(saved, expected))
+
+    def test_load_qpos_rejects_wrong_value_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "bad.csv"
+            source.write_text("1,2,3\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "expected 36 qpos values"):
+                self.viewer.load_qpos_csv(source)
 
 
 if __name__ == "__main__":

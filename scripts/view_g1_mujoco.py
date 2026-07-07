@@ -39,6 +39,7 @@ BASE_COLUMNS = [
     "base_qy",
     "base_qz",
 ]
+RAW_QPOS_KEY = "__raw_qpos__"
 
 
 def read_stdin_commands(command_queue):
@@ -53,6 +54,29 @@ def load_trajectory_csv(csv_path):
 
     if not path.exists():
         raise FileNotFoundError(path)
+
+    with open(path, "r", newline="") as f:
+        raw_rows = [
+            row
+            for row in csv.reader(f)
+            if any(cell.strip() for cell in row)
+        ]
+
+    # Pose files saved by GhostGUI's live 3D editor are headerless qpos rows.
+    # Keep supporting the existing named trajectory format as the fallback.
+    if raw_rows:
+        try:
+            numeric_rows = [
+                [float(cell.strip()) for cell in row]
+                for row in raw_rows
+            ]
+        except ValueError:
+            numeric_rows = None
+        if numeric_rows is not None:
+            return path, [
+                {"time": float(index), RAW_QPOS_KEY: qpos}
+                for index, qpos in enumerate(numeric_rows)
+            ]
 
     with open(path, "r", newline="") as f:
         reader = csv.DictReader(f)
@@ -106,6 +130,13 @@ class TrajectoryPlayer:
 
     def load_csv(self, csv_path):
         path, rows = load_trajectory_csv(csv_path)
+        for row in rows:
+            raw_qpos = row.get(RAW_QPOS_KEY)
+            if raw_qpos is not None and len(raw_qpos) != self.model.nq:
+                raise ValueError(
+                    f"expected {self.model.nq} qpos values for this model, "
+                    f"found {len(raw_qpos)}"
+                )
         self.csv_path = path
         self.rows = rows
         self.index = 0
@@ -127,6 +158,11 @@ class TrajectoryPlayer:
             return
 
         row = self.rows[self.index]
+
+        if RAW_QPOS_KEY in row:
+            self.data.qpos[:] = row[RAW_QPOS_KEY]
+            mujoco.mj_forward(self.model, self.data)
+            return
 
         free_joints = [
             joint_id for joint_id in range(self.model.njnt)
