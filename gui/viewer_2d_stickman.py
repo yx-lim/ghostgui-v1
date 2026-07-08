@@ -478,12 +478,14 @@ class Stickman2DViewer(QGraphicsView):
         self.dragging_target = False
         self._skeleton_targets = {}
         self._last_projected_positions = {}
+        self._last_editable_projected_points = {}
 
     def set_adapter(self, adapter):
         self.adapter = adapter
         self.skeleton_state = adapter.create_state() if adapter is not None else None
         self.pose.reset()
         self._skeleton_targets = {}
+        self._last_editable_projected_points = {}
 
     # ============================================================
     # Coordinate transforms
@@ -732,6 +734,24 @@ class Stickman2DViewer(QGraphicsView):
                     max_iterations=40,
                 )
 
+    def _editable_projected_points(self, projected):
+        """
+        Return editable logical-frame points keyed by the GUI frame name.
+
+        The displayed label uses the original MuJoCo body/site name so the 2D
+        skeleton reflects the source XML/URDF object instead of the friendly
+        logical alias used by the trajectory editor.
+        """
+        editable = {}
+        if self.adapter is None:
+            return editable
+        frame_bindings = self.adapter.logical_frame_bindings.items()
+        for logical_name, (kind, object_name) in frame_bindings:
+            point = projected.get(object_name)
+            if point is not None:
+                editable[logical_name] = (kind, object_name, point)
+        return editable
+
     def draw_generated_skeleton(self):
         state = self.skeleton_state
         positions = {}
@@ -784,6 +804,8 @@ class Stickman2DViewer(QGraphicsView):
                 edges.append((parent, name))
 
         self._last_projected_positions = dict(projected)
+        editable_points = self._editable_projected_points(projected)
+        self._last_editable_projected_points = dict(editable_points)
 
         pen_body = QPen(Qt.GlobalColor.black, 4)
         pen_joint = QPen(Qt.GlobalColor.black, 2)
@@ -792,14 +814,26 @@ class Stickman2DViewer(QGraphicsView):
             ax, ay = self.world_to_screen(*projected[parent])
             bx, by = self.world_to_screen(*projected[child])
             self.scene.addLine(ax, ay, bx, by, pen_body)
-        important = set(sum(([a, b] for a, b in edges), []))
-        for name in important:
-            x, y = self.world_to_screen(*projected[name])
-            radius = 5 if name != self.adapter.root_body else 7
-            self.scene.addEllipse(
+
+        drawn_bindings = set()
+        for logical_name, (_, object_name, point) in editable_points.items():
+            if object_name in drawn_bindings:
+                continue
+            drawn_bindings.add(object_name)
+            x, y = self.world_to_screen(*point)
+            radius = 5 if object_name != self.adapter.root_body else 7
+            handle = self.scene.addEllipse(
                 x - radius, y - radius, 2 * radius, 2 * radius,
                 pen_joint, brush_joint,
             )
+            handle.setData(0, "editable_handle")
+            handle.setData(1, logical_name)
+            handle.setData(2, object_name)
+            label = self.scene.addText(object_name)
+            label.setData(0, "editable_label")
+            label.setData(1, logical_name)
+            label.setData(2, object_name)
+            label.setPos(x + radius + 4, y - radius - 12)
 
     def draw_trajectory(self, trajectory, show_lines=True):
         """

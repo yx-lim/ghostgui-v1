@@ -69,6 +69,36 @@ class RobotModelAdapterTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_generated_skeleton_marks_only_editable_model_objects(self):
+        window = RobotGuiMainWindow("go2")
+        try:
+            viewer = window.viewer_2d_stickman
+            viewer.update_scene(window.trajectory, window.controls.current_frame())
+            handle_names = {
+                item.data(2)
+                for item in viewer.scene.items()
+                if item.data(0) == "editable_handle"
+            }
+            label_texts = {
+                item.toPlainText()
+                for item in viewer.scene.items()
+                if item.data(0) == "editable_label"
+            }
+
+            self.assertEqual(
+                handle_names,
+                {"base", "FL_foot", "FR_foot", "RL_foot", "RR_foot"},
+            )
+            self.assertTrue(handle_names <= label_texts)
+            self.assertNotIn("FL_hip", handle_names)
+            self.assertNotIn("FL_hip", label_texts)
+            self.assertEqual(
+                viewer._last_editable_projected_points["FL_foot"][1],
+                "FL_foot",
+            )
+        finally:
+            window.close()
+
     def test_go2_real_mesh_visuals_are_rendered_instead_of_collision_primitives(self):
         adapter = MuJoCoRobotAdapter("go2")
         render_ids = RobotCanvas3D.render_geom_ids(adapter.mj_model)
