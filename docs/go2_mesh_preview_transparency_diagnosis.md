@@ -1,15 +1,15 @@
 # Go2 mesh and preview transparency diagnosis
 
 G1 is registered directly to `models/g1_29dof.xml`. Its MJCF compiler points
-`meshdir` at `models/assets`, declares 35 STL mesh assets, and assigns those
+`meshdir` at `models/assets-g1`, declares 35 STL mesh assets, and assigns those
 meshes to visual group 2. `RobotModel3D` lets MuJoCo resolve those paths relative
 to the XML file, while `RobotCanvas3D` renders MuJoCo's compiled vertex/face
 arrays.
 
-Go2 was instead registered to the hand-written `models/go2/go2.xml`. That model
+Go2 was instead registered to the hand-written `models/go2.xml`. That model
 contains no mesh assets (`nmesh == 0`): its body, hips, thighs, calves, and feet
 are boxes, cylinders, capsules, and spheres. The repository does contain the
-real ROS description and seven COLLADA files under `models/go2_assets`, and all
+real ROS description and seven COLLADA files under `models/assets-go2`, and all
 17 `package://go2_description/dae/...` references resolve to those files. They
 were never reached by the registry. The older generic URDF conversion also
 removed every visual block because MuJoCo rejects the URDF's repeated material

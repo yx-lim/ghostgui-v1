@@ -65,7 +65,7 @@ def resolve_mesh_path(mesh_filename, model_dir, package_map=None):
         path = Path(reference)
         candidates.append(path if path.is_absolute() else model_dir / path)
 
-    # Common vendored layouts: models/go2_assets/base.dae or assets/base.stl.
+    # Common vendored layouts: models/assets-go2/base.dae or assets/base.stl.
     basename = Path(reference).name
     candidates.extend((
         model_dir / basename,

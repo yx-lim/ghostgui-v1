@@ -29,7 +29,7 @@ fallback, instead of selecting a robot-specific drawing class.
 
 The supplied Go2 source is a URDF whose visual blocks contain repeated material
 elements and `package://` DAE meshes. MuJoCo cannot compile that file directly.
-Go2 is therefore prepared at build time as `models/go2/go2.xml`, preserving its
+Go2 is therefore prepared at build time as `models/go2.xml`, preserving its
 12 joints, collision model, logical foot sites, colors, and lit scene without
 runtime conversion. User-imported URDFs use a versioned persistent conversion
 cache instead.

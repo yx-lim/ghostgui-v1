@@ -2,7 +2,7 @@
 
   <!-- Compiled from mjlab g1_constants.xml. -->
 
-  <compiler angle="radian" meshdir="assets" />
+  <compiler angle="radian" meshdir="assets-g1" />
   <size nkey="1" />
   <visual>
     <global azimuth="135" elevation="-25" offwidth="1920" offheight="1080" />

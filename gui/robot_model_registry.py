@@ -60,8 +60,8 @@ ROBOT_MODELS = {
         },
         package_map={
             # The vendored ROS package stores its DAE files in a flattened
-            # directory instead of go2_description/dae.
-            "go2_description": PROJECT_ROOT / "models" / "go2_assets",
+            # model-specific asset directory instead of go2_description/dae.
+            "go2_description": PROJECT_ROOT / "models" / "assets-go2",
         },
         home_joints={
             **{f"{leg}_thigh_joint": 0.8 for leg in ("FL", "FR", "RL", "RR")},
