@@ -69,6 +69,35 @@ class RobotModelAdapterTests(unittest.TestCase):
         self.assertEqual(adapter.model_path.name, "go2_description.urdf")
         self.assertGreater(adapter.mj_model.nmesh, 0)
 
+    def test_home_pose_lowest_robot_point_is_grounded(self):
+        for key in ("g1", "go2"):
+            with self.subTest(model=key):
+                adapter = MuJoCoRobotAdapter(key)
+                lowest = adapter._lowest_robot_geom_z(adapter.mj_data)
+                self.assertAlmostEqual(lowest, 0.002, places=6)
+
+    def test_generic_free_root_home_pose_is_grounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "low.xml"
+            source.write_text(
+                """
+<mujoco model="low">
+  <worldbody>
+    <body name="base">
+      <freejoint name="floating_base"/>
+      <geom type="sphere" size="0.05" pos="0 0 -0.1"/>
+    </body>
+  </worldbody>
+</mujoco>
+""".strip()
+            )
+
+            adapter = MuJoCoRobotAdapter(model=None, model_path=source)
+
+            lowest = adapter._lowest_robot_geom_z(adapter.mj_data)
+            self.assertAlmostEqual(lowest, 0.002, places=6)
+
     def test_go2_window_uses_go2_controls_and_skeleton(self):
         window = RobotGuiMainWindow("go2")
         try:

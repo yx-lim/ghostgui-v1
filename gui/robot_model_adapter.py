@@ -17,6 +17,7 @@ from .model_assets import prepare_urdf_visual_meshes, resolve_mesh_path
 
 
 MODEL_CACHE_VERSION = 3
+HOME_GROUND_CLEARANCE = 0.002
 
 
 class MuJoCoRobotAdapter(RobotModel3D):
@@ -46,8 +47,9 @@ class MuJoCoRobotAdapter(RobotModel3D):
         super().__init__(self.runtime_model_path)
         # Public paths describe the selected source, not an implementation cache.
         self.model_path = Path(model_path or self.info.model_path).resolve()
-        self.default_qpos = self.home_qpos
         self._apply_registered_home()
+        self._ground_home_qpos()
+        self.default_qpos = self.home_qpos.copy()
         self.mj_data = mujoco.MjData(self.mj_model)
         self.mj_data.qpos[:] = self.home_qpos
         mujoco.mj_forward(self.mj_model, self.mj_data)
@@ -309,6 +311,77 @@ class MuJoCoRobotAdapter(RobotModel3D):
             joint = self.joints.get(name)
             if joint is not None:
                 self.home_qpos[joint.qpos_address] = value
+
+    def _ground_home_qpos(self, clearance=HOME_GROUND_CLEARANCE):
+        if not self.free_joints_by_body:
+            return
+        data = mujoco.MjData(self.mj_model)
+        data.qpos[:] = self.home_qpos
+        mujoco.mj_forward(self.mj_model, data)
+        lowest_z = self._lowest_robot_geom_z(data)
+        if lowest_z is None:
+            return
+        delta = float(clearance) - lowest_z
+        if abs(delta) < 1e-9:
+            return
+        for free_joint in self.free_joints_by_body.values():
+            self.home_qpos[free_joint.qpos_address + 2] += delta
+
+    def _lowest_robot_geom_z(self, data):
+        lowest = None
+        for geom_id in range(self.mj_model.ngeom):
+            if self._is_non_robot_ground_geom(geom_id):
+                continue
+            geom_z = self._geom_lowest_z(data, geom_id)
+            if geom_z is None:
+                continue
+            lowest = geom_z if lowest is None else min(lowest, geom_z)
+        return lowest
+
+    def _is_non_robot_ground_geom(self, geom_id):
+        geom_type = int(self.mj_model.geom_type[geom_id])
+        if geom_type in {
+            int(mujoco.mjtGeom.mjGEOM_PLANE),
+            int(mujoco.mjtGeom.mjGEOM_HFIELD),
+        }:
+            return True
+        if int(self.mj_model.geom_bodyid[geom_id]) == 0:
+            return True
+        name = mujoco.mj_id2name(
+            self.mj_model, mujoco.mjtObj.mjOBJ_GEOM, geom_id
+        )
+        return name == "ground"
+
+    def _geom_lowest_z(self, data, geom_id):
+        geom_type = int(self.mj_model.geom_type[geom_id])
+        center_z = float(data.geom_xpos[geom_id][2])
+        z_axis = np.asarray(data.geom_xmat[geom_id], dtype=float).reshape(3, 3)[2]
+        size = np.asarray(self.mj_model.geom_size[geom_id], dtype=float)
+
+        if geom_type == int(mujoco.mjtGeom.mjGEOM_SPHERE):
+            return center_z - float(size[0])
+        if geom_type == int(mujoco.mjtGeom.mjGEOM_CAPSULE):
+            extent = float(size[0]) + abs(float(z_axis[2])) * float(size[1])
+            return center_z - extent
+        if geom_type == int(mujoco.mjtGeom.mjGEOM_CYLINDER):
+            radial = float(size[0]) * float(np.linalg.norm(z_axis[:2]))
+            axial = float(size[1]) * abs(float(z_axis[2]))
+            return center_z - radial - axial
+        if geom_type == int(mujoco.mjtGeom.mjGEOM_BOX):
+            return center_z - float(np.dot(np.abs(z_axis), size[:3]))
+        if geom_type == int(mujoco.mjtGeom.mjGEOM_ELLIPSOID):
+            return center_z - float(np.linalg.norm(z_axis * size[:3]))
+        if geom_type == int(mujoco.mjtGeom.mjGEOM_MESH):
+            mesh_id = int(self.mj_model.geom_dataid[geom_id])
+            if mesh_id < 0:
+                return center_z - float(self.mj_model.geom_rbound[geom_id])
+            start = int(self.mj_model.mesh_vertadr[mesh_id])
+            count = int(self.mj_model.mesh_vertnum[mesh_id])
+            vertices = self.mj_model.mesh_vert[start:start + count]
+            if len(vertices) == 0:
+                return None
+            return center_z + float(np.min(vertices @ z_axis))
+        return center_z - float(self.mj_model.geom_rbound[geom_id])
 
     def _name_variants(self, name):
         plain = self.plain_name(name)
