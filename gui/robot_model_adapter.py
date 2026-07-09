@@ -30,7 +30,10 @@ class MuJoCoRobotAdapter(RobotModel3D):
                 display_name=path.stem,
                 model_type="generic",
                 model_path=path,
-                root_body_candidates=("base", "base_link", "root", "world"),
+                root_body_candidates=(
+                    "base", "base_link", "trunk", "pelvis", "link00",
+                    "root", "world",
+                ),
             )
         self.info = get_model_info(model)
         self.model_name = self.info.display_name
@@ -110,16 +113,8 @@ class MuJoCoRobotAdapter(RobotModel3D):
         compiler_extension.set("discardvisual", "false")
         # MuJoCo fixes a plain URDF root to the world. Add an explicit floating
         # parent so root editing has the same well-defined semantics as MJCF.
-        child_links = {
-            child.attrib.get("link")
-            for joint in root.findall("joint")
-            for child in joint.findall("child")
-        }
-        root_link = next(
-            (link.attrib.get("name") for link in root.findall("link")
-             if link.attrib.get("name") not in child_links),
-            None,
-        )
+        root_link = self._urdf_root_link(root)
+        root_link = self._collapse_virtual_world_root(root, root_link)
         if root_link:
             world_link = ET.Element("link", {"name": "ghostgui_world"})
             floating = ET.Element("joint", {
@@ -152,6 +147,46 @@ class MuJoCoRobotAdapter(RobotModel3D):
             "warning": self.load_warning,
         }, indent=2), encoding="utf-8")
         return runtime_path
+
+    def _urdf_root_link(self, root):
+        child_links = {
+            child.attrib.get("link")
+            for joint in root.findall("joint")
+            for child in joint.findall("child")
+        }
+        return next(
+            (link.attrib.get("name") for link in root.findall("link")
+             if link.attrib.get("name") not in child_links),
+            None,
+        )
+
+    def _collapse_virtual_world_root(self, root, root_link):
+        if root_link not in {"world", "map", "odom"}:
+            return root_link
+        root_link_element = root.find(f"./link[@name='{root_link}']")
+        if root_link_element is None:
+            return root_link
+        physical_tags = {"inertial", "visual", "collision"}
+        if any(child.tag in physical_tags for child in root_link_element):
+            return root_link
+
+        fixed_children = []
+        for joint in root.findall("joint"):
+            if joint.attrib.get("type") != "fixed":
+                continue
+            parent = joint.find("parent")
+            child = joint.find("child")
+            if parent is None or child is None:
+                continue
+            if parent.attrib.get("link") == root_link and child.attrib.get("link"):
+                fixed_children.append((joint, child.attrib["link"]))
+        if len(fixed_children) != 1:
+            return root_link
+
+        fixed_joint, child_link = fixed_children[0]
+        root.remove(root_link_element)
+        root.remove(fixed_joint)
+        return child_link
 
     def _urdf_cache_key(self, path, root):
         digest = hashlib.sha256()
@@ -302,6 +337,46 @@ class MuJoCoRobotAdapter(RobotModel3D):
                 bindings[logical_name] = ("site", site)
             elif body is not None:
                 bindings[logical_name] = ("body", body)
+        return bindings or self._infer_logical_frames()
+
+    def _unique_logical_name(self, name, existing):
+        base = self.plain_name(name).replace(" ", "_") or "frame"
+        candidate = base
+        index = 2
+        while candidate in existing:
+            candidate = f"{base}_{index}"
+            index += 1
+        return candidate
+
+    def _infer_logical_frames(self):
+        bindings = {}
+        ignored = tuple(token.lower() for token in self.info.ignored_body_tokens)
+
+        def include(name):
+            return name and name != "world" and not any(
+                token in name.lower() for token in ignored
+            )
+
+        if include(self.root_body):
+            logical = self._unique_logical_name(self.root_body, bindings)
+            bindings[logical] = ("body", self.root_body)
+
+        for site_name in self.site_names:
+            if include(site_name):
+                logical = self._unique_logical_name(site_name, bindings)
+                bindings[logical] = ("site", site_name)
+
+        if len(bindings) > (1 if self.root_body else 0):
+            return bindings
+
+        parent_ids = set(int(parent) for parent in self.mj_model.body_parentid)
+        for body_id in range(1, self.mj_model.nbody):
+            name = mujoco.mj_id2name(
+                self.mj_model, mujoco.mjtObj.mjOBJ_BODY, body_id
+            )
+            if body_id not in parent_ids and include(name):
+                logical = self._unique_logical_name(name, bindings)
+                bindings[logical] = ("body", name)
         return bindings
 
     def resolve_logical_frame(self, name):

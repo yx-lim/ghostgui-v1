@@ -12,7 +12,8 @@ Updated project flow:
     5. Backend maps robot to each target frame
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -28,6 +29,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QProgressDialog,
+    QFileDialog,
+    QMessageBox,
 )
 
 from .trajectory import Trajectory, SampledTrajectory, quat_to_rpy
@@ -41,6 +44,11 @@ from .model_reference import MujocoReferenceFrames
 from .collapsible_sidebar import CollapsibleSidebar
 from .robot_model_adapter import MuJoCoRobotAdapter
 from .robot_model_registry import ROBOT_MODELS
+from .model_importer import (
+    default_model_library_root,
+    discover_imported_models,
+    import_robot_model,
+)
 
 
 @dataclass
@@ -58,13 +66,14 @@ class ModelLoadThread(QThread):
     loaded = Signal(str, object)
     failed = Signal(str, str)
 
-    def __init__(self, model_key, parent=None):
+    def __init__(self, model_key, model_info=None, parent=None):
         super().__init__(parent)
         self.model_key = model_key
+        self.model_info = model_info
 
     def run(self):
         try:
-            adapter = MuJoCoRobotAdapter(self.model_key)
+            adapter = MuJoCoRobotAdapter(self.model_info or self.model_key)
         except Exception as exc:
             self.failed.emit(self.model_key, str(exc))
             return
@@ -85,14 +94,41 @@ class RobotGuiMainWindow(QMainWindow):
 
         # One immutable MuJoCo model is shared by FK, IK, and rendering. Each
         # subsystem owns its own MjData so live UI and batch solves stay isolated.
+        self.model_library_root = default_model_library_root()
+        self.model_registry = dict(ROBOT_MODELS)
+        for info in discover_imported_models(self.model_library_root).values():
+            self.register_model_info(info)
+        self.import_mesh_folder = None
         self.model_key = model_key
         self.robot_model_3d = None
         self.robot_model_error = None
         try:
-            self.robot_model_3d = MuJoCoRobotAdapter(model_key)
+            self.robot_model_3d = MuJoCoRobotAdapter(
+                self.model_registry.get(model_key, model_key)
+            )
             self.robot_model_error = self.robot_model_3d.load_warning
         except Exception as exc:
             self.robot_model_error = str(exc)
+            if model_key != "g1":
+                failed_model_key = model_key
+                model_key = "g1"
+                self.model_key = model_key
+                try:
+                    self.robot_model_3d = MuJoCoRobotAdapter(
+                        self.model_registry.get(model_key, model_key)
+                    )
+                    fallback_warning = self.robot_model_3d.load_warning
+                    self.robot_model_error = (
+                        f"Could not load {failed_model_key}: {exc}\n"
+                        "Loaded Unitree G1 instead."
+                    )
+                    if fallback_warning:
+                        self.robot_model_error += f"\n{fallback_warning}"
+                except Exception as fallback_exc:
+                    self.robot_model_error = (
+                        f"Could not load {failed_model_key}: {exc}\n"
+                        f"Fallback g1 also failed: {fallback_exc}"
+                    )
         if self.robot_model_3d is not None:
             self.setWindowTitle(
                 f"Reference Frame Trajectory GUI — {self.robot_model_3d.model_name}"
@@ -114,7 +150,7 @@ class RobotGuiMainWindow(QMainWindow):
             if self.robot_model_3d else ["pelvis"]
         )
         self.controls = TrajectoryControlPanel(
-            ROBOT_MODELS, model_key=model_key, frame_names=frame_names
+            self.model_registry, model_key=model_key, frame_names=frame_names
         )
         self.viewer_2d = RobotCanvas()
         self.viewer_3d = RobotViewer3D(
@@ -195,6 +231,19 @@ class RobotGuiMainWindow(QMainWindow):
             self.left_sidebar.remember_width(sizes[0])
             self.right_sidebar.remember_width(sizes[2])
 
+    def register_model_info(self, info):
+        if info.key not in self.model_registry:
+            self.model_registry[info.key] = info
+            return info
+        key = info.key
+        index = 2
+        while key in self.model_registry:
+            key = f"{info.key}-{index}"
+            index += 1
+        info = replace(info, key=key)
+        self.model_registry[info.key] = info
+        return info
+
     # ============================================================
     # Build right status/debug panel
     # ============================================================
@@ -232,6 +281,8 @@ class RobotGuiMainWindow(QMainWindow):
 
     def connect_signals(self):
         self.controls.model_changed.connect(self.on_model_changed)
+        self.controls.open_model_clicked.connect(self.on_open_model_file)
+        self.controls.choose_mesh_folder_clicked.connect(self.on_choose_mesh_folder)
         self.controls.pose_changed.connect(self.on_pose_changed)
         self.controls.add_keyframe_clicked.connect(self.on_add_keyframe)
         self.controls.update_keyframe_clicked.connect(self.on_update_keyframe)
@@ -261,6 +312,10 @@ class RobotGuiMainWindow(QMainWindow):
         """Swap model-owned widgets while retaining the surrounding app."""
         if model_key == self.model_key:
             return
+        model_info = self.model_registry.get(model_key)
+        if model_info is None:
+            self.status_text.setText(f"Unknown robot model: {model_key}")
+            return
         cached = self.model_sessions.get(model_key)
         if cached is not None:
             self.activate_model_session(model_key, cached)
@@ -268,16 +323,16 @@ class RobotGuiMainWindow(QMainWindow):
         if model_key in self.model_loaders:
             return
         self.controls.model_box.setEnabled(False)
-        self.statusBar().showMessage(f"Loading {ROBOT_MODELS[model_key].display_name}…")
+        self.statusBar().showMessage(f"Loading {model_info.display_name}…")
         self.model_loading_dialog = QProgressDialog(
-            f"Loading {ROBOT_MODELS[model_key].display_name}…",
+            f"Loading {model_info.display_name}…",
             None, 0, 0, self,
         )
         self.model_loading_dialog.setWindowTitle("Loading robot model")
         self.model_loading_dialog.setWindowModality(Qt.WindowModality.NonModal)
         self.model_loading_dialog.setMinimumDuration(0)
         self.model_loading_dialog.show()
-        loader = ModelLoadThread(model_key, self)
+        loader = ModelLoadThread(model_key, model_info, self)
         loader.loaded.connect(self.on_model_loaded)
         loader.failed.connect(self.on_model_load_failed)
         loader.finished.connect(loader.deleteLater)
@@ -309,6 +364,64 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.model_box.blockSignals(True)
         self.controls.model_box.setCurrentIndex(index)
         self.controls.model_box.blockSignals(False)
+
+    def on_open_model_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open robot model",
+            str(Path.home()),
+            "Robot model files (*.urdf *.xml)",
+        )
+        if not path:
+            return
+        self.import_model_file(path)
+
+    def on_choose_mesh_folder(self):
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Choose Mesh Folder (.stl)",
+            str(Path.home()),
+        )
+        if not path:
+            return
+        self.import_mesh_folder = Path(path).expanduser().resolve()
+        self.status_text.append(f"Mesh folder: {self.import_mesh_folder}")
+
+    def _prompt_for_mesh_folder(self):
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Choose Mesh Folder (.stl)",
+            str(Path.home()),
+        )
+        if not path:
+            return None
+        self.import_mesh_folder = Path(path).expanduser().resolve()
+        return self.import_mesh_folder
+
+    def import_model_file(self, path):
+        mesh_roots = [self.import_mesh_folder] if self.import_mesh_folder else []
+        try:
+            try:
+                info = import_robot_model(
+                    path, self.model_library_root, mesh_roots=mesh_roots
+                )
+            except RuntimeError:
+                mesh_folder = self._prompt_for_mesh_folder()
+                if mesh_folder is None:
+                    raise
+                info = import_robot_model(
+                    path, self.model_library_root, mesh_roots=[mesh_folder]
+                )
+            info = self.register_model_info(info)
+        except Exception as exc:
+            message = f"Could not import model: {exc}"
+            self.status_text.setText(message)
+            QMessageBox.warning(self, "Import model failed", message)
+            return
+        self.status_text.append(
+            f"Imported {info.display_name} to {info.model_path}"
+        )
+        self.controls.add_model(info.key, info.display_name, select=True)
 
     def finish_model_loading_ui(self):
         self.controls.model_box.setEnabled(True)

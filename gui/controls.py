@@ -138,6 +138,8 @@ class TrajectoryControlPanel(QGroupBox):
     trajectory_lines_changed = Signal(bool)
     time_changed = Signal(float)
     model_changed = Signal(str)
+    open_model_clicked = Signal()
+    choose_mesh_folder_clicked = Signal()
 
     def __init__(self, model_registry=None, model_key="g1", frame_names=None):
         super().__init__("Reference Frame Trajectory Editor")
@@ -165,6 +167,14 @@ class TrajectoryControlPanel(QGroupBox):
                 lambda index: self.model_changed.emit(self.model_box.itemData(index))
             )
             layout.addWidget(self.model_box)
+            self.open_model_button = QPushButton("Open Model File")
+            self.open_model_button.clicked.connect(self.open_model_clicked.emit)
+            layout.addWidget(self.open_model_button)
+            self.choose_mesh_folder_button = QPushButton("Choose Mesh Folder (.stl)")
+            self.choose_mesh_folder_button.clicked.connect(
+                self.choose_mesh_folder_clicked.emit
+            )
+            layout.addWidget(self.choose_mesh_folder_button)
 
         # --------------------------------------------------------
         # Select which robot frame this target refers to
@@ -345,6 +355,16 @@ class TrajectoryControlPanel(QGroupBox):
         self.frame_box.setCurrentText(choice)
         self.frame_box.blockSignals(False)
         self.frame_name_changed.emit(choice)
+
+    def add_model(self, key, display_name, select=True):
+        if not hasattr(self, "model_box"):
+            return
+        index = self.model_box.findData(key)
+        if index < 0:
+            self.model_box.addItem(display_name, key)
+            index = self.model_box.findData(key)
+        if select and index >= 0:
+            self.model_box.setCurrentIndex(index)
 
     def emit_pose_changed(self):
         if self._suppress_pose_changed:

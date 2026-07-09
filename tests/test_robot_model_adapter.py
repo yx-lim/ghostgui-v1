@@ -1,4 +1,5 @@
 import os
+import struct
 import unittest
 import numpy as np
 import mujoco
@@ -17,8 +18,26 @@ from gui.robot_model_adapter import MuJoCoRobotAdapter
 from gui.viewer_3d import RobotCanvas3D
 from gui.collision_checker import CollisionAwareIKSolver, CollisionChecker
 from gui.model_assets import resolve_mesh_path, validate_model_assets
-from gui.robot_model_registry import ROBOT_MODELS
+from gui.model_importer import (
+    default_model_library_root,
+    discover_imported_models,
+    import_robot_model,
+)
+from gui.robot_model_registry import PROJECT_ROOT, ROBOT_MODELS
 from gui.transform_gizmo import GizmoInteractionState
+
+
+def tiny_binary_stl(name=b"part"):
+    triangles = (
+        (0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
+        (0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+        (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0),
+        (1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0),
+    )
+    stl = bytearray(struct.pack("<80sI", name, len(triangles)))
+    for triangle in triangles:
+        stl.extend(struct.pack("<12fH", *triangle, 0))
+    return stl
 
 
 class RobotModelAdapterTests(unittest.TestCase):
@@ -131,6 +150,276 @@ class RobotModelAdapterTests(unittest.TestCase):
         result = resolve_mesh_path("package://missing/dae/nope.dae", Path("/tmp"))
         self.assertIsNone(result.path)
         self.assertIn("unresolved mesh", result.error)
+
+    def test_default_import_library_is_repo_models_folder(self):
+        self.assertEqual(default_model_library_root(), PROJECT_ROOT / "models")
+
+    def test_import_urdf_copies_package_meshes_to_model_library(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = root / "go3_description"
+            source_dir = package / "urdf"
+            mesh_dir = package / "meshes"
+            source_dir.mkdir(parents=True)
+            mesh_dir.mkdir()
+            (mesh_dir / "body.stl").write_bytes(tiny_binary_stl(b"body"))
+            source = source_dir / "go3.urdf"
+            source.write_text(
+                """
+<robot name="go3">
+  <link name="base">
+    <inertial>
+      <mass value="1"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+    </inertial>
+    <visual>
+      <geometry>
+        <mesh filename="package://go3_description/meshes/body.stl"/>
+      </geometry>
+    </visual>
+  </link>
+</robot>
+""".strip()
+            )
+
+            info = import_robot_model(source, root / "models")
+            self.assertEqual(info.key, "go3")
+            self.assertEqual(info.model_path, root / "models" / "go3.urdf")
+            self.assertTrue((root / "models" / "assets-go3" / "body.stl").exists())
+            saved = info.model_path.read_text()
+            self.assertIn('filename="assets-go3/body.stl"', saved)
+
+    def test_import_urdf_can_use_chosen_mesh_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "source"
+            mesh_dir = root / "robot_parts"
+            source_dir.mkdir()
+            mesh_dir.mkdir()
+            (mesh_dir / "pelvis.STL").write_bytes(tiny_binary_stl(b"pelvis"))
+            source = source_dir / "go3.urdf"
+            source.write_text(
+                """
+<robot name="go3">
+  <link name="base">
+    <inertial>
+      <mass value="1"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+    </inertial>
+    <visual>
+      <geometry>
+        <mesh filename="meshes/pelvis.dae"/>
+      </geometry>
+    </visual>
+  </link>
+</robot>
+""".strip()
+            )
+
+            info = import_robot_model(
+                source, root / "models", mesh_roots=[mesh_dir]
+            )
+            self.assertTrue((root / "models" / "assets-go3" / "pelvis.STL").exists())
+            saved = info.model_path.read_text()
+            self.assertIn('filename="assets-go3/pelvis.STL"', saved)
+
+    def test_import_urdf_with_virtual_world_root_loads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "z1.urdf"
+            source.write_text(
+                """
+<robot name="z1">
+  <link name="world"/>
+  <joint name="base_static_joint" type="fixed">
+    <parent link="world"/>
+    <child link="link00"/>
+  </joint>
+  <link name="link00">
+    <inertial>
+      <mass value="1"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+    </inertial>
+    <collision>
+      <geometry>
+        <sphere radius="0.05"/>
+      </geometry>
+    </collision>
+  </link>
+  <joint name="joint1" type="revolute">
+    <parent link="link00"/>
+    <child link="link01"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10" lower="-1" upper="1" velocity="1"/>
+  </joint>
+  <link name="link01">
+    <inertial>
+      <mass value="1"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+    </inertial>
+    <collision>
+      <geometry>
+        <sphere radius="0.03"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>
+""".strip()
+            )
+
+            with patch.dict(
+                os.environ, {"GHOSTGUI_CACHE_DIR": str(root / "cache")}
+            ):
+                info = import_robot_model(source, root / "models")
+                adapter = MuJoCoRobotAdapter(info)
+
+            self.assertEqual(adapter.root_body, "link00")
+            self.assertIn("joint1", adapter.actuated_joints)
+
+    def test_import_mjcf_rewrites_meshdir_to_model_asset_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "source"
+            mesh_dir = source_dir / "meshes"
+            mesh_dir.mkdir(parents=True)
+            (mesh_dir / "part.stl").write_bytes(tiny_binary_stl())
+            source = source_dir / "go3.xml"
+            source.write_text(
+                """
+<mujoco model="go3">
+  <compiler angle="radian" meshdir="meshes"/>
+  <asset>
+    <mesh name="part" file="part.stl"/>
+  </asset>
+  <worldbody/>
+</mujoco>
+""".strip()
+            )
+
+            info = import_robot_model(source, root / "models")
+            self.assertTrue((root / "models" / "assets-go3" / "part.stl").exists())
+            saved = info.model_path.read_text()
+            self.assertIn('meshdir="assets-go3"', saved)
+            self.assertIn('file="part.stl"', saved)
+
+    def test_invalid_import_does_not_persist_model_or_assets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "go3.xml"
+            source.write_text(
+                """
+<mujoco model="go3">
+  <worldbody>
+    <body name="base">
+      <geom type="not_a_geom" size="0.05"/>
+    </body>
+  </worldbody>
+</mujoco>
+""".strip()
+            )
+
+            with self.assertRaises(Exception):
+                import_robot_model(source, root / "models")
+
+            self.assertFalse((root / "models" / "go3.xml").exists())
+            self.assertFalse((root / "models" / "assets-go3").exists())
+            self.assertEqual(list((root / "models").glob(".import-*")), [])
+
+    def test_discover_imported_models_does_not_load_model_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "models"
+            model_dir.mkdir()
+            broken = model_dir / "go3.xml"
+            broken.write_text("<mujoco>")
+
+            models = discover_imported_models(model_dir)
+
+            self.assertIn("go3", models)
+            self.assertEqual(models["go3"].model_path, broken.resolve())
+
+    def test_discover_imported_models_skips_builtin_repo_filenames(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp) / "models"
+            model_dir.mkdir()
+            (model_dir / "g1_29dof.xml").write_text("<mujoco/>")
+            (model_dir / "go2_description.urdf").write_text("<robot/>")
+            (model_dir / "z1.urdf").write_text("<robot/>")
+
+            models = discover_imported_models(model_dir)
+
+            self.assertEqual(set(models), {"z1"})
+
+    def test_startup_registers_persisted_models_without_loading_them(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "models"
+            model_dir.mkdir()
+            (model_dir / "go3.xml").write_text("<mujoco>")
+
+            with patch(
+                "gui.main_window.default_model_library_root",
+                return_value=model_dir,
+            ):
+                window = RobotGuiMainWindow("g1")
+            try:
+                self.assertGreaterEqual(window.controls.model_box.findData("go3"), 0)
+                self.assertEqual(window.model_key, "g1")
+            finally:
+                window.close()
+
+    def test_open_model_file_button_imports_and_loads_custom_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "go3.xml"
+            source.write_text(
+                """
+<mujoco model="go3">
+  <worldbody>
+    <body name="base">
+      <freejoint name="floating_base"/>
+      <geom type="sphere" size="0.05"/>
+      <site name="tool" pos="0 0 0.1"/>
+    </body>
+  </worldbody>
+</mujoco>
+""".strip()
+            )
+            window = RobotGuiMainWindow("g1")
+            try:
+                window.model_library_root = root / "models"
+                with patch(
+                    "gui.main_window.QFileDialog.getOpenFileName",
+                    return_value=(str(source), ""),
+                ):
+                    window.on_open_model_file()
+                loader = window.model_loaders.get("go3")
+                if loader is not None:
+                    loader.wait()
+                    self.app.processEvents()
+
+                self.assertEqual(window.model_key, "go3")
+                self.assertTrue((root / "models" / "go3.xml").exists())
+                self.assertTrue((root / "models" / "assets-go3").is_dir())
+                self.assertIn("tool", window.robot_model_3d.trajectory_frames)
+            finally:
+                window.close()
+
+    def test_choose_mesh_folder_button_sets_import_mesh_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mesh_dir = Path(tmp) / "meshes"
+            mesh_dir.mkdir()
+            window = RobotGuiMainWindow("g1")
+            try:
+                with patch(
+                    "gui.main_window.QFileDialog.getExistingDirectory",
+                    return_value=str(mesh_dir),
+                ):
+                    window.on_choose_mesh_folder()
+                self.assertEqual(window.import_mesh_folder, mesh_dir.resolve())
+                self.assertIn(str(mesh_dir), window.status_text.toPlainText())
+            finally:
+                window.close()
 
     def test_canvas_is_opaque_and_preview_alpha_is_clamped(self):
         canvas = RobotCanvas3D()
