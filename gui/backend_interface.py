@@ -172,6 +172,9 @@ class PythonTrajectoryBackend:
             joint_positions=self.default_joint_positions.copy(),
         )
 
+    def backend_label(self):
+        return "Python pelvis-target fallback backend"
+
     def copy_configuration_at_time(self, q_prev, time):
         return PythonRobotConfiguration(
             time=time,
@@ -265,8 +268,12 @@ class PythonTrajectoryBackend:
 
         if target is None:
             foot_x, foot_y, foot_z = default_point
+            roll = pitch = yaw = 0.0
         else:
             foot_x, foot_y, foot_z = target_point(target, default_y=hip_y)
+            roll = target.roll
+            pitch = target.pitch
+            yaw = target.yaw
 
         dx = foot_x - hip_x
         dy = foot_y - hip_y
@@ -281,10 +288,13 @@ class PythonTrajectoryBackend:
 
         set_joint(f"{side}_hip_pitch_joint", hip_pitch)
         set_joint(f"{side}_hip_roll_joint", sign * math.atan2(dy, max(0.10, abs(dz))))
-        set_joint(f"{side}_hip_yaw_joint", target.yaw if target is not None else 0.0)
+        set_joint(f"{side}_hip_yaw_joint", yaw)
         set_joint(f"{side}_knee_joint", knee)
-        set_joint(f"{side}_ankle_pitch_joint", ankle_pitch)
-        set_joint(f"{side}_ankle_roll_joint", -sign * math.atan2(dy, max(0.10, abs(dz))))
+        set_joint(f"{side}_ankle_pitch_joint", ankle_pitch + pitch)
+        set_joint(
+            f"{side}_ankle_roll_joint",
+            -sign * math.atan2(dy, max(0.10, abs(dz))) + roll,
+        )
 
     def estimate_arm_joints(self, side, q, target, default_point, set_joint):
         sign = 1.0 if side == "left" else -1.0
@@ -902,6 +912,14 @@ class BackendInterface:
         if self.ik_error:
             return f"Python fallback backend (MuJoCo IK unavailable: {self.ik_error})"
         return "Python pelvis-target fallback backend"
+
+    def last_backend_name(self):
+        backend = self.last_backend or self.backend
+        if hasattr(backend, "backend_label"):
+            return backend.backend_label()
+        if backend is self.grouped_fallback_backend:
+            return self.grouped_fallback_backend.backend_label()
+        return self.backend_name()
 
     def solve_trajectory(self, trajectory):
         if getattr(trajectory, "samples", None) is not None and self.using_cpp_backend:

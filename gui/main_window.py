@@ -689,6 +689,7 @@ class RobotGuiMainWindow(QMainWindow):
 
         lines = []
         lines.append("Generated uniformly sampled per-frame target tracks.")
+        lines.append(f"Backend: {self.backend_interface.last_backend_name()}")
         lines.append(f"Export dt: {export_dt:.4f} s")
         lines.append(f"Number of GUI keyframes: {len(self.trajectory.frames)}")
         lines.append(f"Number of sampled time steps: {len(sampled_tracks)}")
