@@ -9,6 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
+from gui.collision_checker import Collision
 from gui.main_window import RobotGuiMainWindow
 from gui.transform_gizmo import GizmoInteractionState
 from gui.trajectory import quat_to_rpy, rpy_to_quat
@@ -146,6 +147,65 @@ class RobotViewerTimelineTests(unittest.TestCase):
         np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), before)
         np.testing.assert_allclose(self.viewer.get_current_keyframe(), before)
         self.assertTrue(self.viewer.preview_active)
+
+    def test_plan_preview_rejects_midpoint_collision_without_publishing(self):
+        class MidpointCollisionChecker:
+            def __init__(self, address, lower, upper):
+                self.address = address
+                self.lower = lower
+                self.upper = upper
+
+            def get_collisions(self, state):
+                value = state.get_qpos()[self.address]
+                if self.lower <= value <= self.upper:
+                    return [
+                        Collision(
+                            "geom_a", "geom_b", "body_a", "body_b",
+                            -0.01, "self",
+                        )
+                    ]
+                return []
+
+        joint = next(
+            item for item in self.viewer.robot_model.joints.values()
+            if item.limits is not None
+        )
+        start_value = self.viewer.preview_state.get_joint_value(joint.name)
+        lo, hi = joint.limits
+        delta = 0.1 if start_value + 0.1 < hi else -0.1
+        goal_value = start_value + delta
+        lower = min(start_value, goal_value) + abs(delta) * 0.45
+        upper = min(start_value, goal_value) + abs(delta) * 0.55
+
+        self.viewer._joint_changed(joint.name, goal_value)
+        self.viewer.collision_checker = MidpointCollisionChecker(
+            joint.qpos_address, lower, upper
+        )
+        self.viewer.plan_preview()
+
+        self.assertEqual(self.viewer.robot_trajectory, [])
+        self.assertEqual(self.viewer.ghost_trajectory, [])
+        self.assertIn("Cannot plan preview", self.viewer.status_label.text())
+        self.assertIn("collision at path sample", self.viewer.status_label.text())
+
+    def test_plan_preview_rejects_raw_joint_limit_violation_before_clamp(self):
+        joint = next(
+            item for item in self.viewer.robot_model.joints.values()
+            if item.limits is not None
+        )
+        _, hi = joint.limits
+        self.viewer.begin_preview()
+        qpos = self.viewer.preview_state.get_qpos()
+        qpos[joint.qpos_address] = hi + 0.5
+        self.viewer.preview_state.mj_data.qpos[:] = qpos
+        self.viewer.collision_checker = None
+
+        self.viewer.plan_preview()
+
+        self.assertEqual(self.viewer.robot_trajectory, [])
+        self.assertEqual(self.viewer.ghost_trajectory, [])
+        self.assertIn("Cannot plan preview", self.viewer.status_label.text())
+        self.assertIn("outside limits", self.viewer.status_label.text())
 
     def test_accept_preview_is_timeline_local(self):
         at_zero = self.viewer.committed_state.get_qpos()

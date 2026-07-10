@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -53,6 +54,13 @@ FRAME_BINDINGS = {
     "right_hand": ("site", "robot/right_palm"),
 }
 REVERSE_BINDINGS = {value: key for key, value in FRAME_BINDINGS.items()}
+
+
+@dataclass(frozen=True)
+class PreviewPathValidation:
+    ok: bool
+    message: str
+    failed_index: int | None = None
 
 
 class JointControl(QWidget):
@@ -785,16 +793,73 @@ class RobotViewer3D(QWidget):
                 f"{detail}; ready to Plan, Accept, or Cancel"
             )
 
+    def _joint_limit_violation(self, qpos):
+        for joint in self.robot_model.joints.values():
+            if joint.limits is None:
+                continue
+            value = float(qpos[joint.qpos_address])
+            lo, hi = joint.limits
+            if value < lo - 1e-9 or value > hi + 1e-9:
+                return (
+                    f"{joint.name} outside limits "
+                    f"[{lo:.3f}, {hi:.3f}] at {value:.3f}"
+                )
+        return None
+
+    def _build_validated_preview_path(self, start, goal, samples=40):
+        planned = []
+        candidate = self.robot_model.create_state()
+        for index, alpha in enumerate(np.linspace(0.0, 1.0, int(samples))):
+            qpos = self.state_timeline._interpolate(start, goal, alpha)
+            qpos = np.asarray(qpos, dtype=float)
+            if not np.all(np.isfinite(qpos)):
+                return (
+                    PreviewPathValidation(
+                        False, f"non-finite qpos at path sample {index}", index
+                    ),
+                    [],
+                )
+            limit_error = self._joint_limit_violation(qpos)
+            if limit_error:
+                return (
+                    PreviewPathValidation(
+                        False, f"{limit_error} at path sample {index}", index
+                    ),
+                    [],
+                )
+            candidate.set_qpos(qpos)
+            collisions = (
+                self.collision_checker.get_collisions(candidate)
+                if self.collision_checker else []
+            )
+            if collisions:
+                names = ", ".join(
+                    f"{item.geom1} <-> {item.geom2}"
+                    for item in collisions[:2]
+                )
+                return (
+                    PreviewPathValidation(
+                        False,
+                        f"collision at path sample {index}: {names}",
+                        index,
+                    ),
+                    [],
+                )
+            planned.append(qpos)
+        return PreviewPathValidation(True, "Preview path is valid."), planned
+
     def plan_preview(self):
         if not self.preview_active:
             self.status_label.setText("No preview changes to plan.")
             return
         start = self.committed_state.get_qpos()
         goal = self.preview_state.get_qpos()
-        planned = [
-            self.state_timeline._interpolate(start, goal, alpha)
-            for alpha in np.linspace(0.0, 1.0, 40)
-        ]
+        validation, planned = self._build_validated_preview_path(start, goal)
+        if not validation.ok:
+            self.status_label.setText(
+                f"Cannot plan preview: {validation.message}."
+            )
+            return
         self.robot_trajectory = planned
         self.ghost_trajectory = list(planned)
         self.frame_slider.blockSignals(True)
