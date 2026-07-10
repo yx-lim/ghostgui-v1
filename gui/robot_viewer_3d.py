@@ -207,6 +207,10 @@ class RobotViewer3D(QWidget):
         self.canvas.transform_drag_finished.connect(
             self._on_transform_drag_finished
         )
+        self.canvas.transform_drag_cancel_requested.connect(
+            self._on_transform_cancel_requested
+        )
+        self.canvas.gizmo_mode_changed.connect(self._on_gizmo_mode_changed)
         self.canvas.body_double_clicked.connect(self._on_body_double_clicked)
         self.last_valid_target_position = None
         self.last_valid_target_quaternion = None
@@ -813,7 +817,10 @@ class RobotViewer3D(QWidget):
                 f"; near singularity sigma_min={result.min_singular_value:.2e}, "
                 f"cond={result.condition_number:.1e}"
             )
+        drag_status = self.canvas.gizmo.drag_status()
+        drag_prefix = f"{drag_status}; " if drag_status else ""
         self._last_ik_status = (
+            drag_prefix +
             f"{'TCP free translate; ' if self.canvas.gizmo.state.name == 'DRAG_TRANSLATE_FREE' else ''}"
             f"{result.status}; accepted={result.accepted_fraction:.0%}; "
             f"IK error={result.ik_error:.4f}; tasks={active_task_count}; "
@@ -842,6 +849,15 @@ class RobotViewer3D(QWidget):
             self.status_label.setText(
                 f"{detail}; ready to Plan, Accept, or Cancel"
             )
+
+    def _on_transform_cancel_requested(self):
+        if self.preview_active:
+            self.cancel_preview()
+        else:
+            self.status_label.setText("Transform edit cancelled.")
+
+    def _on_gizmo_mode_changed(self, mode):
+        self.status_label.setText(f"Transform gizmo mode: {mode}.")
 
     def _joint_limit_violation(self, qpos):
         for joint in self.robot_model.joints.values():

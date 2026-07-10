@@ -29,6 +29,8 @@ class RobotCanvas3D(QOpenGLWidget):
     target_pose_dragged = Signal(float, float, float)
     target_transform_dragged = Signal(object, object)
     transform_drag_finished = Signal()
+    transform_drag_cancel_requested = Signal()
+    gizmo_mode_changed = Signal(str)
     geometry_progress = Signal(int, int)
     body_double_clicked = Signal(str)
 
@@ -44,6 +46,7 @@ class RobotCanvas3D(QOpenGLWidget):
 
         self.setMinimumSize(650, 500)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self.trajectory = None
         self.show_trajectory_lines = True
@@ -593,6 +596,7 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glEnd()
 
     def draw_transform_gizmo(self):
+        self._sync_gizmo_screen_scale()
         origin = self.gizmo.position
         show_sphere, translation_axes, rotation_axes = (
             self.gizmo.visible_handles()
@@ -603,6 +607,7 @@ class RobotCanvas3D(QOpenGLWidget):
             "z": (0.2, 0.45, 1.0),
         }
         GL.glDisable(GL.GL_DEPTH_TEST)
+        self._draw_gizmo_drag_guide(colors)
         sphere_hovered = (
             self.gizmo.state == GizmoInteractionState.HOVER_TRANSLATE_FREE
         )
@@ -616,40 +621,25 @@ class RobotCanvas3D(QOpenGLWidget):
             GLU.gluSphere(self._quadric, self.gizmo.sphere_radius, 16, 10)
             GL.glPopMatrix()
 
-        GL.glLineWidth(5.0)
-        GL.glBegin(GL.GL_LINES)
         for axis, delta in (("x", (self.gizmo.arrow_length, 0.0, 0.0)),
                             ("y", (0.0, self.gizmo.arrow_length, 0.0)),
                             ("z", (0.0, 0.0, self.gizmo.arrow_length))):
             if axis not in translation_axes:
                 continue
-            GL.glColor3f(*self._gizmo_color(axis, "TRANSLATE", colors[axis]))
-            axis_start = np.asarray(origin) + np.asarray(delta) / self.gizmo.arrow_length * (
-                self.gizmo.sphere_radius * 1.25
+            self._draw_gizmo_arrow(
+                origin,
+                axis,
+                self._gizmo_color(axis, "TRANSLATE", colors[axis]),
             )
-            GL.glVertex3fv(axis_start)
-            GL.glVertex3f(*(origin[i] + delta[i] for i in range(3)))
-        GL.glEnd()
 
-        # Large endpoint dots are the visible/pickable arrowheads.
-        GL.glPointSize(11.0)
-        GL.glBegin(GL.GL_POINTS)
-        for axis, delta in (("x", (self.gizmo.arrow_length, 0.0, 0.0)),
-                            ("y", (0.0, self.gizmo.arrow_length, 0.0)),
-                            ("z", (0.0, 0.0, self.gizmo.arrow_length))):
-            if axis not in translation_axes:
-                continue
-            GL.glColor3f(*self._gizmo_color(axis, "TRANSLATE", colors[axis]))
-            GL.glVertex3f(*(origin[i] + delta[i] for i in range(3)))
-        GL.glEnd()
-
-        GL.glLineWidth(3.6)
+        self._begin_transparent_pass()
+        GL.glLineWidth(4.0 if self.gizmo.is_dragging else 3.2)
         for axis in rotation_axes:
-            GL.glColor3f(*self._gizmo_color(axis, "ROTATE", colors[axis]))
-            GL.glBegin(GL.GL_LINE_LOOP)
-            for point in self.gizmo.ring_points(axis):
-                GL.glVertex3fv(point)
-            GL.glEnd()
+            self._draw_gizmo_ring(
+                axis,
+                self._gizmo_color(axis, "ROTATE", colors[axis]),
+            )
+        self._end_transparent_pass()
         GL.glEnable(GL.GL_DEPTH_TEST)
 
     def _gizmo_color(self, axis, operation, base_color):
@@ -662,20 +652,119 @@ class RobotCanvas3D(QOpenGLWidget):
             return (1.0, 0.9, 0.15)
         return base_color
 
+    def _sync_gizmo_screen_scale(self):
+        self.configure_camera()
+        origin = np.asarray(self.project_point(*self.gizmo.position), dtype=float)
+        sample = 0.1
+        pixels_per_unit = []
+        for vector in ((sample, 0.0, 0.0), (0.0, sample, 0.0), (0.0, 0.0, sample)):
+            point = self.gizmo.position + np.asarray(vector, dtype=float)
+            distance = float(np.linalg.norm(np.asarray(self.project_point(*point)) - origin))
+            if distance > 1e-6:
+                pixels_per_unit.append(distance / sample)
+        if pixels_per_unit:
+            self.gizmo.set_screen_scale(1.0 / float(np.median(pixels_per_unit)))
+
+    def _draw_gizmo_arrow(self, origin, axis, color):
+        if self._quadric is None:
+            return
+        vector = {
+            "x": np.array([1.0, 0.0, 0.0]),
+            "y": np.array([0.0, 1.0, 0.0]),
+            "z": np.array([0.0, 0.0, 1.0]),
+        }[axis]
+        shaft_start = self.gizmo.sphere_radius * 1.25
+        cone_length = min(self.gizmo.arrow_length * 0.32, self.gizmo.sphere_radius * 1.85)
+        shaft_length = max(0.01, self.gizmo.arrow_length - shaft_start - cone_length)
+        shaft_radius = max(self.gizmo.sphere_radius * 0.18, self.gizmo.arrow_length * 0.018)
+        cone_radius = max(self.gizmo.sphere_radius * 0.42, shaft_radius * 2.2)
+
+        GL.glColor3f(*color)
+        GL.glPushMatrix()
+        GL.glTranslatef(*map(float, np.asarray(origin) + vector * shaft_start))
+        self._orient_z_to_axis(axis)
+        GLU.gluCylinder(self._quadric, shaft_radius, shaft_radius, shaft_length, 12, 1)
+        GL.glTranslatef(0.0, 0.0, shaft_length)
+        GLU.gluCylinder(self._quadric, cone_radius, 0.0, cone_length, 18, 1)
+        GL.glPopMatrix()
+
+    def _draw_gizmo_ring(self, axis, color):
+        eye = self._camera_eye()
+        origin = np.asarray(self.gizmo.position, dtype=float)
+        points = self.gizmo.ring_points(axis)
+        for index, start in enumerate(points):
+            end = points[(index + 1) % len(points)]
+            midpoint = 0.5 * (np.asarray(start) + np.asarray(end))
+            facing = float(np.dot(midpoint - origin, eye - origin))
+            alpha = 0.88 if facing >= 0.0 else 0.32
+            GL.glColor4f(float(color[0]), float(color[1]), float(color[2]), alpha)
+            GL.glBegin(GL.GL_LINES)
+            GL.glVertex3fv(start)
+            GL.glVertex3fv(end)
+            GL.glEnd()
+
+    def _draw_gizmo_drag_guide(self, colors):
+        if not self.gizmo.is_dragging:
+            return
+        state = self.gizmo.state
+        axis = getattr(self.gizmo, "_drag_axis", None)
+        if axis not in colors:
+            return
+        self._begin_transparent_pass()
+        try:
+            color = colors[axis]
+            GL.glColor4f(float(color[0]), float(color[1]), float(color[2]), 0.28)
+            GL.glLineWidth(2.0)
+            if "TRANSLATE" in state.name:
+                vector = {
+                    "x": np.array([1.0, 0.0, 0.0]),
+                    "y": np.array([0.0, 1.0, 0.0]),
+                    "z": np.array([0.0, 0.0, 1.0]),
+                }[axis]
+                origin = np.asarray(self.gizmo.position, dtype=float)
+                GL.glBegin(GL.GL_LINES)
+                GL.glVertex3fv(origin - vector * 2.0)
+                GL.glVertex3fv(origin + vector * 2.0)
+                GL.glEnd()
+            elif "ROTATE" in state.name:
+                GL.glLineWidth(6.0)
+                self._draw_gizmo_ring(axis, color)
+        finally:
+            self._end_transparent_pass()
+
+    @staticmethod
+    def _orient_z_to_axis(axis):
+        if axis == "x":
+            GL.glRotatef(90.0, 0.0, 1.0, 0.0)
+        elif axis == "y":
+            GL.glRotatef(-90.0, 1.0, 0.0, 0.0)
+
+    def _camera_eye(self):
+        yaw = math.radians(self.camera_yaw)
+        pitch = math.radians(self.camera_pitch)
+        return np.array([
+            self.camera_distance * math.cos(pitch) * math.sin(yaw),
+            -self.camera_distance * math.cos(pitch) * math.cos(yaw),
+            self.camera_distance * math.sin(pitch) + 1.1,
+        ], dtype=float)
+
     # ============================================================
     # Mouse editing
     # ============================================================
 
     def mousePressEvent(self, event):
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
         self.last_mouse_pos = event.position()
 
         if event.button() == Qt.MouseButton.LeftButton:
+            self._sync_gizmo_screen_scale()
             if self.gizmo.begin_drag(
                 event.position().x(),
                 event.position().y(),
                 self.project_point,
                 self.screen_ray,
             ):
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
                 self.update()
                 return
 
@@ -698,14 +787,19 @@ class RobotCanvas3D(QOpenGLWidget):
 
     def mouseMoveEvent(self, event):
         if self.gizmo.is_dragging:
+            self._sync_gizmo_screen_scale()
+            modifiers = event.modifiers()
             position, quaternion = self.gizmo.drag(
                 event.position().x(),
                 event.position().y(),
                 self.project_point,
                 self.screen_ray,
+                fine=bool(modifiers & Qt.KeyboardModifier.ShiftModifier),
+                snap=bool(modifiers & Qt.KeyboardModifier.ControlModifier),
             )
             self.target_x, self.target_y, self.target_z = map(float, position)
             self.target_transform_dragged.emit(position, quaternion)
+            self.update()
             return
 
         if self.rotating_camera and self.last_mouse_pos is not None:
@@ -717,6 +811,7 @@ class RobotCanvas3D(QOpenGLWidget):
             return
 
         old_state = self.gizmo.state
+        self._sync_gizmo_screen_scale()
         new_state = self.gizmo.hover(
             event.position().x(), event.position().y(), self.project_point
         )
@@ -742,7 +837,7 @@ class RobotCanvas3D(QOpenGLWidget):
             self.transform_drag_finished.emit()
         super().mouseReleaseEvent(event)
 
-    def cancel_transform_drag(self):
+    def cancel_transform_drag(self, emit_cancelled=False):
         """Cancel interaction state without emitting a completed edit."""
         self.gizmo.end_drag()
         self.dragging_target = False
@@ -750,6 +845,29 @@ class RobotCanvas3D(QOpenGLWidget):
         self.last_mouse_pos = None
         self.setCursor(Qt.CursorShape.ArrowCursor)
         self.update()
+        if emit_cancelled:
+            self.transform_drag_cancel_requested.emit()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_T:
+            self.gizmo.set_mode("translate")
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.gizmo_mode_changed.emit("translate")
+            self.update()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_R:
+            self.gizmo.set_mode("rotate")
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.gizmo_mode_changed.emit("rotate")
+            self.update()
+            event.accept()
+            return
+        if event.key() in (Qt.Key.Key_E, Qt.Key.Key_Escape):
+            self.cancel_transform_drag(emit_cancelled=True)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def wheelEvent(self, event):
         steps = event.angleDelta().y() / 120.0

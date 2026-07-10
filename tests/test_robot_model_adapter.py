@@ -10,7 +10,8 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from OpenGL import GL
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
 
 from gui.main_window import RobotGuiMainWindow
@@ -479,6 +480,41 @@ class RobotModelAdapterTests(unittest.TestCase):
                 canvas._gizmo_color("x", "TRANSLATE", base_color),
                 base_color,
             )
+        finally:
+            canvas.close()
+
+    def test_transform_gizmo_hotkeys_switch_modes_and_cancel(self):
+        canvas = RobotCanvas3D()
+        try:
+            changed_modes = []
+            cancelled = []
+            canvas.gizmo_mode_changed.connect(changed_modes.append)
+            canvas.transform_drag_cancel_requested.connect(lambda: cancelled.append(True))
+
+            canvas.keyPressEvent(QKeyEvent(
+                QEvent.Type.KeyPress,
+                Qt.Key.Key_R,
+                Qt.KeyboardModifier.NoModifier,
+            ))
+            self.assertEqual(canvas.gizmo.mode, "rotate")
+            self.assertEqual(changed_modes[-1], "rotate")
+
+            canvas.keyPressEvent(QKeyEvent(
+                QEvent.Type.KeyPress,
+                Qt.Key.Key_T,
+                Qt.KeyboardModifier.NoModifier,
+            ))
+            self.assertEqual(canvas.gizmo.mode, "translate")
+            self.assertEqual(changed_modes[-1], "translate")
+
+            canvas.gizmo.state = GizmoInteractionState.DRAG_TRANSLATE_X
+            canvas.keyPressEvent(QKeyEvent(
+                QEvent.Type.KeyPress,
+                Qt.Key.Key_E,
+                Qt.KeyboardModifier.NoModifier,
+            ))
+            self.assertEqual(canvas.gizmo.state, GizmoInteractionState.NONE)
+            self.assertEqual(cancelled, [True])
         finally:
             canvas.close()
 

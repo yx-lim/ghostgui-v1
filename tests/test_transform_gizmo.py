@@ -77,7 +77,7 @@ class TransformGizmoTests(unittest.TestCase):
         gizmo = TransformGizmo((0.0, 0.0, 0.0))
         self.assertEqual(
             gizmo.visible_handles(),
-            (True, ("x", "y", "z"), ("x", "y", "z")),
+            (True, ("x", "y", "z"), ()),
         )
 
         endpoint = project_isometric(gizmo.arrow_length, 0.0, 0.0)
@@ -89,8 +89,69 @@ class TransformGizmoTests(unittest.TestCase):
         gizmo.end_drag()
         self.assertEqual(
             gizmo.visible_handles(),
-            (True, ("x", "y", "z"), ("x", "y", "z")),
+            (True, ("x", "y", "z"), ()),
         )
+
+    def test_mode_filters_visible_and_pickable_handles(self):
+        gizmo = TransformGizmo((0.0, 0.0, 0.0))
+        self.assertEqual(gizmo.visible_handles(), (True, ("x", "y", "z"), ()))
+        diagonal = gizmo.ring_radius / math.sqrt(2.0)
+        ring_point = project_isometric(0.0, -diagonal, -diagonal)
+        self.assertEqual(
+            gizmo.pick(*ring_point, project_isometric),
+            (GizmoInteractionState.NONE, None),
+        )
+
+        gizmo.set_mode("rotate")
+        self.assertEqual(gizmo.visible_handles(), (False, (), ("x", "y", "z")))
+        state, axis = gizmo.pick(*ring_point, project_isometric)
+        self.assertEqual(state, GizmoInteractionState.HOVER_ROTATE_X)
+        self.assertEqual(axis, "x")
+
+    def test_screen_scale_keeps_dimensions_in_practical_bounds(self):
+        gizmo = TransformGizmo((0.0, 0.0, 0.0))
+        gizmo.set_screen_scale(0.002)
+        self.assertAlmostEqual(gizmo.arrow_length, 0.192)
+        self.assertAlmostEqual(gizmo.ring_radius, 0.148)
+        self.assertEqual(gizmo.pick_tolerance_pixels, 11.0)
+
+        gizmo.set_screen_scale(0.5)
+        self.assertEqual(gizmo.arrow_length, 0.55)
+        self.assertEqual(gizmo.sphere_radius, 0.08)
+
+    def test_translation_snap_and_fine_modifiers(self):
+        gizmo = TransformGizmo((0.0, 0.0, 0.5))
+        endpoint = project_isometric(gizmo.arrow_length, 0.0, 0.5)
+        self.assertTrue(gizmo.begin_drag(*endpoint, project_isometric, unused_ray))
+
+        origin_screen = np.array(project_isometric(*gizmo.position))
+        endpoint_screen = np.array(endpoint)
+        screen_axis = endpoint_screen - origin_screen
+        unit_screen_axis = screen_axis / np.linalg.norm(screen_axis)
+        position, _ = gizmo.drag(
+            *(endpoint_screen + 2.6 * unit_screen_axis),
+            project_isometric,
+            unused_ray,
+            snap=True,
+        )
+        np.testing.assert_allclose(position, [0.03, 0.0, 0.5], atol=1e-8)
+        self.assertEqual(gizmo.drag_status(), "X +0.030 m")
+
+        gizmo.end_drag()
+        gizmo = TransformGizmo((0.0, 0.0, 0.5))
+        endpoint = project_isometric(gizmo.arrow_length, 0.0, 0.5)
+        origin_screen = np.array(project_isometric(*gizmo.position))
+        endpoint_screen = np.array(endpoint)
+        screen_axis = endpoint_screen - origin_screen
+        unit_screen_axis = screen_axis / np.linalg.norm(screen_axis)
+        self.assertTrue(gizmo.begin_drag(*endpoint, project_isometric, unused_ray))
+        position, _ = gizmo.drag(
+            *(endpoint_screen + 20.0 * unit_screen_axis),
+            project_isometric,
+            unused_ray,
+            fine=True,
+        )
+        np.testing.assert_allclose(position, [0.05, 0.0, 0.5], atol=1e-8)
 
     def test_rotation_ring_constrains_quaternion_axis(self):
         camera_setups = {
@@ -122,6 +183,7 @@ class TransformGizmoTests(unittest.TestCase):
         for axis, (project, ray, start, end, quaternion_index) in camera_setups.items():
             with self.subTest(axis=axis):
                 gizmo = TransformGizmo((0.0, 0.0, 0.0))
+                gizmo.set_mode("rotate")
                 self.assertTrue(gizmo.begin_drag(*start, project, ray))
                 self.assertIn("ROTATE", gizmo.state.name)
                 self.assertEqual(
@@ -134,7 +196,7 @@ class TransformGizmoTests(unittest.TestCase):
                 gizmo.end_drag()
                 self.assertEqual(
                     gizmo.visible_handles(),
-                    (True, ("x", "y", "z"), ("x", "y", "z")),
+                    (False, (), ("x", "y", "z")),
                 )
 
 
