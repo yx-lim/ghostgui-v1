@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QTableWidget,
     QTableWidgetItem,
+    QStackedWidget,
     QHBoxLayout,
     QCheckBox,
 )
@@ -62,10 +63,13 @@ class LabeledSlider(QWidget):
         self.input.setRange(min_value / self.scale, max_value / self.scale)
         self.input.setSingleStep(1 / self.scale)
         self.input.setValue(initial_value / self.scale)
+        self.input.setMinimumWidth(58)
+        self.input.setMaximumWidth(74)
 
         self.slider.valueChanged.connect(self.on_slider_changed)
         self.input.valueChanged.connect(self.on_input_changed)
 
+        self.label.setWordWrap(True)
         layout.addWidget(self.label)
         value_row.addWidget(self.slider, stretch=1)
         value_row.addWidget(self.input)
@@ -153,10 +157,19 @@ class TrajectoryControlPanel(QGroupBox):
         self.build_ui()
 
     def build_ui(self):
-        layout = QVBoxLayout()
+        root_layout = QVBoxLayout()
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        self.setLayout(root_layout)
+
+        self.robot_panel, robot_layout = self._make_section_panel()
+        self.target_panel, self.target_layout = self._make_section_panel()
+        self.transform_panel, transform_layout = self._make_section_panel()
+        self.preview_ik_panel, self.preview_ik_layout = self._make_section_panel()
+        self.trajectory_panel, self.trajectory_layout = self._make_section_panel()
+        self.view_panel, self.view_layout = self._make_section_panel()
 
         if self.model_registry:
-            layout.addWidget(QLabel("Robot model"))
+            robot_layout.addWidget(QLabel("Robot model"))
             self.model_box = QComboBox()
             for key, info in self.model_registry.items():
                 self.model_box.addItem(info.display_name, key)
@@ -166,20 +179,20 @@ class TrajectoryControlPanel(QGroupBox):
             self.model_box.currentIndexChanged.connect(
                 lambda index: self.model_changed.emit(self.model_box.itemData(index))
             )
-            layout.addWidget(self.model_box)
-            self.open_model_button = QPushButton("Open Model File")
+            robot_layout.addWidget(self.model_box)
+            self.open_model_button = QPushButton("Open Model")
             self.open_model_button.clicked.connect(self.open_model_clicked.emit)
-            layout.addWidget(self.open_model_button)
-            self.choose_mesh_folder_button = QPushButton("Choose Mesh Folder (.stl)")
+            robot_layout.addWidget(self.open_model_button)
+            self.choose_mesh_folder_button = QPushButton("Mesh Folder (.stl)")
             self.choose_mesh_folder_button.clicked.connect(
                 self.choose_mesh_folder_clicked.emit
             )
-            layout.addWidget(self.choose_mesh_folder_button)
+            robot_layout.addWidget(self.choose_mesh_folder_button)
 
         # --------------------------------------------------------
         # Select which robot frame this target refers to
         # --------------------------------------------------------
-        layout.addWidget(QLabel("Target robot frame"))
+        self.target_layout.addWidget(QLabel("Target robot frame"))
 
         self.frame_box = QComboBox()
         self.frame_box.addItems(self.frame_names)
@@ -188,12 +201,12 @@ class TrajectoryControlPanel(QGroupBox):
         preferred = "left_hand" if "left_hand" in self.frame_names else self.frame_names[0]
         self.frame_box.setCurrentText(preferred)
         self.frame_box.currentTextChanged.connect(self.frame_name_changed.emit)
-        layout.addWidget(self.frame_box)
+        self.target_layout.addWidget(self.frame_box)
 
         # --------------------------------------------------------
         # Motion phase
         # --------------------------------------------------------
-        layout.addWidget(QLabel("Motion phase"))
+        self.trajectory_layout.addWidget(QLabel("Motion phase"))
 
         self.phase_box = QComboBox()
         self.phase_box.addItems([
@@ -202,7 +215,7 @@ class TrajectoryControlPanel(QGroupBox):
             "flight",
             "landing",
         ])
-        layout.addWidget(self.phase_box)
+        self.trajectory_layout.addWidget(self.phase_box)
 
         # --------------------------------------------------------
         # Sliders for target reference-frame pose
@@ -263,13 +276,13 @@ class TrajectoryControlPanel(QGroupBox):
             scale=100,
         )
 
-        layout.addWidget(self.time_slider)
-        layout.addWidget(self.x_slider)
-        layout.addWidget(self.y_slider)
-        layout.addWidget(self.z_slider)
-        layout.addWidget(self.roll_slider)
-        layout.addWidget(self.pitch_slider)
-        layout.addWidget(self.yaw_slider)
+        self.trajectory_layout.addWidget(self.time_slider)
+        transform_layout.addWidget(self.x_slider)
+        transform_layout.addWidget(self.y_slider)
+        transform_layout.addWidget(self.z_slider)
+        transform_layout.addWidget(self.roll_slider)
+        transform_layout.addWidget(self.pitch_slider)
+        transform_layout.addWidget(self.yaw_slider)
 
         # Whenever pose controls change, update the viewer target marker.
         self.x_slider.value_changed.connect(self.emit_pose_changed)
@@ -294,12 +307,12 @@ class TrajectoryControlPanel(QGroupBox):
         self.show_lines_box = QCheckBox("Show trajectory lines")
         self.show_lines_box.setChecked(True)
         self.show_lines_box.toggled.connect(self.trajectory_lines_changed.emit)
-        layout.addWidget(self.show_lines_box)
+        self.view_layout.addWidget(self.show_lines_box)
 
         # --------------------------------------------------------
         # Keyframe buttons
         # --------------------------------------------------------
-        button_row = QHBoxLayout()
+        button_row = QVBoxLayout()
 
         self.add_button = QPushButton("Add Keyframe")
         self.update_button = QPushButton("Update")
@@ -309,10 +322,10 @@ class TrajectoryControlPanel(QGroupBox):
         button_row.addWidget(self.update_button)
         button_row.addWidget(self.delete_button)
 
-        layout.addLayout(button_row)
+        self.trajectory_layout.addLayout(button_row)
 
-        self.generate_button = QPushButton("Generate / Simulate Trajectory")
-        layout.addWidget(self.generate_button)
+        self.generate_button = QPushButton("Generate / Simulate")
+        self.trajectory_layout.addWidget(self.generate_button)
 
         self.add_button.clicked.connect(self.add_keyframe_clicked.emit)
         self.update_button.clicked.connect(self.update_keyframe_clicked.emit)
@@ -337,10 +350,84 @@ class TrajectoryControlPanel(QGroupBox):
         ])
         self.table.cellClicked.connect(self.on_table_cell_clicked)
 
-        layout.addWidget(QLabel("Trajectory keyframes"))
-        layout.addWidget(self.table)
+        self.trajectory_layout.addWidget(QLabel("Trajectory keyframes"))
+        self.trajectory_layout.addWidget(self.table)
 
-        self.setLayout(layout)
+        self.robot_context_stack = self._make_context_stack()
+        self.target_context_stack = self._make_context_stack()
+        self.trajectory_context_stack = self._make_context_stack()
+        self.preview_ik_context_stack = self._make_context_stack()
+        self.robot_view_context_stack = self._make_context_stack()
+        robot_layout.addWidget(self.robot_context_stack)
+        self.target_layout.addWidget(self.target_context_stack)
+        self.trajectory_layout.addWidget(self.trajectory_context_stack)
+        self.preview_ik_layout.addWidget(self.preview_ik_context_stack)
+        robot_layout.addWidget(self.robot_view_context_stack)
+
+    def _make_section_panel(self):
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(5)
+        return panel, layout
+
+    def _make_context_stack(self):
+        stack = QStackedWidget()
+        stack.empty_widget = QWidget()
+        stack.addWidget(stack.empty_widget)
+        stack.setVisible(False)
+        return stack
+
+    def _set_context_widget(self, stack, widget):
+        if widget is None:
+            widget = stack.empty_widget
+        if stack.indexOf(widget) < 0:
+            stack.addWidget(widget)
+        stack.setCurrentWidget(widget)
+        stack.setVisible(widget is not stack.empty_widget)
+
+    def set_selection_context_widget(self, widget):
+        self._set_context_widget(self.target_context_stack, widget)
+
+    def set_robot_context_widget(self, widget):
+        self._set_context_widget(self.robot_context_stack, widget)
+
+    def set_trajectory_context_widget(self, widget):
+        self._set_context_widget(self.trajectory_context_stack, widget)
+
+    def set_display_context_widget(self, widget):
+        self._set_context_widget(self.robot_view_context_stack, widget)
+
+    def set_preview_ik_context_widget(self, widget):
+        self._set_context_widget(self.preview_ik_context_stack, widget)
+
+    def selection_context_widget(self):
+        return self.target_context_stack.currentWidget()
+
+    def robot_context_widget(self):
+        return self.robot_context_stack.currentWidget()
+
+    def trajectory_context_widget(self):
+        return self.trajectory_context_stack.currentWidget()
+
+    def display_context_widget(self):
+        return self.robot_view_context_stack.currentWidget()
+
+    def preview_ik_context_widget(self):
+        return self.preview_ik_context_stack.currentWidget()
+
+    def workflow_sections(self):
+        return [
+            ("Robot", self.robot_panel, True),
+            ("Trajectory", self.trajectory_panel, True),
+        ]
+
+    def inspector_sections(self):
+        return [
+            ("Target", self.target_panel, True),
+            ("Transform", self.transform_panel, True),
+            ("Preview / IK", self.preview_ik_panel, True),
+        ]
 
     def set_frame_names(self, frame_names, preferred=None):
         """Replace target choices without emitting an intermediate selection."""

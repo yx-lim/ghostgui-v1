@@ -302,7 +302,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.window.controls.emit_time_changed(0.0)
         self.assertAlmostEqual(self.window.controls.x_slider.value(), 0.10)
 
-    def test_sidebars_collapse_without_recreating_viewer_or_state(self):
+    def test_sidebars_are_fixed_shells_with_collapsible_sections(self):
         self.window.resize(1700, 800)
         self.window.viewer_tabs.setCurrentWidget(self.window.viewer_3d_stack)
         self.window.show()
@@ -312,36 +312,62 @@ class RobotViewerTimelineTests(unittest.TestCase):
         qpos = self.viewer.robot_state.get_qpos()
 
         for sidebar in (self.window.left_sidebar, self.window.right_sidebar):
-            with self.subTest(sidebar=sidebar.title):
-                before_width = sidebar.width()
-                sidebar.set_collapsed(True)
-                self.app.processEvents()
-                self.app.processEvents()
-                self.assertTrue(sidebar.content.isHidden())
-                self.assertEqual(sidebar.width(), sidebar.collapsed_width)
+            with self.subTest(sidebar=sidebar):
+                self.assertFalse(hasattr(sidebar, "set_collapsed"))
+                self.assertFalse(hasattr(sidebar, "toggle_collapsed"))
+                self.assertFalse(hasattr(sidebar, "collapsed_width"))
+                self.assertFalse(sidebar.isHidden())
 
-                sidebar.set_collapsed(False)
-                self.app.processEvents()
-                self.app.processEvents()
-                self.assertFalse(sidebar.content.isHidden())
-                self.assertAlmostEqual(sidebar.width(), before_width, delta=2)
-
-        controls_sidebar = self.viewer.controls_sidebar
-        controls_before = controls_sidebar.width()
-        controls_sidebar.set_collapsed(True)
-        self.app.processEvents()
-        self.app.processEvents()
-        self.assertTrue(controls_sidebar.content.isHidden())
+        self.assertFalse(hasattr(self.viewer, "controls_sidebar"))
+        self.assertFalse(hasattr(self.viewer, "viewer_splitter"))
+        self.assertIsNone(self.window.right_sidebar_content.current_context_widget())
+        self.assertLessEqual(self.window.left_sidebar.maximumWidth(), 240)
+        self.assertLessEqual(self.window.right_sidebar.maximumWidth(), 240)
+        left_titles = [
+            section.title for section in self.window.left_sidebar_content.sections
+        ]
+        right_titles = [
+            section.title for section in self.window.right_sidebar_content.sections
+        ]
         self.assertEqual(
-            self.viewer.viewer_splitter.sizes()[1],
-            controls_sidebar.collapsed_width,
+            left_titles,
+            ["Robot", "Trajectory", "View"],
         )
-        controls_sidebar.set_collapsed(False)
-        self.app.processEvents()
-        self.app.processEvents()
-        self.assertFalse(controls_sidebar.content.isHidden())
-        self.assertAlmostEqual(
-            controls_sidebar.width(), controls_before, delta=2
+        self.assertEqual(
+            right_titles,
+            ["Target", "Transform", "Preview / IK", "Status"],
+        )
+        for section in (
+            self.window.left_sidebar_content.sections
+            + self.window.right_sidebar_content.sections
+        ):
+            self.assertFalse(section.content.isVisible())
+        all_titles = left_titles + right_titles
+        for removed_title in (
+            "Project", "Editors", "Display", "Selection", "Properties",
+            "3D Selection", "Export / Import", "Playback / Ghosts",
+            "Joints / IK",
+        ):
+            self.assertNotIn(removed_title, all_titles)
+        self.assertIs(
+            self.window.controls.robot_context_widget(),
+            self.viewer.robot_context_widget(),
+        )
+        self.assertIs(
+            self.window.controls.selection_context_widget(),
+            self.viewer.selection_context_widget(),
+        )
+        self.assertIs(
+            self.window.controls.trajectory_context_widget(),
+            self.viewer.trajectory_context_widget(),
+        )
+        self.assertIs(
+            self.window.controls.display_context_widget(),
+            self.viewer.display_context_widget(),
+        )
+        self.assertIs(
+            self.window.controls.preview_ik_context_widget(),
+            self.viewer.preview_ik_context_widget(),
         )
 
         self.assertEqual(id(self.window.viewer_3d), viewer_identity)

@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QSpinBox,
-    QSplitter,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -36,7 +35,6 @@ from .robot_model_3d import (
 from .collision_checker import CollisionAwareIKSolver, CollisionChecker
 from .trajectory import quat_to_rpy, rpy_to_quat
 from .viewer_3d import RobotCanvas3D
-from .collapsible_sidebar import CollapsibleSidebar
 from .ik_tasks import (
     FootLockTask,
     JointRegularizationTask,
@@ -74,12 +72,16 @@ class JointControl(QWidget):
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(0, 2000)
         self.value_label = QLabel()
-        self.value_label.setMinimumWidth(65)
-        layout = QHBoxLayout(self)
+        self.value_label.setMinimumWidth(56)
+        name_label = QLabel(name)
+        name_label.setWordWrap(True)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel(name), 1)
-        layout.addWidget(self.slider, 2)
-        layout.addWidget(self.value_label)
+        value_row = QHBoxLayout()
+        value_row.addWidget(self.slider, 1)
+        value_row.addWidget(self.value_label)
+        layout.addWidget(name_label)
+        layout.addLayout(value_row)
         self.slider.valueChanged.connect(self._changed)
         self.set_value(value)
 
@@ -115,11 +117,15 @@ class IKInfluenceControl(QWidget):
         self.slider.setRange(0, 300)
         self.value_label = QLabel()
         self.value_label.setMinimumWidth(38)
-        layout = QHBoxLayout(self)
+        name_label = QLabel(name)
+        name_label.setWordWrap(True)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel(name), 1)
-        layout.addWidget(self.slider, 2)
-        layout.addWidget(self.value_label)
+        value_row = QHBoxLayout()
+        value_row.addWidget(self.slider, 1)
+        value_row.addWidget(self.value_label)
+        layout.addWidget(name_label)
+        layout.addLayout(value_row)
         self.slider.valueChanged.connect(self._changed)
         self.set_value(value)
 
@@ -218,52 +224,62 @@ class RobotViewer3D(QWidget):
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
 
-        controls = QWidget()
-        controls.setMaximumWidth(390)
-        panel = QVBoxLayout(controls)
+        self.sidebar_controls = QWidget()
+
+        self.robot_context_panel = QWidget()
+        model_layout = QVBoxLayout(self.robot_context_panel)
+        model_layout.setContentsMargins(6, 6, 6, 6)
         model_text = str(self.robot_model.model_path) if self.robot_model else "Unavailable"
-        panel.addWidget(QLabel(f"Model: {model_text}"))
+        model_label = QLabel(f"Model: {model_text}")
+        model_label.setWordWrap(True)
+        model_layout.addWidget(model_label)
         self.status_label = QLabel(error or "Robot model loaded; FK ready.")
         self.status_label.setWordWrap(True)
-        panel.addWidget(self.status_label)
+        model_layout.addWidget(self.status_label)
         self.timeline_state_label = QLabel("3D state time: 0.00 s")
-        panel.addWidget(self.timeline_state_label)
+        model_layout.addWidget(self.timeline_state_label)
 
         self.model_colors_box = QCheckBox("Use model colors")
         self.model_colors_box.setChecked(True)
         self.model_colors_box.toggled.connect(self.canvas.set_use_model_colors)
-        panel.addWidget(self.model_colors_box)
+        display_panel = QWidget()
+        display_layout = QVBoxLayout(display_panel)
+        display_layout.setContentsMargins(0, 0, 0, 0)
+        display_layout.addWidget(self.model_colors_box)
+        self.display_context_panel = display_panel
         if self.robot_model:
             texture_warnings = self.robot_model.get_visual_texture_warnings()
             if texture_warnings:
                 warning = QLabel("; ".join(texture_warnings))
                 warning.setWordWrap(True)
-                panel.addWidget(warning)
+                display_layout.addWidget(warning)
 
         self.reset_button = QPushButton("Reset 3D Pose")
         self.reset_button.clicked.connect(self.reset_robot_pose)
-        panel.addWidget(self.reset_button)
+        model_layout.addWidget(self.reset_button)
 
-        pose_file_layout = QVBoxLayout()
-        self.load_qpos_button = QPushButton("Load qpos CSV")
-        self.load_trajectory_button = QPushButton("Load trajectory CSV")
-        self.save_qpos_button = QPushButton("Save qpos CSV")
-        self.save_trajectory_button = QPushButton("Save trajectory CSV")
+        self.trajectory_context_panel = QWidget()
+        trajectory_context_layout = QVBoxLayout(self.trajectory_context_panel)
+        trajectory_context_layout.setContentsMargins(6, 6, 6, 6)
+        self.load_qpos_button = QPushButton("Load qpos")
+        self.load_trajectory_button = QPushButton("Load traj CSV")
+        self.save_qpos_button = QPushButton("Save qpos")
+        self.save_trajectory_button = QPushButton("Save traj CSV")
         self.load_qpos_button.clicked.connect(self.choose_qpos_csv)
         self.load_trajectory_button.clicked.connect(self.choose_trajectory_csv)
         self.save_qpos_button.clicked.connect(self.choose_qpos_save_path)
         self.save_trajectory_button.clicked.connect(
             self.choose_trajectory_save_path
         )
-        pose_file_layout.addWidget(self.load_qpos_button)
-        pose_file_layout.addWidget(self.load_trajectory_button)
-        pose_file_layout.addWidget(self.save_qpos_button)
-        pose_file_layout.addWidget(self.save_trajectory_button)
+        trajectory_context_layout.addWidget(self.load_qpos_button)
+        trajectory_context_layout.addWidget(self.load_trajectory_button)
+        trajectory_context_layout.addWidget(self.save_qpos_button)
+        trajectory_context_layout.addWidget(self.save_trajectory_button)
 
-        panel.addLayout(pose_file_layout)
-
-        target_group = QGroupBox("End-effector transform gizmo")
-        target_layout = QFormLayout(target_group)
+        self.selection_context_panel = QWidget()
+        target_layout = QFormLayout(self.selection_context_panel)
+        target_layout.setContentsMargins(6, 6, 6, 6)
+        target_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.target_box = QComboBox()
         if self.robot_model:
             for frame_name, (kind, name) in self.frame_bindings.items():
@@ -286,16 +302,17 @@ class RobotViewer3D(QWidget):
             self._set_collision_substeps
         )
         target_layout.addRow("Target", self.target_box)
-        target_layout.addRow(QLabel(
-            "Drag arrows to translate; drag rings to rotate (world axes)."
-        ))
         target_layout.addRow("Collision substeps", self.collision_substeps)
         self.root_pose_label = QLabel()
         target_layout.addRow("Root pose", self.root_pose_label)
-        panel.addWidget(target_group)
 
-        preview_group = QGroupBox("Preview workflow")
-        preview_layout = QHBoxLayout(preview_group)
+        self.preview_ik_context_panel = QWidget()
+        preview_ik_layout = QVBoxLayout(self.preview_ik_context_panel)
+        preview_ik_layout.setContentsMargins(6, 6, 6, 6)
+
+        preview_group = QWidget()
+        preview_layout = QVBoxLayout(preview_group)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
         self.plan_preview_button = QPushButton("Plan Preview")
         self.accept_preview_button = QPushButton("Accept Preview")
         self.cancel_preview_button = QPushButton("Cancel Preview")
@@ -310,13 +327,17 @@ class RobotViewer3D(QWidget):
         preview_layout.addWidget(self.plan_preview_button)
         preview_layout.addWidget(self.accept_preview_button)
         preview_layout.addWidget(self.cancel_preview_button)
-        preview_layout.addWidget(QLabel("Alpha"))
-        preview_layout.addWidget(self.preview_alpha)
-        panel.addWidget(preview_group)
+        alpha_row = QHBoxLayout()
+        alpha_row.addWidget(QLabel("Alpha"))
+        alpha_row.addWidget(self.preview_alpha)
+        preview_layout.addLayout(alpha_row)
+        preview_ik_layout.addWidget(preview_group)
 
-        trajectory_group = QGroupBox("Trajectory / ghosts")
+        trajectory_group = QWidget()
         trajectory_layout = QFormLayout(trajectory_group)
-        self.generate_button = QPushButton("Generate demo trajectory")
+        trajectory_layout.setContentsMargins(0, 8, 0, 0)
+        trajectory_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        self.generate_button = QPushButton("Demo trajectory")
         self.generate_button.clicked.connect(self.generate_demo_trajectory)
         self.play_button = QPushButton("Play")
         self.play_button.clicked.connect(self.toggle_playback)
@@ -339,11 +360,12 @@ class RobotViewer3D(QWidget):
         trajectory_layout.addRow("Frame", self.frame_slider)
         trajectory_layout.addRow("Ghost stride", self.ghost_stride)
         trajectory_layout.addRow("Ghost alpha", self.ghost_alpha)
-        panel.addWidget(trajectory_group)
+        trajectory_context_layout.addWidget(trajectory_group)
 
         editor_tabs = QTabWidget()
-        joint_group = QGroupBox("Controllable joints")
+        joint_group = QWidget()
         joint_layout = QVBoxLayout(joint_group)
+        joint_layout.setContentsMargins(6, 6, 6, 6)
         if self.robot_state:
             for name in self.robot_state.get_joint_names():
                 control = JointControl(
@@ -362,28 +384,8 @@ class RobotViewer3D(QWidget):
         scroll.setWidget(joint_group)
         editor_tabs.addTab(scroll, "Joint angles")
         editor_tabs.addTab(self._build_ik_settings_widget(), "IK controls")
-        panel.addWidget(editor_tabs, 1)
-        self.controls_sidebar = CollapsibleSidebar(
-            "3D",
-            controls,
-            side="right",
-            minimum_expanded_width=320,
-            maximum_expanded_width=430,
-        )
-        self.viewer_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.viewer_splitter.setChildrenCollapsible(False)
-        self.viewer_splitter.setHandleWidth(4)
-        self.viewer_splitter.addWidget(self.canvas)
-        self.viewer_splitter.addWidget(self.controls_sidebar)
-        self.viewer_splitter.setStretchFactor(0, 1)
-        self.viewer_splitter.setStretchFactor(1, 0)
-        self.viewer_splitter.setSizes([900, 380])
-        self.viewer_splitter.splitterMoved.connect(
-            lambda position, index: self.controls_sidebar.remember_width(
-                self.viewer_splitter.sizes()[1]
-            )
-        )
-        root.addWidget(self.viewer_splitter)
+        preview_ik_layout.addWidget(editor_tabs)
+        root.addWidget(self.canvas)
 
         enabled = self.robot_state is not None
         self.reset_button.setEnabled(enabled)
@@ -391,9 +393,27 @@ class RobotViewer3D(QWidget):
         self.load_trajectory_button.setEnabled(enabled)
         self.save_qpos_button.setEnabled(enabled)
         self.save_trajectory_button.setEnabled(enabled)
-        target_group.setEnabled(enabled)
+        self.selection_context_panel.setEnabled(enabled)
         trajectory_group.setEnabled(enabled)
         preview_group.setEnabled(enabled)
+
+    def sidebar_context_widget(self):
+        return self.sidebar_controls
+
+    def robot_context_widget(self):
+        return self.robot_context_panel
+
+    def selection_context_widget(self):
+        return self.selection_context_panel
+
+    def trajectory_context_widget(self):
+        return self.trajectory_context_panel
+
+    def display_context_widget(self):
+        return self.display_context_panel
+
+    def preview_ik_context_widget(self):
+        return self.preview_ik_context_panel
 
     def _build_ik_settings_widget(self):
         content = QWidget()
@@ -890,7 +910,7 @@ class RobotViewer3D(QWidget):
                 f"Cannot plan preview: {validation.message}."
             )
             return
-        self.set_robot_trajectory(planned)
+        self.set_robot_trajectory(planned, activate_first_frame=False)
         self.show_ghosts.setChecked(True)
         self.status_label.setText(
             "Planned committed-to-preview path; no timeline state was changed."
@@ -1268,7 +1288,7 @@ class RobotViewer3D(QWidget):
         suffix = " (preview)" if self.preview_active else " (committed)"
         self.root_pose_label.setText(f"{x:+.3f}, {y:+.3f}, {z:+.3f} m{suffix}")
 
-    def set_robot_trajectory(self, qposes, times=None):
+    def set_robot_trajectory(self, qposes, times=None, activate_first_frame=True):
         if not self.robot_state:
             return
         valid = []
@@ -1287,10 +1307,14 @@ class RobotViewer3D(QWidget):
         self.robot_trajectory = valid
         self.robot_trajectory_times = valid_times
         self.ghost_trajectory = list(valid)
+        signals_were_blocked = self.frame_slider.blockSignals(
+            not activate_first_frame
+        )
         self.frame_slider.setRange(0, max(0, len(valid) - 1))
         self.frame_slider.setValue(0)
+        self.frame_slider.blockSignals(signals_were_blocked)
         self._rebuild_ghosts()
-        if valid:
+        if valid and activate_first_frame:
             self.set_trajectory_frame(0)
             self.status_label.setText(f"Loaded {len(valid)} robot trajectory states.")
 

@@ -16,7 +16,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -41,7 +40,7 @@ from .viewer_2d_stickman import Stickman2DViewer
 from .viewer_3d_mujoco import Mujoco3DViewerPanel
 from .backend_interface import BackendInterface
 from .model_reference import MujocoReferenceFrames
-from .collapsible_sidebar import CollapsibleSidebar
+from .app_sidebars import AppLeftSidebar, AppRightSidebar
 from .robot_model_adapter import MuJoCoRobotAdapter
 from .robot_model_registry import ROBOT_MODELS
 from .model_importer import (
@@ -174,20 +173,17 @@ class RobotGuiMainWindow(QMainWindow):
         self.model_loading_dialog = None
         self.viewer_tabs = self.build_viewer_tabs()
         self.status_panel = self.build_status_panel()
-        self.left_sidebar = CollapsibleSidebar(
-            "Frames",
-            self.controls,
-            side="left",
-            minimum_expanded_width=300,
-            maximum_expanded_width=560,
-        )
-        self.right_sidebar = CollapsibleSidebar(
-            "Status",
+        self.left_sidebar_content = AppLeftSidebar(self.controls, self.viewer_tabs)
+        self.right_sidebar_content = AppRightSidebar(
             self.status_panel,
-            side="right",
-            minimum_expanded_width=350,
-            maximum_expanded_width=520,
+            base_sections=self.controls.inspector_sections(),
         )
+        self.left_sidebar = self.left_sidebar_content
+        self.right_sidebar = self.right_sidebar_content
+        self.left_sidebar.setMinimumWidth(200)
+        self.left_sidebar.setMaximumWidth(300)
+        self.right_sidebar.setMinimumWidth(200)
+        self.right_sidebar.setMaximumWidth(300)
 
         self.connect_signals()
         self.set_current_frame_to_model_reference(
@@ -198,8 +194,8 @@ class RobotGuiMainWindow(QMainWindow):
         # --------------------------------------------------------
         # Layout
         # --------------------------------------------------------
-        # Persistent splitter children resize/hide in place. The 3D viewer is
-        # never recreated, so collapsing a sidebar retains its OpenGL context.
+        # Persistent splitter children resize in place. The 3D viewer is never
+        # recreated, so resizing sidebars retains its OpenGL context.
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.main_splitter.setChildrenCollapsible(False)
         self.main_splitter.setHandleWidth(5)
@@ -209,27 +205,12 @@ class RobotGuiMainWindow(QMainWindow):
         self.main_splitter.setStretchFactor(0, 0)
         self.main_splitter.setStretchFactor(1, 1)
         self.main_splitter.setStretchFactor(2, 0)
-        self.main_splitter.setSizes([380, 900, 390])
-        self.main_splitter.splitterMoved.connect(self.remember_sidebar_widths)
+        self.main_splitter.setSizes([200, 900, 210])
         self.setCentralWidget(self.main_splitter)
 
-        self.toggle_left_shortcut = QShortcut(QKeySequence("Ctrl+["), self)
-        self.toggle_left_shortcut.activated.connect(
-            self.left_sidebar.toggle_collapsed
-        )
-        self.toggle_right_shortcut = QShortcut(QKeySequence("Ctrl+]"), self)
-        self.toggle_right_shortcut.activated.connect(
-            self.right_sidebar.toggle_collapsed
-        )
-
         # Initial view
+        self.update_editor_context()
         self.refresh_display()
-
-    def remember_sidebar_widths(self, position=None, index=None):
-        sizes = self.main_splitter.sizes()
-        if len(sizes) == 3:
-            self.left_sidebar.remember_width(sizes[0])
-            self.right_sidebar.remember_width(sizes[2])
 
     def register_model_info(self, info):
         if info.key not in self.model_registry:
@@ -255,7 +236,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.backend_label = QLabel()
         self.status_text = QTextEdit()
         self.status_text.setReadOnly(True)
-        self.status_text.setMinimumWidth(330)
+        self.status_text.setMinimumWidth(150)
 
         layout.addWidget(self.backend_label)
         layout.addWidget(self.status_text)
@@ -270,10 +251,36 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_2d_skeleton_stack = QStackedWidget()
         self.viewer_2d_skeleton_stack.addWidget(self.viewer_2d_stickman)
         tabs.addTab(self.viewer_2d, "2D Side View")
-        tabs.addTab(self.viewer_3d_stack, "3D View")
+        tabs.addTab(self.viewer_3d_stack, "3D Pose")
         tabs.addTab(self.viewer_2d_skeleton_stack, "2D Skeleton")
-        tabs.addTab(self.viewer_3d_mujoco, "3D MuJoCo")
+        tabs.addTab(self.viewer_3d_mujoco, "Simulation")
+        tabs.currentChanged.connect(self.update_editor_context)
         return tabs
+
+    def update_editor_context(self, index=None):
+        active = self.viewer_tabs.currentWidget()
+        if active is self.viewer_3d_stack:
+            self.controls.set_robot_context_widget(
+                self.viewer_3d.robot_context_widget()
+            )
+            self.controls.set_selection_context_widget(
+                self.viewer_3d.selection_context_widget()
+            )
+            self.controls.set_trajectory_context_widget(
+                self.viewer_3d.trajectory_context_widget()
+            )
+            self.controls.set_display_context_widget(
+                self.viewer_3d.display_context_widget()
+            )
+            self.controls.set_preview_ik_context_widget(
+                self.viewer_3d.preview_ik_context_widget()
+            )
+        else:
+            self.controls.set_robot_context_widget(None)
+            self.controls.set_selection_context_widget(None)
+            self.controls.set_trajectory_context_widget(None)
+            self.controls.set_display_context_widget(None)
+            self.controls.set_preview_ik_context_widget(None)
 
     # ============================================================
     # Signal connections
@@ -453,6 +460,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.setWindowTitle(
             f"Reference Frame Trajectory GUI — {session.adapter.model_name}"
         )
+        self.update_editor_context()
         self.refresh_display(apply_stickman_frame=False)
 
     def on_trajectory_csv_loaded(self, csv_path):
