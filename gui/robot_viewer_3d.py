@@ -749,11 +749,18 @@ class RobotViewer3D(QWidget):
         active_task_count = selected_task_count + (
             0 if is_free_root else len(secondary_tasks)
         )
+        singularity_note = ""
+        if result.near_singularity:
+            singularity_note = (
+                f"; near singularity sigma_min={result.min_singular_value:.2e}, "
+                f"cond={result.condition_number:.1e}"
+            )
         self._last_ik_status = (
             f"{'TCP free translate; ' if self.canvas.gizmo.state.name == 'DRAG_TRANSLATE_FREE' else ''}"
             f"{result.status}; accepted={result.accepted_fraction:.0%}; "
             f"IK error={result.ik_error:.4f}; tasks={active_task_count}; "
-            f"frame={logical_frame}; model={model_name}; preview not committed"
+            f"frame={logical_frame}; model={model_name}{singularity_note}; "
+            "preview not committed"
         )
         self.status_label.setText(self._last_ik_status)
         roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
@@ -804,7 +811,25 @@ class RobotViewer3D(QWidget):
         if not self.preview_active:
             self.status_label.setText("No preview changes to accept.")
             return
-        self.committed_state.set_qpos(self.preview_state.get_qpos())
+        preview_qpos = self.preview_state.get_qpos()
+        if not np.all(np.isfinite(preview_qpos)):
+            self.status_label.setText(
+                "Cannot accept preview: preview pose contains non-finite qpos values."
+            )
+            return
+        collisions = (
+            self.collision_checker.get_collisions(self.preview_state)
+            if self.collision_checker else []
+        )
+        if collisions:
+            names = ", ".join(
+                f"{item.geom1} ↔ {item.geom2}" for item in collisions[:2]
+            )
+            self.status_label.setText(
+                f"Cannot accept preview: collision detected ({names})."
+            )
+            return
+        self.committed_state.set_qpos(preview_qpos)
         self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False

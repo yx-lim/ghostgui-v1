@@ -78,6 +78,9 @@ class DragSolveResult:
     status: str
     ik_error: float = 0.0
     collisions: list[Collision] = field(default_factory=list)
+    near_singularity: bool = False
+    min_singular_value: float = float("inf")
+    condition_number: float = 0.0
 
 
 class CollisionAwareIKSolver:
@@ -121,6 +124,9 @@ class CollisionAwareIKSolver:
         accepted_quaternion = np.asarray(start_quaternion, dtype=float).copy()
         accepted_fraction = 0.0
         last_error = 0.0
+        near_singularity = False
+        min_singular_value = float("inf")
+        condition_number = 0.0
         blocked_collisions = []
         blocked_reason = None
         settings = dict(solver_settings or {})
@@ -224,8 +230,20 @@ class CollisionAwareIKSolver:
                 )
             last_error = ik_result.error
             if not ik_result.success:
+                near_singularity = near_singularity or ik_result.near_singularity
+                min_singular_value = min(
+                    min_singular_value, ik_result.min_singular_value
+                )
+                condition_number = max(
+                    condition_number, ik_result.condition_number
+                )
                 blocked_reason = f"IK blocked drag: {ik_result.message}"
                 break
+            near_singularity = near_singularity or ik_result.near_singularity
+            min_singular_value = min(
+                min_singular_value, ik_result.min_singular_value
+            )
+            condition_number = max(condition_number, ik_result.condition_number)
 
             blocked_collisions = self.collision_checker.get_collisions(
                 self.candidate_state
@@ -261,6 +279,9 @@ class CollisionAwareIKSolver:
                 blocked_reason,
                 last_error,
                 blocked_collisions,
+                near_singularity,
+                min_singular_value,
+                condition_number,
             )
         return DragSolveResult(
             accepted_qpos,
@@ -271,4 +292,7 @@ class CollisionAwareIKSolver:
             f"{ik_result.message}; state is collision-free",
             last_error,
             [],
+            near_singularity,
+            min_singular_value,
+            condition_number,
         )

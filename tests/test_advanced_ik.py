@@ -7,7 +7,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from gui.ik_tasks import FootLockTask, JointRegularizationTask, PostureTask, RootPoseTask
+from gui.ik_tasks import (
+    FootLockTask,
+    JointRegularizationTask,
+    PostureTask,
+    RootPoseTask,
+    TaskLinearization,
+)
+from gui.collision_checker import DragSolveResult
 from gui.main_window import RobotGuiMainWindow
 from gui.robot_model_adapter import MuJoCoRobotAdapter
 from gui.backend_interface import MujocoIKBackend
@@ -40,6 +47,108 @@ class AdvancedIKTests(unittest.TestCase):
             )
         self.assertEqual(deltas[0.0], 0.0)
         self.assertGreater(deltas[3.0], deltas[0.0])
+
+    def test_unreachable_limb_ik_stays_inside_joint_limits_and_root_structure(self):
+        model = MuJoCoRobotAdapter("g1")
+        state = model.create_state()
+        root_before = state.get_qpos()[:7].copy()
+        position, _ = state.get_body_pose("robot/right_palm", "site")
+
+        result = state.solve_ik(
+            "robot/right_palm",
+            position + np.array([2.0, 0.0, 1.0]),
+            kind="site",
+            max_iterations=12,
+            damping=0.001,
+            step_size=1.0,
+            max_step=10.0,
+        )
+
+        self.assertFalse(result.success)
+        np.testing.assert_allclose(state.get_qpos()[:7], root_before)
+        for joint in model.joints.values():
+            if joint.limits is None:
+                continue
+            value = state.get_qpos()[joint.qpos_address]
+            lo, hi = joint.limits
+            self.assertGreaterEqual(value, lo - 1e-9, joint.name)
+            self.assertLessEqual(value, hi + 1e-9, joint.name)
+
+    def test_rank_deficient_ik_falls_back_without_nan_or_exception(self):
+        class RankDeficientTask:
+            enabled = True
+            weight = 1.0
+            priority = 2
+
+            def linearize(self, model, data, dof_addresses, qpos_addresses):
+                return TaskLinearization(
+                    error=np.array([1.0, -1.0]),
+                    jacobian=np.zeros((2, len(dof_addresses))),
+                    error_norm=1.0,
+                    tolerance=0.001,
+                    required=True,
+                )
+
+        model = MuJoCoRobotAdapter("g1")
+        state = model.create_state()
+        before = state.get_qpos()
+
+        result = state.solve_weighted_tasks(
+            [RankDeficientTask()],
+            damping=0.0,
+            max_iterations=2,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("did not converge", result.message)
+        self.assertTrue(result.near_singularity)
+        self.assertEqual(result.min_singular_value, 0.0)
+        self.assertEqual(result.condition_number, float("inf"))
+        self.assertTrue(np.isfinite(result.error))
+        np.testing.assert_allclose(state.get_qpos(), before)
+        self.assertTrue(np.all(np.isfinite(state.get_qpos())))
+
+    def test_drag_status_reports_near_singularity_warning(self):
+        class SingularDragSolver:
+            def solve_drag(
+                self,
+                current_qpos,
+                start_position,
+                start_quaternion,
+                proposed_position,
+                proposed_quaternion,
+                **kwargs,
+            ):
+                return DragSolveResult(
+                    np.asarray(current_qpos, dtype=float).copy(),
+                    np.asarray(proposed_position, dtype=float).copy(),
+                    np.asarray(proposed_quaternion, dtype=float).copy(),
+                    1.0,
+                    True,
+                    "Weighted IK converged",
+                    0.0,
+                    [],
+                    True,
+                    0.0,
+                    float("inf"),
+                )
+
+        window = RobotGuiMainWindow("g1")
+        try:
+            viewer = window.viewer_3d
+            viewer.select_target("site", "robot/right_palm", emit=False)
+            viewer._set_target_to_selected_pose()
+            viewer.collision_solver = SingularDragSolver()
+            start = viewer.last_valid_target_position.copy()
+            quaternion = viewer.last_valid_target_quaternion.copy()
+
+            viewer._on_transform_moved(start + np.array([0.01, 0.0, 0.0]), quaternion)
+
+            self.assertIn("near singularity", viewer.status_label.text())
+            self.assertIn("sigma_min=0.00e+00", viewer.status_label.text())
+            self.assertIn("cond=inf", viewer.status_label.text())
+        finally:
+            window.close()
 
     def test_joint_influence_controls_are_model_generated(self):
         g1 = RobotGuiMainWindow("g1")
@@ -153,6 +262,29 @@ class AdvancedIKTests(unittest.TestCase):
                     )
                 finally:
                     window.close()
+
+    def test_colliding_preview_cannot_be_accepted(self):
+        window = RobotGuiMainWindow("g1")
+        try:
+            viewer = window.viewer_3d
+            committed = viewer.committed_state.get_qpos()
+            viewer.begin_preview()
+            qpos = viewer.preview_state.get_qpos()
+            free_joint = next(iter(viewer.robot_model.free_joints_by_body.values()))
+            qpos[free_joint.qpos_address + 2] -= 0.2
+            viewer.preview_state.set_qpos(qpos)
+            self.assertTrue(viewer.collision_checker.get_collisions(
+                viewer.preview_state
+            ))
+
+            viewer.accept_preview()
+
+            np.testing.assert_allclose(viewer.committed_state.get_qpos(), committed)
+            np.testing.assert_allclose(viewer.get_current_keyframe(), committed)
+            self.assertTrue(viewer.preview_active)
+            self.assertIn("Cannot accept preview", viewer.status_label.text())
+        finally:
+            window.close()
 
     def test_batch_ik_solves_hand_position_and_orientation(self):
         adapter = MuJoCoRobotAdapter("g1")

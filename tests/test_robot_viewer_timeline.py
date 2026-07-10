@@ -299,20 +299,23 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertAlmostEqual(frame.yaw, solved_rpy[2], delta=0.011)
 
     def test_load_edit_accept_and_save_headerless_qpos_csv(self):
-        source = Path("crawl_home_qpos_t0.5.csv").resolve()
-        expected = np.loadtxt(source, delimiter=",")
-        self.viewer.load_qpos_csv(source)
-        np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), expected)
-        np.testing.assert_allclose(self.viewer.get_current_keyframe(), expected)
-
-        joint_name = self.viewer.preview_state.get_joint_names()[-1]
-        self.viewer._joint_changed(
-            joint_name,
-            self.viewer.preview_state.get_joint_value(joint_name) + 0.02,
-        )
-        self.viewer.accept_preview()
-
         with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.csv"
+            expected = self.viewer.robot_model.home_qpos.copy()
+            np.savetxt(source, expected[None, :], delimiter=",")
+            self.viewer.load_qpos_csv(source)
+            np.testing.assert_allclose(
+                self.viewer.committed_state.get_qpos(), expected
+            )
+            np.testing.assert_allclose(self.viewer.get_current_keyframe(), expected)
+
+            joint_name = self.viewer.preview_state.get_joint_names()[-1]
+            self.viewer._joint_changed(
+                joint_name,
+                self.viewer.preview_state.get_joint_value(joint_name) + 0.02,
+            )
+            self.viewer.accept_preview()
+
             output = self.viewer.save_qpos_csv(Path(directory) / "updated")
             self.assertEqual(output.suffix, ".csv")
             saved = np.loadtxt(output, delimiter=",")

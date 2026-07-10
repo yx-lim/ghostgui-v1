@@ -52,6 +52,18 @@ class CollisionCheckerTests(unittest.TestCase):
         self.assertTrue(collisions)
         self.assertTrue(any(item.kind == "self" for item in collisions))
 
+    def test_actual_ground_collision_is_reported(self):
+        state = self.model.create_state()
+        qpos = state.get_qpos()
+        free_joint = next(iter(self.model.free_joints_by_body.values()))
+        qpos[free_joint.qpos_address + 2] -= 0.2
+        state.set_qpos(qpos)
+
+        collisions = CollisionChecker(self.model).get_collisions(state)
+
+        self.assertTrue(collisions)
+        self.assertTrue(any(item.kind == "environment" for item in collisions))
+
     def _fake_solver(self, fail=False):
         solver = CollisionAwareIKSolver.__new__(CollisionAwareIKSolver)
         solver.candidate_state = FakeCandidateState(fail=fail)
@@ -82,6 +94,33 @@ class CollisionCheckerTests(unittest.TestCase):
         self.assertFalse(result.success)
         np.testing.assert_allclose(result.qpos, start)
         self.assertEqual(result.accepted_fraction, 0.0)
+
+    def test_ground_collision_blocks_free_root_drag(self):
+        state = self.model.create_state()
+        start_qpos = state.get_qpos()
+        start_position, start_quaternion = state.get_body_pose("robot/pelvis", "body")
+        solver = CollisionAwareIKSolver(
+            self.model,
+            CollisionChecker(self.model),
+            collision_drag_substeps=8,
+            orientation_weight=0.0,
+        )
+
+        result = solver.solve_drag(
+            start_qpos,
+            start_position,
+            start_quaternion,
+            start_position + np.array([0.0, 0.0, -0.2]),
+            start_quaternion,
+            object_name="robot/pelvis",
+            kind="body",
+            tcp_orientation_weight=0.0,
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.accepted_fraction, 0.0)
+        np.testing.assert_allclose(result.qpos, start_qpos)
+        self.assertTrue(any(item.kind == "environment" for item in result.collisions))
 
 
 if __name__ == "__main__":

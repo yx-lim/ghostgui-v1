@@ -43,6 +43,9 @@ class IKResult:
     error: float
     iterations: int
     message: str
+    near_singularity: bool = False
+    min_singular_value: float = float("inf")
+    condition_number: float = 0.0
 
 
 class RobotModel3D:
@@ -186,6 +189,9 @@ class RobotModel3D:
 class RobotState3D:
     """Mutable qpos and FK state backed by one persistent ``MjData`` object."""
 
+    SINGULARITY_MIN_SINGULAR_VALUE = 1e-4
+    SINGULARITY_CONDITION_NUMBER = 1e3
+
     def __init__(self, robot_model: RobotModel3D):
         self.robot_model = robot_model
         self.mj_model = robot_model.mj_model
@@ -279,6 +285,23 @@ class RobotState3D:
                 self.mj_data.qpos[joint.qpos_address] = np.clip(
                     self.mj_data.qpos[joint.qpos_address], *joint.limits
                 )
+
+    @classmethod
+    def _singularity_metrics(cls, jacobian):
+        singular_values = np.linalg.svd(jacobian, compute_uv=False)
+        if singular_values.size == 0:
+            return False, float("inf"), 0.0
+        sigma_max = float(singular_values[0])
+        sigma_min = float(singular_values[-1])
+        if sigma_min <= 1e-12:
+            condition_number = float("inf")
+        else:
+            condition_number = sigma_max / sigma_min
+        near_singularity = (
+            sigma_min < cls.SINGULARITY_MIN_SINGULAR_VALUE
+            or condition_number > cls.SINGULARITY_CONDITION_NUMBER
+        )
+        return near_singularity, sigma_min, condition_number
 
     def solve_ik(
         self,
@@ -416,12 +439,27 @@ class RobotState3D:
 
         final_error = float("inf")
         active_count = len(enabled_tasks)
+        near_singularity = False
+        min_singular_value = float("inf")
+        condition_number = 0.0
         for iteration in range(max(1, int(max_iterations))):
             self.forward_kinematics()
             linearizations = [
                 task.linearize(self.mj_model, self.mj_data, dofs, qpos_addresses)
                 for task in enabled_tasks
             ]
+            jacobian = np.vstack([item.jacobian for item in linearizations])
+            weighted_jacobian = jacobian * influence[np.newaxis, :]
+            (
+                current_near_singularity,
+                current_min_singular_value,
+                current_condition_number,
+            ) = self._singularity_metrics(weighted_jacobian)
+            near_singularity = near_singularity or current_near_singularity
+            min_singular_value = min(
+                min_singular_value, current_min_singular_value
+            )
+            condition_number = max(condition_number, current_condition_number)
             required = [item for item in linearizations if item.required]
             convergence_set = required or linearizations
             final_error = max(
@@ -433,11 +471,12 @@ class RobotState3D:
                 return IKResult(
                     True, final_error, iteration,
                     f"Weighted IK converged ({active_count} active tasks)",
+                    near_singularity,
+                    min_singular_value,
+                    condition_number,
                 )
 
             error = np.concatenate([item.error for item in linearizations])
-            jacobian = np.vstack([item.jacobian for item in linearizations])
-            weighted_jacobian = jacobian * influence[np.newaxis, :]
             lhs = (
                 weighted_jacobian @ jacobian.T
                 + float(damping) ** 2 * np.eye(jacobian.shape[0])
@@ -457,6 +496,16 @@ class RobotState3D:
             task.linearize(self.mj_model, self.mj_data, dofs, qpos_addresses)
             for task in enabled_tasks
         ]
+        jacobian = np.vstack([item.jacobian for item in linearizations])
+        weighted_jacobian = jacobian * influence[np.newaxis, :]
+        (
+            current_near_singularity,
+            current_min_singular_value,
+            current_condition_number,
+        ) = self._singularity_metrics(weighted_jacobian)
+        near_singularity = near_singularity or current_near_singularity
+        min_singular_value = min(min_singular_value, current_min_singular_value)
+        condition_number = max(condition_number, current_condition_number)
         required = [item for item in linearizations if item.required]
         convergence_set = required or linearizations
         final_error = max(
@@ -471,7 +520,15 @@ class RobotState3D:
             if success else
             f"Weighted IK did not converge ({active_count} active tasks)"
         )
-        return IKResult(success, final_error, max_iterations, message)
+        return IKResult(
+            success,
+            final_error,
+            max_iterations,
+            message,
+            near_singularity,
+            min_singular_value,
+            condition_number,
+        )
 
 
 class RobotStateTimeline:
