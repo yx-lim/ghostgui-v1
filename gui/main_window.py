@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from .trajectory import Trajectory, SampledTrajectory, quat_to_rpy
+from .trajectory import Trajectory, SampledTrajectory, quat_to_rpy, rpy_to_quat
 from .controls import TrajectoryControlPanel
 from .viewer_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
@@ -463,9 +463,15 @@ class RobotGuiMainWindow(QMainWindow):
         Called when sliders change.
 
         If a keyframe is selected, we only preview the target frame.
-        The actual keyframe is overwritten only when user clicks Update.
+        The committed keyframe is overwritten only when the preview is accepted.
         """
 
+        frame_name = self.controls.frame_box.currentText()
+        self.viewer_3d.preview_target_pose(
+            frame_name,
+            (x, y, z),
+            rpy_to_quat(roll, pitch, yaw),
+        )
         self.refresh_display()
 
     def on_time_changed(self, time):

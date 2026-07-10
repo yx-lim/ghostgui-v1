@@ -543,6 +543,23 @@ class RobotViewer3D(QWidget):
         self.last_valid_target_quaternion = quaternion.copy()
         self._update_root_pose_label()
 
+    def preview_target_pose(self, frame_name, position, quaternion):
+        binding = self.frame_bindings.get(frame_name)
+        if binding is None:
+            self.status_label.setText(
+                f"Frame {frame_name!r} has no editable 3D body/site target."
+            )
+            return False
+        if not self.select_target(*binding, emit=False):
+            self.status_label.setText(
+                f"Frame {frame_name!r} is not selectable in the 3D viewer."
+            )
+            return False
+        if self.last_valid_target_position is None:
+            self._set_target_to_selected_pose()
+        self._on_transform_moved(position, quaternion)
+        return True
+
     def _joint_changed(self, name, value):
         self.begin_preview()
         self.preview_state.set_joint_value(name, value)

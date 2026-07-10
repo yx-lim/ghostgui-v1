@@ -121,6 +121,41 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertFalse(self.viewer.preview_active)
 
+    def test_target_pose_sliders_update_3d_preview_only_until_accept(self):
+        self.viewer.select_target("body", "robot/pelvis", emit=False)
+        self.viewer._set_target_to_selected_pose()
+        self.window.controls.frame_box.setCurrentText("pelvis")
+        start_position = self.viewer.last_valid_target_position.copy()
+        start_quaternion = self.viewer.last_valid_target_quaternion.copy()
+        root_address = next(
+            iter(self.viewer.robot_model.free_joints_by_body.values())
+        ).qpos_address
+        before = self.viewer.committed_state.get_qpos()
+
+        self.window.controls.set_position_values(
+            x=float(start_position[0] + 0.01),
+            y=float(start_position[1]),
+            z=float(start_position[2]),
+            roll=0.02,
+            pitch=-0.01,
+            yaw=0.03,
+        )
+
+        np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), before)
+        np.testing.assert_allclose(self.viewer.get_current_keyframe(), before)
+        self.assertGreater(
+            self.viewer.preview_state.get_qpos()[root_address],
+            before[root_address],
+        )
+        self.assertFalse(
+            np.allclose(
+                self.viewer.preview_state.get_qpos()[root_address + 3:root_address + 7],
+                start_quaternion,
+            )
+        )
+        self.assertTrue(self.viewer.preview_active)
+        self.assertTrue(self.viewer.canvas.preview_visible)
+
     def test_cancel_discards_preview_without_touching_committed(self):
         before = self.viewer.committed_state.get_qpos()
         name = self.viewer.preview_state.get_joint_names()[-1]
