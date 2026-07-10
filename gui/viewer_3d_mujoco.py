@@ -131,10 +131,9 @@ class Mujoco3DViewerPanel(QWidget):
             return
 
         try:
-            with open(self.trajectory_csv_path, "r", newline="") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    self.trajectory_times.append(float(row["time"]))
+            self.trajectory_times = self._read_timeline_times(
+                self.trajectory_csv_path
+            )
         except Exception as exc:
             self.log_box.append(f"Could not read trajectory CSV: {exc}")
             self.trajectory_times = []
@@ -143,6 +142,58 @@ class Mujoco3DViewerPanel(QWidget):
         self.timeline_slider.setMaximum(max_index)
         self.timeline_slider.setValue(0)
         self.update_time_label(0)
+
+    def _active_qpos_width(self):
+        if self.adapter is None:
+            return None
+        home_qpos = getattr(self.adapter, "home_qpos", None)
+        if home_qpos is None:
+            return None
+        return len(home_qpos)
+
+    def _read_timeline_times(self, csv_path):
+        with open(csv_path, "r", newline="") as f:
+            raw_rows = [
+                row
+                for row in csv.reader(f)
+                if any(cell.strip() for cell in row)
+            ]
+
+        if not raw_rows:
+            return []
+
+        header = [cell.strip() for cell in raw_rows[0]]
+        if "time" in header:
+            time_column = header.index("time")
+            return [
+                float(row[time_column])
+                for row in raw_rows[1:]
+                if len(row) > time_column and row[time_column].strip()
+            ]
+
+        numeric_rows = [
+            [float(cell.strip()) for cell in row]
+            for row in raw_rows
+        ]
+        qpos_width = self._active_qpos_width()
+        row_widths = {len(row) for row in numeric_rows}
+
+        if qpos_width is not None and row_widths == {qpos_width + 1}:
+            return [row[0] for row in numeric_rows]
+        if qpos_width is not None and row_widths == {qpos_width}:
+            return [float(index) for index in range(len(numeric_rows))]
+        if self._first_numeric_column_looks_like_time(numeric_rows):
+            return [row[0] for row in numeric_rows]
+        return [float(index) for index in range(len(numeric_rows))]
+
+    def _first_numeric_column_looks_like_time(self, numeric_rows):
+        if any(len(row) < 2 for row in numeric_rows):
+            return False
+        times = [row[0] for row in numeric_rows]
+        return all(
+            earlier <= later
+            for earlier, later in zip(times, times[1:])
+        )
 
     def set_trajectory_csv(self, csv_path):
         """

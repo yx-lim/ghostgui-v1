@@ -49,7 +49,7 @@ def read_stdin_commands(command_queue):
             command_queue.put(line)
 
 
-def load_trajectory_csv(csv_path):
+def load_trajectory_csv(csv_path, qpos_width=None):
     path = Path(csv_path).expanduser().resolve()
 
     if not path.exists():
@@ -63,7 +63,8 @@ def load_trajectory_csv(csv_path):
         ]
 
     # Pose files saved by GhostGUI's live 3D editor are headerless qpos rows.
-    # Keep supporting the existing named trajectory format as the fallback.
+    # The passive viewer also accepts headerless trajectory rows as
+    # time,qpos..., once the caller provides the active model width.
     if raw_rows:
         try:
             numeric_rows = [
@@ -73,6 +74,19 @@ def load_trajectory_csv(csv_path):
         except ValueError:
             numeric_rows = None
         if numeric_rows is not None:
+            if qpos_width is not None:
+                rows = []
+                for index, values in enumerate(numeric_rows):
+                    if len(values) == qpos_width + 1:
+                        rows.append(
+                            {"time": values[0], RAW_QPOS_KEY: values[1:]}
+                        )
+                    else:
+                        rows.append(
+                            {"time": float(index), RAW_QPOS_KEY: values}
+                        )
+                return path, rows
+
             return path, [
                 {"time": float(index), RAW_QPOS_KEY: qpos}
                 for index, qpos in enumerate(numeric_rows)
@@ -129,7 +143,7 @@ class TrajectoryPlayer:
         return mapping
 
     def load_csv(self, csv_path):
-        path, rows = load_trajectory_csv(csv_path)
+        path, rows = load_trajectory_csv(csv_path, qpos_width=self.model.nq)
         for row in rows:
             raw_qpos = row.get(RAW_QPOS_KEY)
             if raw_qpos is not None and len(raw_qpos) != self.model.nq:

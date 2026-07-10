@@ -10,9 +10,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from gui.collision_checker import Collision
+from gui.backend_interface import PythonRobotConfiguration
 from gui.main_window import RobotGuiMainWindow
 from gui.transform_gizmo import GizmoInteractionState
 from gui.trajectory import quat_to_rpy, rpy_to_quat
+from scripts.view_g1_mujoco import RAW_QPOS_KEY, load_trajectory_csv
 
 
 class RobotViewerTimelineTests(unittest.TestCase):
@@ -416,6 +418,82 @@ class RobotViewerTimelineTests(unittest.TestCase):
             saved = np.loadtxt(output, delimiter=",")
         np.testing.assert_allclose(saved, self.viewer.committed_state.get_qpos())
         self.assertFalse(np.allclose(saved, expected))
+
+    def test_save_timeline_as_headerless_time_plus_qpos_csv(self):
+        at_zero = self.viewer.get_current_keyframe()
+        self.viewer.set_current_time(0.2)
+        changed = self.viewer.committed_state.get_qpos()
+        changed[-1] += 0.05
+        self.viewer.set_robot_state_for_current_time(changed)
+        self.viewer.update_current_keyframe_from_robot_state()
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = self.viewer.save_trajectory_csv(
+                Path(directory) / "timed_trajectory"
+            )
+            saved = np.loadtxt(output, delimiter=",")
+            _, rows = load_trajectory_csv(
+                output, qpos_width=self.viewer.robot_model.mj_model.nq
+            )
+
+        self.assertEqual(output.suffix, ".csv")
+        self.assertEqual(saved.shape, (2, self.viewer.robot_model.mj_model.nq + 1))
+        np.testing.assert_allclose(saved[:, 0], [0.0, 0.2])
+        np.testing.assert_allclose(rows[0][RAW_QPOS_KEY], at_zero)
+        np.testing.assert_allclose(rows[1][RAW_QPOS_KEY], changed)
+
+    def test_save_generated_trajectory_uses_backend_times(self):
+        first = self.viewer.robot_model.home_qpos.copy()
+        second = first.copy()
+        second[-1] += 0.05
+
+        self.viewer.load_backend_states([
+            PythonRobotConfiguration(time=0.0, qpos=first),
+            PythonRobotConfiguration(time=0.1, qpos=second),
+        ])
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = self.viewer.save_trajectory_csv(
+                Path(directory) / "generated_trajectory"
+            )
+            saved = np.loadtxt(output, delimiter=",")
+            _, rows = load_trajectory_csv(
+                output, qpos_width=self.viewer.robot_model.mj_model.nq
+            )
+
+        self.assertEqual(saved.shape, (2, self.viewer.robot_model.mj_model.nq + 1))
+        np.testing.assert_allclose(saved[:, 0], [0.0, 0.1])
+        np.testing.assert_allclose(rows[0][RAW_QPOS_KEY], first)
+        np.testing.assert_allclose(rows[1][RAW_QPOS_KEY], second)
+
+    def test_load_headerless_time_plus_qpos_trajectory_csv(self):
+        first = self.viewer.robot_model.home_qpos.copy()
+        second = first.copy()
+        second[-1] += 0.07
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "trajectory.csv"
+            np.savetxt(
+                source,
+                np.vstack(
+                    [
+                        np.concatenate(([0.0], first)),
+                        np.concatenate(([0.15], second)),
+                    ]
+                ),
+                delimiter=",",
+            )
+            self.viewer.load_trajectory_csv(source)
+            mujoco_panel_path = self.window.viewer_3d_mujoco.trajectory_csv_path
+            mujoco_panel_times = list(self.window.viewer_3d_mujoco.trajectory_times)
+
+        self.assertEqual(len(self.viewer.robot_trajectory), 2)
+        np.testing.assert_allclose(self.viewer.robot_trajectory_times, [0.0, 0.15])
+        np.testing.assert_allclose(self.viewer.robot_trajectory[0], first)
+        np.testing.assert_allclose(self.viewer.robot_trajectory[1], second)
+        np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), first)
+        self.assertEqual(mujoco_panel_path, source)
+        np.testing.assert_allclose(mujoco_panel_times, [0.0, 0.15])
 
     def test_load_qpos_rejects_wrong_value_count(self):
         with tempfile.TemporaryDirectory() as directory:

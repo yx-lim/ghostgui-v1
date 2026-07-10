@@ -306,6 +306,7 @@ class RobotGuiMainWindow(QMainWindow):
         )
         viewer_3d.target_frame_changed.connect(self.on_3d_target_frame_changed)
         viewer_3d.preview_cancelled.connect(self.on_preview_cancelled)
+        viewer_3d.trajectory_csv_loaded.connect(self.on_trajectory_csv_loaded)
         viewer_2d_skeleton.target_dragged.connect(self.on_target_dragged)
 
     def on_model_changed(self, model_key):
@@ -453,6 +454,10 @@ class RobotGuiMainWindow(QMainWindow):
             f"Reference Frame Trajectory GUI — {session.adapter.model_name}"
         )
         self.refresh_display(apply_stickman_frame=False)
+
+    def on_trajectory_csv_loaded(self, csv_path):
+        self.viewer_3d_mujoco.set_trajectory_csv(csv_path)
+        self.status_text.setText(f"Loaded trajectory CSV: {csv_path}")
 
     # ============================================================
     # GUI interaction callbacks

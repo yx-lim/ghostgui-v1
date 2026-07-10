@@ -144,6 +144,7 @@ class RobotViewer3D(QWidget):
     target_pose_drag_finished = Signal(float, float, float, float, float, float)
     target_frame_changed = Signal(str)
     preview_cancelled = Signal()
+    trajectory_csv_loaded = Signal(str)
 
     def __init__(self, robot_model=None, error=None):
         super().__init__()
@@ -179,6 +180,7 @@ class RobotViewer3D(QWidget):
             if robot_model else None
         )
         self.robot_trajectory = []
+        self.robot_trajectory_times = []
         self.ghost_trajectory = []
         self.joint_controls = {}
         self.ik_influence_controls = {}
@@ -242,14 +244,23 @@ class RobotViewer3D(QWidget):
         self.reset_button.clicked.connect(self.reset_robot_pose)
         panel.addWidget(self.reset_button)
 
-        pose_file_row = QHBoxLayout()
+        pose_file_layout = QVBoxLayout()
         self.load_qpos_button = QPushButton("Load qpos CSV")
+        self.load_trajectory_button = QPushButton("Load trajectory CSV")
         self.save_qpos_button = QPushButton("Save qpos CSV")
+        self.save_trajectory_button = QPushButton("Save trajectory CSV")
         self.load_qpos_button.clicked.connect(self.choose_qpos_csv)
+        self.load_trajectory_button.clicked.connect(self.choose_trajectory_csv)
         self.save_qpos_button.clicked.connect(self.choose_qpos_save_path)
-        pose_file_row.addWidget(self.load_qpos_button)
-        pose_file_row.addWidget(self.save_qpos_button)
-        panel.addLayout(pose_file_row)
+        self.save_trajectory_button.clicked.connect(
+            self.choose_trajectory_save_path
+        )
+        pose_file_layout.addWidget(self.load_qpos_button)
+        pose_file_layout.addWidget(self.load_trajectory_button)
+        pose_file_layout.addWidget(self.save_qpos_button)
+        pose_file_layout.addWidget(self.save_trajectory_button)
+
+        panel.addLayout(pose_file_layout)
 
         target_group = QGroupBox("End-effector transform gizmo")
         target_layout = QFormLayout(target_group)
@@ -377,7 +388,9 @@ class RobotViewer3D(QWidget):
         enabled = self.robot_state is not None
         self.reset_button.setEnabled(enabled)
         self.load_qpos_button.setEnabled(enabled)
+        self.load_trajectory_button.setEnabled(enabled)
         self.save_qpos_button.setEnabled(enabled)
+        self.save_trajectory_button.setEnabled(enabled)
         target_group.setEnabled(enabled)
         trajectory_group.setEnabled(enabled)
         preview_group.setEnabled(enabled)
@@ -877,14 +890,8 @@ class RobotViewer3D(QWidget):
                 f"Cannot plan preview: {validation.message}."
             )
             return
-        self.robot_trajectory = planned
-        self.ghost_trajectory = list(planned)
-        self.frame_slider.blockSignals(True)
-        self.frame_slider.setRange(0, len(planned) - 1)
-        self.frame_slider.setValue(0)
-        self.frame_slider.blockSignals(False)
+        self.set_robot_trajectory(planned)
         self.show_ghosts.setChecked(True)
-        self._rebuild_ghosts()
         self.status_label.setText(
             "Planned committed-to-preview path; no timeline state was changed."
         )
@@ -1043,6 +1050,21 @@ class RobotViewer3D(QWidget):
             except (OSError, ValueError) as exc:
                 self.status_label.setText(f"Could not load qpos CSV: {exc}")
 
+    def choose_trajectory_csv(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load robot trajectory",
+            str(Path.cwd()),
+            "CSV files (*.csv);;All files (*)",
+        )
+        if path:
+            try:
+                self.load_trajectory_csv(path)
+            except (OSError, ValueError) as exc:
+                self.status_label.setText(
+                    f"Could not load trajectory CSV: {exc}"
+                )
+
     def choose_qpos_save_path(self):
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -1055,6 +1077,21 @@ class RobotViewer3D(QWidget):
                 self.save_qpos_csv(path)
             except OSError as exc:
                 self.status_label.setText(f"Could not save qpos CSV: {exc}")
+
+    def choose_trajectory_save_path(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save robot trajectory",
+            str(Path.cwd() / "robot_trajectory.csv"),
+            "CSV files (*.csv);;All files (*)",
+        )
+        if path:
+            try:
+                self.save_trajectory_csv(path)
+            except (OSError, ValueError) as exc:
+                self.status_label.setText(
+                    f"Could not save trajectory CSV: {exc}"
+                )
 
     def load_qpos_csv(self, csv_path):
         """Load one headerless MuJoCo qpos row into the active keyframe."""
@@ -1088,6 +1125,52 @@ class RobotViewer3D(QWidget):
             f"t={self.current_time:.2f} s"
         )
 
+    def load_trajectory_csv(self, csv_path):
+        """Load headerless time,qpos rows into the generated trajectory player."""
+        path = Path(csv_path).expanduser().resolve()
+        with path.open("r", newline="") as handle:
+            rows = [
+                row
+                for row in csv.reader(handle)
+                if any(cell.strip() for cell in row)
+            ]
+        if not rows:
+            raise ValueError("the file is empty")
+
+        expected = int(self.robot_model.mj_model.nq)
+        qposes = []
+        times = []
+        for row_index, row in enumerate(rows, start=1):
+            try:
+                values = [float(cell.strip()) for cell in row]
+            except ValueError as exc:
+                raise ValueError(
+                    "expected headerless numeric rows containing time plus qpos"
+                ) from exc
+            if len(values) != expected + 1:
+                raise ValueError(
+                    f"expected {expected + 1} values per trajectory row "
+                    f"(time plus {expected} qpos values), found "
+                    f"{len(values)} on row {row_index}"
+                )
+            if not np.all(np.isfinite(values)):
+                raise ValueError(f"non-finite value on row {row_index}")
+            times.append(values[0])
+            qposes.append(np.asarray(values[1:], dtype=float))
+
+        if any(earlier > later for earlier, later in zip(times, times[1:])):
+            raise ValueError("trajectory times must be nondecreasing")
+
+        self.pause_playback()
+        self.canvas.cancel_transform_drag()
+        self.set_robot_trajectory(qposes, times=times)
+        duration = times[-1] if times else 0.0
+        self.status_label.setText(
+            f"Loaded {len(qposes)} timed qpos trajectory states from "
+            f"{path.name} ({duration:.3f} s)"
+        )
+        self.trajectory_csv_loaded.emit(str(path))
+
     def save_qpos_csv(self, csv_path):
         """Save the committed active keyframe as one headerless qpos row."""
         path = Path(csv_path).expanduser()
@@ -1102,6 +1185,57 @@ class RobotViewer3D(QWidget):
             "; unaccepted preview was not saved" if self.preview_active else ""
         )
         self.status_label.setText(f"Saved committed qpos to {path}{preview_note}")
+        return path
+
+    def save_trajectory_csv(self, csv_path):
+        """Save generated trajectory rows, falling back to editable timeline rows."""
+        if not self.state_timeline:
+            raise ValueError("no robot timeline is available")
+
+        path = Path(csv_path).expanduser()
+        if path.suffix.lower() != ".csv":
+            path = path.with_suffix(".csv")
+        path = path.resolve()
+
+        expected = int(self.robot_model.mj_model.nq)
+        source_name = "generated trajectory"
+
+        if self.robot_trajectory:
+            qposes = self.robot_trajectory
+            times = self.robot_trajectory_times
+            if len(times) != len(qposes):
+                times = [float(index) for index in range(len(qposes))]
+        else:
+            self.state_timeline.set_state(
+                self.current_time, self.committed_state.get_qpos()
+            )
+            times = self.state_timeline.times()
+            qposes = [
+                self.state_timeline.get_state(time_value)
+                for time_value in times
+            ]
+            source_name = "editable timeline"
+
+        with path.open("w", newline="") as handle:
+            writer = csv.writer(handle)
+            for time_value, qpos in zip(times, qposes):
+                if qpos is None or len(qpos) != expected:
+                    raise ValueError(
+                        f"trajectory state at t={time_value:.6f} does not "
+                        f"contain {expected} qpos values"
+                    )
+                writer.writerow(
+                    [f"{time_value:.6f}"]
+                    + [f"{value:.18e}" for value in qpos]
+                )
+
+        preview_note = (
+            "; unaccepted preview was not saved" if self.preview_active else ""
+        )
+        self.status_label.setText(
+            f"Saved {len(qposes)} timed qpos states from {source_name} "
+            f"to {path}{preview_note}"
+        )
         return path
 
     def _refresh_timeline_trajectory(self):
@@ -1134,17 +1268,24 @@ class RobotViewer3D(QWidget):
         suffix = " (preview)" if self.preview_active else " (committed)"
         self.root_pose_label.setText(f"{x:+.3f}, {y:+.3f}, {z:+.3f} m{suffix}")
 
-    def set_robot_trajectory(self, qposes):
+    def set_robot_trajectory(self, qposes, times=None):
         if not self.robot_state:
             return
         valid = []
-        for qpos in qposes:
+        valid_times = []
+        times = list(times) if times is not None else None
+        for index, qpos in enumerate(qposes):
             try:
                 if len(qpos) == self.robot_state.mj_model.nq:
                     valid.append(qpos.copy())
+                    if times is not None and index < len(times):
+                        valid_times.append(float(times[index]))
             except (TypeError, AttributeError):
                 continue
+        if times is None or len(valid_times) != len(valid):
+            valid_times = [float(index) for index in range(len(valid))]
         self.robot_trajectory = valid
+        self.robot_trajectory_times = valid_times
         self.ghost_trajectory = list(valid)
         self.frame_slider.setRange(0, max(0, len(valid) - 1))
         self.frame_slider.setValue(0)
@@ -1157,7 +1298,9 @@ class RobotViewer3D(QWidget):
         if not self.robot_state:
             return
         qposes = []
+        times = []
         for configuration in states:
+            times.append(float(getattr(configuration, "time", len(times))))
             if getattr(configuration, "qpos", None) is not None:
                 qposes.append(configuration.qpos.copy())
                 continue
@@ -1171,7 +1314,7 @@ class RobotViewer3D(QWidget):
                 if joint:
                     qpos[joint.qpos_address] = value
             qposes.append(qpos)
-        self.set_robot_trajectory(qposes)
+        self.set_robot_trajectory(qposes, times=times)
 
     def generate_demo_trajectory(self):
         start = self.robot_state.get_qpos()

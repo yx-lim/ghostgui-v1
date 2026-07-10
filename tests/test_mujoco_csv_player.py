@@ -28,6 +28,34 @@ class MujocoCsvPlayerTests(unittest.TestCase):
             np.loadtxt(source, delimiter=","),
         )
 
+    def test_loads_headerless_time_plus_qpos_trajectory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "timed_qpos.csv"
+            first = np.zeros(self.model.nq)
+            second = np.linspace(0.0, 0.35, self.model.nq)
+            np.savetxt(
+                source,
+                np.vstack(
+                    [
+                        np.concatenate(([0.0], first)),
+                        np.concatenate(([0.25], second)),
+                    ]
+                ),
+                delimiter=",",
+            )
+
+            data = mujoco.MjData(self.model)
+            player = TrajectoryPlayer(self.model, data)
+            player.load_csv(source)
+
+            self.assertEqual(player.row_count(), 2)
+            self.assertEqual(player.duration(), 0.25)
+            self.assertEqual(len(player.rows[0][RAW_QPOS_KEY]), self.model.nq)
+            np.testing.assert_allclose(data.qpos, first)
+
+            player.seek_index(1)
+            np.testing.assert_allclose(data.qpos, second)
+
     def test_rejects_raw_pose_for_wrong_model_nq(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "bad.csv"
