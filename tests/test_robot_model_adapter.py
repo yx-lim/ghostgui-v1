@@ -10,7 +10,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from OpenGL import GL
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
 
@@ -39,6 +39,37 @@ def tiny_binary_stl(name=b"part"):
     for triangle in triangles:
         stl.extend(struct.pack("<12fH", *triangle, 0))
     return stl
+
+
+class MouseEventStub:
+    def __init__(self, button, x, y, modifiers=Qt.KeyboardModifier.NoModifier):
+        self._button = button
+        self._position = QPointF(float(x), float(y))
+        self._modifiers = modifiers
+
+    def button(self):
+        return self._button
+
+    def position(self):
+        return self._position
+
+    def modifiers(self):
+        return self._modifiers
+
+
+class WheelEventStub:
+    def __init__(self, delta_y):
+        self._delta_y = int(delta_y)
+
+    def angleDelta(self):
+        class Delta:
+            def __init__(self, y):
+                self._y = y
+
+            def y(self):
+                return self._y
+
+        return Delta(self._delta_y)
 
 
 class RobotModelAdapterTests(unittest.TestCase):
@@ -515,6 +546,74 @@ class RobotModelAdapterTests(unittest.TestCase):
             ))
             self.assertEqual(canvas.gizmo.state, GizmoInteractionState.NONE)
             self.assertEqual(cancelled, [True])
+        finally:
+            canvas.close()
+
+    def test_3d_view_mouse_controls_match_mujoco_style_camera(self):
+        canvas = RobotCanvas3D()
+        try:
+            with patch.object(canvas.gizmo, "begin_drag", return_value=False):
+                canvas.mousePressEvent(MouseEventStub(
+                    Qt.MouseButton.LeftButton, 100, 100
+                ))
+            self.assertTrue(canvas.rotating_camera)
+            yaw_before = canvas.camera_yaw
+            pitch_before = canvas.camera_pitch
+            canvas.mouseMoveEvent(MouseEventStub(
+                Qt.MouseButton.NoButton, 120, 90
+            ))
+            self.assertLess(canvas.camera_yaw, yaw_before)
+            self.assertLess(canvas.camera_pitch, pitch_before)
+            canvas.mouseReleaseEvent(MouseEventStub(
+                Qt.MouseButton.LeftButton, 120, 90
+            ))
+            self.assertFalse(canvas.rotating_camera)
+
+            center_before = canvas.camera_center.copy()
+            distance_before = canvas.camera_distance
+            canvas.mousePressEvent(MouseEventStub(
+                Qt.MouseButton.RightButton, 100, 100
+            ))
+            self.assertTrue(canvas.panning_camera)
+            canvas.mouseMoveEvent(MouseEventStub(
+                Qt.MouseButton.NoButton, 130, 75
+            ))
+            self.assertFalse(np.allclose(canvas.camera_center, center_before))
+            self.assertEqual(canvas.camera_distance, distance_before)
+            canvas.mouseReleaseEvent(MouseEventStub(
+                Qt.MouseButton.RightButton, 130, 75
+            ))
+            self.assertFalse(canvas.panning_camera)
+
+            distance_before = canvas.camera_distance
+            canvas.mousePressEvent(MouseEventStub(
+                Qt.MouseButton.MiddleButton, 100, 100
+            ))
+            self.assertTrue(canvas.zooming_camera)
+            canvas.mouseMoveEvent(MouseEventStub(
+                Qt.MouseButton.NoButton, 100, 80
+            ))
+            self.assertGreater(canvas.camera_distance, distance_before)
+            canvas.mouseMoveEvent(MouseEventStub(
+                Qt.MouseButton.NoButton, 100, 120
+            ))
+            self.assertLess(canvas.camera_distance, distance_before + 0.1)
+            canvas.mouseReleaseEvent(MouseEventStub(
+                Qt.MouseButton.MiddleButton, 100, 120
+            ))
+            self.assertFalse(canvas.zooming_camera)
+        finally:
+            canvas.close()
+
+    def test_scroll_up_zooms_out_and_scroll_down_zooms_in(self):
+        canvas = RobotCanvas3D()
+        try:
+            distance_before = canvas.camera_distance
+            canvas.wheelEvent(WheelEventStub(120))
+            self.assertGreater(canvas.camera_distance, distance_before)
+            zoomed_out = canvas.camera_distance
+            canvas.wheelEvent(WheelEventStub(-120))
+            self.assertLess(canvas.camera_distance, zoomed_out)
         finally:
             canvas.close()
 

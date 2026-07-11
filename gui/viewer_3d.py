@@ -59,9 +59,12 @@ class RobotCanvas3D(QOpenGLWidget):
         self.camera_distance = 5.0
         self.camera_yaw = 38.0
         self.camera_pitch = 24.0
+        self.camera_center = np.array([0.0, 0.0, 0.75], dtype=float)
 
         self.dragging_target = False
         self.rotating_camera = False
+        self.panning_camera = False
+        self.zooming_camera = False
         self.last_mouse_pos = None
 
         self._model_view = QMatrix4x4()
@@ -489,15 +492,9 @@ class RobotCanvas3D(QOpenGLWidget):
         height = max(1, self.height())
         aspect = width / height
 
-        yaw = math.radians(self.camera_yaw)
-        pitch = math.radians(self.camera_pitch)
-
-        eye = QVector3D(
-            self.camera_distance * math.cos(pitch) * math.sin(yaw),
-            -self.camera_distance * math.cos(pitch) * math.cos(yaw),
-            self.camera_distance * math.sin(pitch) + 1.1,
-        )
-        center = QVector3D(0.0, 0.0, 0.75)
+        eye_array = self._camera_eye()
+        eye = QVector3D(*map(float, eye_array))
+        center = QVector3D(*map(float, self.camera_center))
         up = QVector3D(0.0, 0.0, 1.0)
 
         self._projection = QMatrix4x4()
@@ -740,13 +737,51 @@ class RobotCanvas3D(QOpenGLWidget):
             GL.glRotatef(-90.0, 1.0, 0.0, 0.0)
 
     def _camera_eye(self):
+        return self.camera_center + self._camera_offset()
+
+    def _camera_offset(self):
         yaw = math.radians(self.camera_yaw)
         pitch = math.radians(self.camera_pitch)
         return np.array([
             self.camera_distance * math.cos(pitch) * math.sin(yaw),
             -self.camera_distance * math.cos(pitch) * math.cos(yaw),
-            self.camera_distance * math.sin(pitch) + 1.1,
+            self.camera_distance * math.sin(pitch),
         ], dtype=float)
+
+    def _camera_basis(self):
+        forward = self.camera_center - self._camera_eye()
+        forward /= max(1e-12, float(np.linalg.norm(forward)))
+        world_up = np.array([0.0, 0.0, 1.0], dtype=float)
+        right = np.cross(forward, world_up)
+        if float(np.linalg.norm(right)) < 1e-8:
+            right = np.array([1.0, 0.0, 0.0], dtype=float)
+        else:
+            right /= float(np.linalg.norm(right))
+        up = np.cross(right, forward)
+        up /= max(1e-12, float(np.linalg.norm(up)))
+        return right, up, forward
+
+    def _orbit_camera(self, dx, dy):
+        self.camera_yaw -= float(dx) * 0.4
+        self.camera_pitch = max(
+            -85.0,
+            min(85.0, self.camera_pitch + float(dy) * 0.3),
+        )
+
+    def _pan_camera(self, dx, dy):
+        right, up, _ = self._camera_basis()
+        view_height = 2.0 * self.camera_distance * math.tan(math.radians(45.0) * 0.5)
+        units_per_pixel = view_height / max(1, self.height())
+        self.camera_center += (
+            -right * float(dx) * units_per_pixel
+            + up * float(dy) * units_per_pixel
+        )
+
+    def _zoom_camera(self, amount):
+        self.camera_distance = max(
+            1.8,
+            min(10.0, self.camera_distance + float(amount)),
+        )
 
     # ============================================================
     # Mouse editing
@@ -767,9 +802,15 @@ class RobotCanvas3D(QOpenGLWidget):
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
                 self.update()
                 return
+            self.rotating_camera = True
+            return
 
         if event.button() == Qt.MouseButton.RightButton:
-            self.rotating_camera = True
+            self.panning_camera = True
+            return
+
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self.zooming_camera = True
             return
 
         super().mousePressEvent(event)
@@ -804,8 +845,21 @@ class RobotCanvas3D(QOpenGLWidget):
 
         if self.rotating_camera and self.last_mouse_pos is not None:
             delta = event.position() - self.last_mouse_pos
-            self.camera_yaw += delta.x() * 0.4
-            self.camera_pitch = max(-5.0, min(80.0, self.camera_pitch + delta.y() * 0.3))
+            self._orbit_camera(delta.x(), delta.y())
+            self.last_mouse_pos = event.position()
+            self.update()
+            return
+
+        if self.panning_camera and self.last_mouse_pos is not None:
+            delta = event.position() - self.last_mouse_pos
+            self._pan_camera(delta.x(), delta.y())
+            self.last_mouse_pos = event.position()
+            self.update()
+            return
+
+        if self.zooming_camera and self.last_mouse_pos is not None:
+            delta = event.position() - self.last_mouse_pos
+            self._zoom_camera(-delta.y() * 0.02)
             self.last_mouse_pos = event.position()
             self.update()
             return
@@ -827,14 +881,22 @@ class RobotCanvas3D(QOpenGLWidget):
 
     def mouseReleaseEvent(self, event):
         transform_was_dragging = self.gizmo.is_dragging
+        camera_was_interacting = (
+            self.rotating_camera or self.panning_camera or self.zooming_camera
+        )
         self.dragging_target = False
         self.rotating_camera = False
+        self.panning_camera = False
+        self.zooming_camera = False
         self.last_mouse_pos = None
         self.gizmo.end_drag()
         self.setCursor(Qt.CursorShape.ArrowCursor)
         self.update()
         if transform_was_dragging:
             self.transform_drag_finished.emit()
+            return
+        if camera_was_interacting:
+            return
         super().mouseReleaseEvent(event)
 
     def cancel_transform_drag(self, emit_cancelled=False):
@@ -842,6 +904,8 @@ class RobotCanvas3D(QOpenGLWidget):
         self.gizmo.end_drag()
         self.dragging_target = False
         self.rotating_camera = False
+        self.panning_camera = False
+        self.zooming_camera = False
         self.last_mouse_pos = None
         self.setCursor(Qt.CursorShape.ArrowCursor)
         self.update()
@@ -871,7 +935,7 @@ class RobotCanvas3D(QOpenGLWidget):
 
     def wheelEvent(self, event):
         steps = event.angleDelta().y() / 120.0
-        self.camera_distance = max(1.8, min(10.0, self.camera_distance - steps * 0.35))
+        self._zoom_camera(steps * 0.35)
         self.update()
 
     # ============================================================
