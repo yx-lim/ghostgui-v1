@@ -19,6 +19,7 @@ class CollapsibleSection(QWidget):
         self.title = title
         self.content = content
         self.content.setObjectName(self.content.objectName() or "sectionContent")
+        self.content.setMinimumWidth(0)
 
         self.header = QToolButton()
         self.header.setObjectName("sectionHeader")
@@ -36,7 +37,7 @@ class CollapsibleSection(QWidget):
 
         self.setObjectName("CollapsibleSection")
         self.setSizePolicy(
-            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Preferred,
         )
         self.setStyleSheet(
@@ -73,6 +74,8 @@ class CollapsibleSection(QWidget):
 class AppSidebar(QWidget):
     """One scroll area containing all app-level sidebar sections."""
 
+    SECTION_MAX_WIDTH = 240
+
     def __init__(self, parent=None):
         super().__init__(parent)
         root = QVBoxLayout(self)
@@ -85,8 +88,8 @@ class AppSidebar(QWidget):
 
         self.body = QWidget()
         self.body_layout = QVBoxLayout(self.body)
-        self.body_layout.setContentsMargins(5, 5, 5, 5)
-        self.body_layout.setSpacing(5)
+        self.body_layout.setContentsMargins(4, 4, 4, 4)
+        self.body_layout.setSpacing(4)
         self.scroll.setWidget(self.body)
         self.sections = []
 
@@ -94,6 +97,7 @@ class AppSidebar(QWidget):
 
     def add_section(self, title, widget, expanded=True):
         section = CollapsibleSection(title, widget, expanded=False)
+        section.setMaximumWidth(self.SECTION_MAX_WIDTH)
         self.body_layout.addWidget(section)
         self.sections.append(section)
         return section

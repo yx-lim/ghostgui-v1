@@ -7,7 +7,7 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QScrollArea, QTabWidget
 
 from gui.collision_checker import Collision
 from gui.backend_interface import PythonRobotConfiguration
@@ -321,8 +321,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertFalse(hasattr(self.viewer, "controls_sidebar"))
         self.assertFalse(hasattr(self.viewer, "viewer_splitter"))
         self.assertIsNone(self.window.right_sidebar_content.current_context_widget())
-        self.assertLessEqual(self.window.left_sidebar.maximumWidth(), 240)
-        self.assertLessEqual(self.window.right_sidebar.maximumWidth(), 240)
+        self.assertLessEqual(self.window.left_sidebar.maximumWidth(), 250)
+        self.assertLessEqual(self.window.right_sidebar.maximumWidth(), 250)
         left_titles = [
             section.title for section in self.window.left_sidebar_content.sections
         ]
@@ -342,6 +342,33 @@ class RobotViewerTimelineTests(unittest.TestCase):
             + self.window.right_sidebar_content.sections
         ):
             self.assertFalse(section.content.isVisible())
+        for section in self.window.right_sidebar_content.sections:
+            section.set_expanded(True)
+            self.app.processEvents()
+            self.assertLessEqual(section.maximumWidth(), 250)
+            self.assertLessEqual(section.sizeHint().width(), 250)
+            self.assertLessEqual(section.content.sizeHint().width(), 250)
+            section.set_expanded(False)
+        preview_section = next(
+            section for section in self.window.right_sidebar_content.sections
+            if section.title == "Preview / IK"
+        )
+        preview_section.set_expanded(True)
+        ik_tabs = self.viewer.preview_ik_context_widget().findChild(QTabWidget)
+        ik_tabs.setCurrentIndex(1)
+        self.app.processEvents()
+        visible_scroll_areas = [
+            area for area in self.viewer.preview_ik_context_widget().findChildren(
+                QScrollArea
+            )
+            if area.isVisible()
+        ]
+        self.assertTrue(visible_scroll_areas)
+        for area in visible_scroll_areas:
+            self.assertEqual(area.horizontalScrollBar().maximum(), 0)
+            self.assertFalse(area.horizontalScrollBar().isVisible())
+            self.assertLessEqual(area.widget().width(), area.viewport().width())
+        preview_section.set_expanded(False)
         all_titles = left_titles + right_titles
         for removed_title in (
             "Project", "Editors", "Display", "Selection", "Properties",

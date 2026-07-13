@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
+    QSizePolicy,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -59,6 +60,21 @@ class PreviewPathValidation:
     ok: bool
     message: str
     failed_index: int | None = None
+
+
+def _compact_combo(combo, minimum_chars=10):
+    combo.setSizeAdjustPolicy(
+        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+    )
+    combo.setMinimumContentsLength(minimum_chars)
+    combo.setMinimumWidth(0)
+    combo.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+
+
+def _compact_spinbox(spinbox, width=68):
+    spinbox.setMinimumWidth(0)
+    spinbox.setMaximumWidth(width)
+    spinbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
 
 class JointControl(QWidget):
@@ -285,6 +301,7 @@ class RobotViewer3D(QWidget):
         target_layout.setContentsMargins(6, 6, 6, 6)
         target_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.target_box = QComboBox()
+        _compact_combo(self.target_box, minimum_chars=12)
         if self.robot_model:
             for frame_name, (kind, name) in self.frame_bindings.items():
                 try:
@@ -300,6 +317,7 @@ class RobotViewer3D(QWidget):
                         self.target_box.addItem(f"{kind}: {name}", (kind, name))
         self.target_box.currentIndexChanged.connect(self._target_selected)
         self.collision_substeps = QSpinBox()
+        _compact_spinbox(self.collision_substeps)
         self.collision_substeps.setRange(1, 32)
         self.collision_substeps.setValue(8)
         self.collision_substeps.valueChanged.connect(
@@ -308,11 +326,13 @@ class RobotViewer3D(QWidget):
         target_layout.addRow("Target", self.target_box)
         target_layout.addRow("Collision substeps", self.collision_substeps)
         self.root_pose_label = QLabel()
+        self.root_pose_label.setWordWrap(True)
         target_layout.addRow("Root pose", self.root_pose_label)
 
         self.preview_ik_context_panel = QWidget()
         preview_ik_layout = QVBoxLayout(self.preview_ik_context_panel)
-        preview_ik_layout.setContentsMargins(6, 6, 6, 6)
+        preview_ik_layout.setContentsMargins(4, 4, 4, 4)
+        preview_ik_layout.setSpacing(4)
 
         preview_group = QWidget()
         preview_layout = QVBoxLayout(preview_group)
@@ -321,6 +341,7 @@ class RobotViewer3D(QWidget):
         self.accept_preview_button = QPushButton("Accept Preview")
         self.cancel_preview_button = QPushButton("Cancel Preview")
         self.preview_alpha = QDoubleSpinBox()
+        _compact_spinbox(self.preview_alpha)
         self.preview_alpha.setRange(0.1, 1.0)
         self.preview_alpha.setSingleStep(0.05)
         self.preview_alpha.setValue(0.65)
@@ -351,10 +372,12 @@ class RobotViewer3D(QWidget):
         self.show_ghosts = QCheckBox("Show trajectory ghosts")
         self.show_ghosts.toggled.connect(self._update_ghost_options)
         self.ghost_stride = QSpinBox()
+        _compact_spinbox(self.ghost_stride)
         self.ghost_stride.setRange(1, 100)
         self.ghost_stride.setValue(8)
         self.ghost_stride.valueChanged.connect(self._rebuild_ghosts)
         self.ghost_alpha = QDoubleSpinBox()
+        _compact_spinbox(self.ghost_alpha)
         self.ghost_alpha.setRange(0.02, 0.8)
         self.ghost_alpha.setSingleStep(0.05)
         self.ghost_alpha.setValue(0.16)
@@ -367,6 +390,8 @@ class RobotViewer3D(QWidget):
         trajectory_context_layout.addWidget(trajectory_group)
 
         editor_tabs = QTabWidget()
+        editor_tabs.setMinimumWidth(0)
+        editor_tabs.setMaximumWidth(220)
         joint_group = QWidget()
         joint_layout = QVBoxLayout(joint_group)
         joint_layout.setContentsMargins(6, 6, 6, 6)
@@ -385,6 +410,8 @@ class RobotViewer3D(QWidget):
         joint_layout.addStretch()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setMinimumWidth(0)
+        scroll.setMaximumWidth(212)
         scroll.setWidget(joint_group)
         editor_tabs.addTab(scroll, "Joint angles")
         editor_tabs.addTab(self._build_ik_settings_widget(), "IK controls")
@@ -422,28 +449,38 @@ class RobotViewer3D(QWidget):
     def _build_ik_settings_widget(self):
         content = QWidget()
         layout = QVBoxLayout(content)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
 
-        solver_group = QGroupBox("Solver settings")
+        solver_group = QGroupBox("Solver")
+        solver_group.setMinimumWidth(0)
         solver_layout = QFormLayout(solver_group)
+        solver_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         self.ik_damping = QDoubleSpinBox()
+        _compact_spinbox(self.ik_damping)
         self.ik_damping.setRange(0.001, 1.0)
         self.ik_damping.setDecimals(4)
         self.ik_damping.setValue(0.04)
         self.ik_max_iterations = QSpinBox()
+        _compact_spinbox(self.ik_max_iterations)
         self.ik_max_iterations.setRange(1, 300)
         self.ik_max_iterations.setValue(80)
         self.ik_step_size = QDoubleSpinBox()
+        _compact_spinbox(self.ik_step_size)
         self.ik_step_size.setRange(0.01, 1.0)
         self.ik_step_size.setValue(0.7)
         self.ik_max_step = QDoubleSpinBox()
+        _compact_spinbox(self.ik_max_step)
         self.ik_max_step.setRange(0.001, 0.5)
         self.ik_max_step.setDecimals(3)
         self.ik_max_step.setValue(0.08)
         self.ik_position_tolerance = QDoubleSpinBox()
+        _compact_spinbox(self.ik_position_tolerance)
         self.ik_position_tolerance.setRange(0.0001, 0.1)
         self.ik_position_tolerance.setDecimals(4)
         self.ik_position_tolerance.setValue(0.005)
         self.ik_orientation_tolerance = QDoubleSpinBox()
+        _compact_spinbox(self.ik_orientation_tolerance)
         self.ik_orientation_tolerance.setRange(0.001, 1.0)
         self.ik_orientation_tolerance.setDecimals(3)
         self.ik_orientation_tolerance.setValue(0.03)
@@ -455,8 +492,10 @@ class RobotViewer3D(QWidget):
         solver_layout.addRow("Orientation tolerance", self.ik_orientation_tolerance)
         layout.addWidget(solver_group)
 
-        task_group = QGroupBox("Weighted tasks (priority metadata; weighted v1)")
+        task_group = QGroupBox("Weighted Tasks")
+        task_group.setMinimumWidth(0)
         task_layout = QFormLayout(task_group)
+        task_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         self.ik_task_controls = {}
         defaults = {
             "tcp_position": (True, 1.0),
@@ -483,6 +522,7 @@ class RobotViewer3D(QWidget):
             checkbox = QCheckBox()
             checkbox.setChecked(enabled)
             spin = QDoubleSpinBox()
+            _compact_spinbox(spin)
             spin.setRange(0.0, 10.0)
             spin.setDecimals(3)
             spin.setValue(weight)
@@ -495,10 +535,11 @@ class RobotViewer3D(QWidget):
             task_layout.addRow(labels[key], row)
         layout.addWidget(task_group)
 
-        influence_group = QGroupBox("Per-joint IK influence (0=locked, 1=normal)")
+        influence_group = QGroupBox("Joint Influence")
+        influence_group.setMinimumWidth(0)
         influence_layout = QVBoxLayout(influence_group)
-        preset_row = QHBoxLayout()
         self.ik_preset_box = QComboBox()
+        _compact_combo(self.ik_preset_box, minimum_chars=8)
         presets = ["All joints normal", "Root locked", "Selected limb only", "Feet planted"]
         if self.robot_model.model_type == "humanoid":
             presets.extend(("Upper body only", "Legs only"))
@@ -507,9 +548,8 @@ class RobotViewer3D(QWidget):
         self.ik_preset_box.addItems(presets)
         apply_preset = QPushButton("Apply")
         apply_preset.clicked.connect(self.apply_ik_preset)
-        preset_row.addWidget(self.ik_preset_box, 1)
-        preset_row.addWidget(apply_preset)
-        influence_layout.addLayout(preset_row)
+        influence_layout.addWidget(self.ik_preset_box)
+        influence_layout.addWidget(apply_preset)
         for name in self.robot_model.get_joint_names():
             control = IKInfluenceControl(name, 1.0)
             control.value_changed.connect(self._ik_influence_changed)
@@ -521,6 +561,8 @@ class RobotViewer3D(QWidget):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setMinimumWidth(0)
+        scroll.setMaximumWidth(212)
         scroll.setWidget(content)
         return scroll
 

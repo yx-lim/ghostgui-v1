@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QHBoxLayout,
     QCheckBox,
+    QSizePolicy,
 )
 
 from .trajectory import TargetFrame
@@ -49,7 +50,11 @@ class LabeledSlider(QWidget):
         self._syncing = False
 
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
         value_row = QHBoxLayout()
+        value_row.setContentsMargins(0, 0, 0, 0)
+        value_row.setSpacing(4)
 
         self.label = QLabel()
         self.slider = QSlider(Qt.Orientation.Horizontal)
@@ -63,8 +68,8 @@ class LabeledSlider(QWidget):
         self.input.setRange(min_value / self.scale, max_value / self.scale)
         self.input.setSingleStep(1 / self.scale)
         self.input.setValue(initial_value / self.scale)
-        self.input.setMinimumWidth(58)
-        self.input.setMaximumWidth(74)
+        self.input.setMinimumWidth(52)
+        self.input.setMaximumWidth(64)
 
         self.slider.valueChanged.connect(self.on_slider_changed)
         self.input.valueChanged.connect(self.on_input_changed)
@@ -195,6 +200,10 @@ class TrajectoryControlPanel(QGroupBox):
         self.target_layout.addWidget(QLabel("Target robot frame"))
 
         self.frame_box = QComboBox()
+        self.frame_box.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.frame_box.setMinimumContentsLength(10)
         self.frame_box.addItems(self.frame_names)
         # A hand is the most useful default for the 3D transform gizmo. The
         # user can still select pelvis/feet exactly as before.
@@ -209,6 +218,10 @@ class TrajectoryControlPanel(QGroupBox):
         self.trajectory_layout.addWidget(QLabel("Motion phase"))
 
         self.phase_box = QComboBox()
+        self.phase_box.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.phase_box.setMinimumContentsLength(8)
         self.phase_box.addItems([
             "crouch",
             "launch",
@@ -367,8 +380,8 @@ class TrajectoryControlPanel(QGroupBox):
     def _make_section_panel(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(5)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
         return panel, layout
 
     def _make_context_stack(self):
@@ -376,6 +389,9 @@ class TrajectoryControlPanel(QGroupBox):
         stack.empty_widget = QWidget()
         stack.addWidget(stack.empty_widget)
         stack.setVisible(False)
+        stack.setMinimumWidth(0)
+        stack.setMaximumWidth(220)
+        stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         return stack
 
     def _set_context_widget(self, stack, widget):

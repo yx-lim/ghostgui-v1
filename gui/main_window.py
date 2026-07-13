@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QLabel,
     QTextEdit,
-    QGroupBox,
     QTabWidget,
     QSplitter,
     QStackedWidget,
@@ -48,6 +47,9 @@ from .model_importer import (
     discover_imported_models,
     import_robot_model,
 )
+
+
+SIDEBAR_WIDTH = 250
 
 
 @dataclass
@@ -180,10 +182,10 @@ class RobotGuiMainWindow(QMainWindow):
         )
         self.left_sidebar = self.left_sidebar_content
         self.right_sidebar = self.right_sidebar_content
-        self.left_sidebar.setMinimumWidth(200)
-        self.left_sidebar.setMaximumWidth(300)
-        self.right_sidebar.setMinimumWidth(200)
-        self.right_sidebar.setMaximumWidth(300)
+        self.left_sidebar.setMinimumWidth(SIDEBAR_WIDTH)
+        self.left_sidebar.setMaximumWidth(SIDEBAR_WIDTH)
+        self.right_sidebar.setMinimumWidth(SIDEBAR_WIDTH)
+        self.right_sidebar.setMaximumWidth(SIDEBAR_WIDTH)
 
         self.connect_signals()
         self.set_current_frame_to_model_reference(
@@ -230,13 +232,20 @@ class RobotGuiMainWindow(QMainWindow):
     # ============================================================
 
     def build_status_panel(self):
-        panel = QGroupBox("Trajectory / Backend Status")
+        panel = QWidget()
+        panel.setMinimumWidth(0)
+        panel.setMaximumWidth(220)
         layout = QVBoxLayout()
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
 
         self.backend_label = QLabel()
+        self.backend_label.setWordWrap(True)
         self.status_text = QTextEdit()
         self.status_text.setReadOnly(True)
-        self.status_text.setMinimumWidth(150)
+        self.status_text.setMinimumWidth(0)
+        self.status_text.setMaximumWidth(212)
+        self.status_text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
 
         layout.addWidget(self.backend_label)
         layout.addWidget(self.status_text)
