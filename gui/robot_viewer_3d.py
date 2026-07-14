@@ -447,6 +447,13 @@ class RobotViewer3D(QWidget):
         self.load_trajectory_button = QPushButton("Load traj CSV")
         self.save_qpos_button = QPushButton("Save qpos")
         self.save_trajectory_button = QPushButton("Save traj CSV")
+        self.trajectory_import_dt = QDoubleSpinBox()
+        self.trajectory_import_dt.setDecimals(2)
+        self.trajectory_import_dt.setRange(0.01, 10.0)
+        self.trajectory_import_dt.setSingleStep(0.01)
+        self.trajectory_import_dt.setValue(0.10)
+        self.trajectory_import_dt.setSuffix(" s")
+        self.trajectory_import_dt.setMaximumWidth(76)
         self.load_qpos_button.clicked.connect(self.choose_qpos_csv)
         self.load_trajectory_button.clicked.connect(self.choose_trajectory_csv)
         self.save_qpos_button.clicked.connect(self.choose_qpos_save_path)
@@ -455,6 +462,10 @@ class RobotViewer3D(QWidget):
         )
         trajectory_context_layout.addWidget(self.load_qpos_button)
         trajectory_context_layout.addWidget(self.load_trajectory_button)
+        import_dt_layout = QFormLayout()
+        import_dt_layout.setContentsMargins(0, 0, 0, 0)
+        import_dt_layout.addRow("Import dt", self.trajectory_import_dt)
+        trajectory_context_layout.addLayout(import_dt_layout)
         trajectory_context_layout.addWidget(self.save_qpos_button)
         trajectory_context_layout.addWidget(self.save_trajectory_button)
 
@@ -582,6 +593,7 @@ class RobotViewer3D(QWidget):
         self.reset_button.setEnabled(enabled)
         self.load_qpos_button.setEnabled(enabled)
         self.load_trajectory_button.setEnabled(enabled)
+        self.trajectory_import_dt.setEnabled(enabled)
         self.save_qpos_button.setEnabled(enabled)
         self.save_trajectory_button.setEnabled(enabled)
         self.selection_context_panel.setEnabled(enabled)
@@ -1529,7 +1541,7 @@ class RobotViewer3D(QWidget):
         )
 
     def load_trajectory_csv(self, csv_path):
-        """Load headerless time,qpos rows into the generated trajectory player."""
+        """Load headerless time,qpos rows into playback and editable qpos states."""
         path = Path(csv_path).expanduser().resolve()
         with path.open("r", newline="") as handle:
             rows = [
@@ -1567,6 +1579,14 @@ class RobotViewer3D(QWidget):
         self.pause_playback()
         self.canvas.cancel_transform_drag()
         self.set_robot_trajectory(qposes, times=times)
+        if self.state_timeline and qposes:
+            self.state_timeline.reset(times[0], qposes[0])
+            for time, qpos in zip(times[1:], qposes[1:]):
+                self.state_timeline.set_state(time, qpos)
+            self.set_defined_timeslices(times)
+            self.current_time = self.state_timeline.time_key(times[0])
+            self._set_timeslice_widgets(self.current_time)
+            self._update_timeline_label()
         duration = times[-1] if times else 0.0
         self.status_label.setText(
             f"Loaded {len(qposes)} timed qpos trajectory states from "

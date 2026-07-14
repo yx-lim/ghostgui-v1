@@ -868,8 +868,74 @@ class RobotViewerTimelineTests(unittest.TestCase):
         np.testing.assert_allclose(self.viewer.robot_trajectory[0], first)
         np.testing.assert_allclose(self.viewer.robot_trajectory[1], second)
         np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), first)
+        np.testing.assert_allclose(self.viewer.state_timeline.times(), [0.0, 0.15])
+        self.assertEqual(
+            len(self.window.trajectory.frames),
+            2 * len(self.window.editable_logical_frame_names()),
+        )
+        self.assertEqual(self.viewer.timeslice_slider.defined_times, {0.0, 0.15})
         self.assertEqual(mujoco_panel_path, source)
         np.testing.assert_allclose(mujoco_panel_times, [0.0, 0.15])
+
+    def test_loaded_trajectory_csv_import_interval_downsamples_editable_keyframes(self):
+        base = self.viewer.robot_model.home_qpos.copy()
+        rows = []
+        for index in range(11):
+            qpos = base.copy()
+            qpos[-1] += index * 0.01
+            rows.append(np.concatenate(([index * 0.01], qpos)))
+
+        self.viewer.trajectory_import_dt.setValue(0.05)
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "dense_trajectory.csv"
+            np.savetxt(source, np.vstack(rows), delimiter=",")
+            self.viewer.load_trajectory_csv(source)
+
+        editable_times = sorted({frame.time for frame in self.window.trajectory.frames})
+        self.assertEqual(len(self.viewer.robot_trajectory), 11)
+        np.testing.assert_allclose(self.viewer.robot_trajectory_times, np.arange(0, 0.11, 0.01))
+        np.testing.assert_allclose(editable_times, [0.0, 0.05, 0.10])
+        self.assertEqual(
+            len(self.window.trajectory.frames),
+            3 * len(self.window.editable_logical_frame_names()),
+        )
+        self.assertEqual(self.viewer.timeslice_slider.defined_times, {0.0, 0.05, 0.10})
+
+    def test_loaded_trajectory_csv_can_be_cleared_from_keyframe_controls(self):
+        first = self.viewer.robot_model.home_qpos.copy()
+        second = first.copy()
+        second[-1] += 0.07
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "trajectory.csv"
+            np.savetxt(
+                source,
+                np.vstack(
+                    [
+                        np.concatenate(([0.0], first)),
+                        np.concatenate(([0.15], second)),
+                    ]
+                ),
+                delimiter=",",
+            )
+            self.viewer.load_trajectory_csv(source)
+
+        self.assertTrue(self.window.trajectory.frames)
+        self.assertTrue(self.viewer.robot_trajectory)
+
+        original_question = QMessageBox.question
+        try:
+            QMessageBox.question = staticmethod(
+                lambda *args, **kwargs: QMessageBox.StandardButton.Yes
+            )
+            self.window.on_clear_trajectory()
+        finally:
+            QMessageBox.question = original_question
+
+        self.assertEqual(self.window.trajectory.frames, [])
+        self.assertEqual(self.viewer.robot_trajectory, [])
+        self.assertEqual(self.viewer.timeslice_slider.defined_times, set())
 
     def test_load_qpos_rejects_wrong_value_count(self):
         with tempfile.TemporaryDirectory() as directory:

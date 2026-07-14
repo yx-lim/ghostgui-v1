@@ -541,7 +541,13 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_trajectory_csv_loaded(self, csv_path):
         self.viewer_3d_mujoco.set_trajectory_csv(csv_path)
-        self.status_text.setText(f"Loaded trajectory CSV: {csv_path}")
+        count = self.import_loaded_robot_trajectory_as_keyframes()
+        import_dt = self.viewer_3d.trajectory_import_dt.value()
+        self.status_text.setText(
+            f"Loaded trajectory CSV: {csv_path}\n"
+            f"Imported {count} editable target-frame keyframes from FK "
+            f"at {import_dt:.2f} s intervals."
+        )
 
     # ============================================================
     # GUI interaction callbacks
@@ -653,16 +659,7 @@ class RobotGuiMainWindow(QMainWindow):
         last_index = -1
         count = 0
 
-        frame_names = []
-        for name in getattr(self.robot_model_3d, "trajectory_frames", []):
-            if name not in frame_names:
-                frame_names.append(name)
-        for name in self.controls.frame_names:
-            if name not in frame_names:
-                frame_names.append(name)
-        for name in self.viewer_3d.frame_bindings:
-            if name not in frame_names:
-                frame_names.append(name)
+        frame_names = self.editable_logical_frame_names()
 
         for frame_name in frame_names:
             binding = self.viewer_3d.frame_bindings.get(frame_name)
@@ -703,6 +700,120 @@ class RobotGuiMainWindow(QMainWindow):
                 emit_pose_changed=False,
             )
         return count
+
+    def editable_logical_frame_names(self):
+        frame_names = []
+        for name in getattr(self.robot_model_3d, "trajectory_frames", []):
+            if name not in frame_names:
+                frame_names.append(name)
+        for name in self.controls.frame_names:
+            if name not in frame_names:
+                frame_names.append(name)
+        for name in self.viewer_3d.frame_bindings:
+            if name not in frame_names:
+                frame_names.append(name)
+        return frame_names
+
+    def import_loaded_robot_trajectory_as_keyframes(self):
+        """Convert loaded qpos playback rows into editable logical target frames."""
+        qposes = list(getattr(self.viewer_3d, "robot_trajectory", []))
+        times = list(getattr(self.viewer_3d, "robot_trajectory_times", []))
+        if not qposes:
+            return 0
+
+        state = self.viewer_3d.committed_state
+        if state is None:
+            return 0
+
+        self.trajectory.clear()
+        self.active_index = -1
+        phase = self.controls.phase_box.currentText()
+        selected_frame_name = self.controls.frame_box.currentText()
+        selected_frame = None
+        selected_index = -1
+        last_index = -1
+        count = 0
+
+        frame_names = self.editable_logical_frame_names()
+        import_samples = self.selected_loaded_trajectory_import_samples(times, qposes)
+        for time, qpos in import_samples:
+            state.set_qpos(qpos)
+            for frame_name in frame_names:
+                binding = self.viewer_3d.frame_bindings.get(frame_name)
+                if binding is None:
+                    continue
+                kind, object_name = binding
+                try:
+                    position, quaternion = state.get_body_pose(object_name, kind)
+                except KeyError:
+                    continue
+                roll, pitch, yaw = quat_to_rpy(quaternion)
+                frame = TargetFrame(
+                    time=float(time),
+                    phase=phase,
+                    frame_name=frame_name,
+                    x=float(position[0]),
+                    y=float(position[1]),
+                    z=float(position[2]),
+                    roll=roll,
+                    pitch=pitch,
+                    yaw=yaw,
+                )
+                last_index = self.trajectory.upsert_frame(frame)
+                if (
+                    selected_frame is None
+                    and frame_name == selected_frame_name
+                    and abs(float(time) - self.viewer_3d.get_current_time()) <= 1e-6
+                ):
+                    selected_frame = frame
+                    selected_index = last_index
+                count += 1
+
+        if qposes:
+            state.set_qpos(qposes[0])
+            self.viewer_3d.preview_state.set_qpos(qposes[0])
+            self.viewer_3d.preview_active = False
+            self.viewer_3d.canvas.set_preview_visible(False)
+            self.controls.time_slider.set_value(float(times[0]))
+
+        self.active_index = selected_index if selected_index >= 0 else last_index
+        if selected_frame is not None:
+            self.controls.set_position_values(
+                x=selected_frame.x,
+                y=selected_frame.y,
+                z=selected_frame.z,
+                roll=selected_frame.roll,
+                pitch=selected_frame.pitch,
+                yaw=selected_frame.yaw,
+                emit_pose_changed=False,
+            )
+        imported_times = [time for time, _ in import_samples]
+        self.viewer_3d.set_defined_timeslices(imported_times)
+        self.refresh_display()
+        return count
+
+    def selected_loaded_trajectory_import_samples(self, times, qposes):
+        if not times or not qposes:
+            return []
+
+        interval = max(0.0, float(self.viewer_3d.trajectory_import_dt.value()))
+        samples = []
+        last_import_time = None
+        for time, qpos in zip(times, qposes):
+            time = float(time)
+            if (
+                last_import_time is None
+                or interval <= 1e-9
+                or time >= last_import_time + interval - 1e-9
+            ):
+                samples.append((time, qpos))
+                last_import_time = time
+
+        final_time = float(times[-1])
+        if abs(samples[-1][0] - final_time) > 1e-9:
+            samples.append((final_time, qposes[-1]))
+
+        return samples
 
     def delete_timeslice_at_time(self, time, tolerance=1e-6):
         count = 0
