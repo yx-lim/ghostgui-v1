@@ -312,6 +312,13 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.2)
         self.assertAlmostEqual(self.viewer.timeslice_time_input.value(), 0.2)
 
+    def test_timeslice_bar_uses_single_compact_time_display(self):
+        self.assertEqual(self.viewer.timeslice_label.text(), "Time")
+        self.assertEqual(self.viewer.timeslice_time_input.suffix(), " s")
+        self.assertFalse(hasattr(self.viewer, "timeslice_time_label"))
+        self.assertEqual(self.viewer.accept_timeslice_button.text(), "Accept")
+        self.assertEqual(self.viewer.delete_timeslice_button.text(), "Delete")
+
     def test_accept_slice_captures_all_logical_targets_from_committed_pose(self):
         self.window.controls.time_slider.set_value(0.2)
         self.window.controls.emit_time_changed(0.2)
@@ -530,7 +537,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertFalse(hasattr(self.viewer, "viewer_splitter"))
         self.assertIsNone(self.window.right_sidebar_content.current_context_widget())
         self.assertLessEqual(self.window.left_sidebar.maximumWidth(), 250)
-        self.assertLessEqual(self.window.right_sidebar.maximumWidth(), 250)
+        self.assertLessEqual(self.window.right_sidebar.maximumWidth(), 270)
+        self.assertEqual(self.window.status_panel.maximumWidth(), 244)
         left_titles = [
             section.title for section in self.window.left_sidebar_content.sections
         ]
@@ -539,27 +547,40 @@ class RobotViewerTimelineTests(unittest.TestCase):
         ]
         self.assertEqual(
             left_titles,
-            ["Robot", "Trajectory", "View"],
+            ["Robot", "Target", "Pose", "Trajectory", "Advanced IK", "View"],
         )
         self.assertEqual(
             right_titles,
-            ["Target", "Transform", "Preview / IK", "Status"],
+            ["Status"],
         )
         for section in (
             self.window.left_sidebar_content.sections
             + self.window.right_sidebar_content.sections
         ):
             self.assertFalse(section.content.isVisible())
-        for section in self.window.right_sidebar_content.sections:
+        for section in self.window.left_sidebar_content.sections:
             section.set_expanded(True)
             self.app.processEvents()
             self.assertLessEqual(section.maximumWidth(), 250)
             self.assertLessEqual(section.sizeHint().width(), 250)
             self.assertLessEqual(section.content.sizeHint().width(), 250)
             section.set_expanded(False)
+        self.assertIsNone(self.viewer.status_label.parent())
+        self.assertIsNone(self.viewer.timeline_state_label.parent())
+        self.assertIsNone(self.viewer.root_pose_label.parent())
+        self.viewer.status_label.setText("Viewer status moved")
+        self.viewer._update_timeline_label()
+        self.viewer._update_root_pose_label()
+        self.app.processEvents()
+        self.assertEqual(
+            self.window.viewer_status_label.text(),
+            "Status: Viewer status moved",
+        )
+        self.assertTrue(self.window.viewer_time_label.text().startswith("Time:"))
+        self.assertTrue(self.window.viewer_root_pose_label.text().startswith("Root:"))
         preview_section = next(
-            section for section in self.window.right_sidebar_content.sections
-            if section.title == "Preview / IK"
+            section for section in self.window.left_sidebar_content.sections
+            if section.title == "Advanced IK"
         )
         preview_section.set_expanded(True)
         ik_tabs = self.viewer.preview_ik_context_widget().findChild(QTabWidget)
@@ -581,9 +602,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
         for removed_title in (
             "Project", "Editors", "Display", "Selection", "Properties",
             "3D Selection", "Export / Import", "Playback / Ghosts",
-            "Joints / IK",
+            "Joints / IK", "Transform", "Preview / IK",
         ):
             self.assertNotIn(removed_title, all_titles)
+        self.assertLessEqual(self.window.controls.table.maximumHeight(), 180)
         self.assertIs(
             self.window.controls.robot_context_widget(),
             self.viewer.robot_context_widget(),
@@ -611,8 +633,20 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
     def test_model_colors_toggle_defaults_on_without_mutating_materials(self):
         before = self.window.robot_model_3d.mj_model.mat_rgba.copy()
+        self.window.viewer_tabs.setCurrentWidget(self.window.viewer_3d_stack)
+        self.window.update_editor_context()
         self.assertTrue(self.viewer.model_colors_box.isChecked())
         self.assertTrue(self.viewer.canvas.use_model_colors)
+        display_layout = self.viewer.display_context_widget().layout()
+        display_widgets = [
+            display_layout.itemAt(index).widget()
+            for index in range(display_layout.count())
+        ]
+        self.assertEqual(display_widgets[:3], [
+            self.viewer.model_colors_box,
+            self.window.controls.show_lines_box,
+            self.viewer.show_ghosts,
+        ])
         self.viewer.model_colors_box.setChecked(False)
         self.assertFalse(self.viewer.canvas.use_model_colors)
         self.viewer.model_colors_box.setChecked(True)
@@ -635,6 +669,23 @@ class RobotViewerTimelineTests(unittest.TestCase):
             for index in range(self.window.controls.table.columnCount())
         ]
         self.assertEqual(headers[-3:], ["roll", "pitch", "yaw"])
+
+    def test_pose_controls_use_compact_static_labels(self):
+        controls = self.window.controls
+        expected = {
+            controls.x_slider: "X [m]",
+            controls.y_slider: "Y [m]",
+            controls.z_slider: "Z [m]",
+            controls.roll_slider: "Roll [rad]",
+            controls.pitch_slider: "Pitch [rad]",
+            controls.yaw_slider: "Yaw [rad]",
+        }
+
+        for slider, label in expected.items():
+            with self.subTest(label=label):
+                self.assertEqual(slider.label.text(), label)
+                self.assertNotIn(":", slider.label.text())
+                self.assertLessEqual(slider.label.maximumWidth(), 86)
 
     def test_accepted_3d_rotation_is_upserted_into_keyframe(self):
         self.window.on_3d_target_frame_changed("left_hand")

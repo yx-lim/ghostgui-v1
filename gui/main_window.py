@@ -55,7 +55,8 @@ from .model_importer import (
 )
 
 
-SIDEBAR_WIDTH = 250
+LEFT_SIDEBAR_WIDTH = 250
+RIGHT_SIDEBAR_WIDTH = 270
 
 
 @dataclass
@@ -182,16 +183,13 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_tabs = self.build_viewer_tabs()
         self.status_panel = self.build_status_panel()
         self.left_sidebar_content = AppLeftSidebar(self.controls, self.viewer_tabs)
-        self.right_sidebar_content = AppRightSidebar(
-            self.status_panel,
-            base_sections=self.controls.inspector_sections(),
-        )
+        self.right_sidebar_content = AppRightSidebar(self.status_panel)
         self.left_sidebar = self.left_sidebar_content
         self.right_sidebar = self.right_sidebar_content
-        self.left_sidebar.setMinimumWidth(SIDEBAR_WIDTH)
-        self.left_sidebar.setMaximumWidth(SIDEBAR_WIDTH)
-        self.right_sidebar.setMinimumWidth(SIDEBAR_WIDTH)
-        self.right_sidebar.setMaximumWidth(SIDEBAR_WIDTH)
+        self.left_sidebar.setMinimumWidth(LEFT_SIDEBAR_WIDTH)
+        self.left_sidebar.setMaximumWidth(LEFT_SIDEBAR_WIDTH)
+        self.right_sidebar.setMinimumWidth(RIGHT_SIDEBAR_WIDTH)
+        self.right_sidebar.setMaximumWidth(RIGHT_SIDEBAR_WIDTH)
 
         self.connect_signals()
         self.set_current_frame_to_model_reference(
@@ -213,7 +211,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.main_splitter.setStretchFactor(0, 0)
         self.main_splitter.setStretchFactor(1, 1)
         self.main_splitter.setStretchFactor(2, 0)
-        self.main_splitter.setSizes([200, 900, 210])
+        self.main_splitter.setSizes([200, 900, 260])
         self.setCentralWidget(self.main_splitter)
 
         # Initial view
@@ -240,20 +238,30 @@ class RobotGuiMainWindow(QMainWindow):
     def build_status_panel(self):
         panel = QWidget()
         panel.setMinimumWidth(0)
-        panel.setMaximumWidth(220)
+        panel.setMaximumWidth(244)
         layout = QVBoxLayout()
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
         self.backend_label = QLabel()
         self.backend_label.setWordWrap(True)
+        self.viewer_status_label = QLabel()
+        self.viewer_status_label.setWordWrap(True)
+        self.viewer_time_label = QLabel()
+        self.viewer_time_label.setWordWrap(True)
+        self.viewer_root_pose_label = QLabel()
+        self.viewer_root_pose_label.setWordWrap(True)
         self.status_text = QTextEdit()
         self.status_text.setReadOnly(True)
         self.status_text.setMinimumWidth(0)
-        self.status_text.setMaximumWidth(212)
+        self.status_text.setMaximumWidth(236)
+        self.status_text.setMinimumHeight(240)
         self.status_text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
 
         layout.addWidget(self.backend_label)
+        layout.addWidget(self.viewer_status_label)
+        layout.addWidget(self.viewer_time_label)
+        layout.addWidget(self.viewer_root_pose_label)
         layout.addWidget(self.status_text)
 
         panel.setLayout(layout)
@@ -287,9 +295,13 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.set_display_context_widget(
                 self.viewer_3d.display_context_widget()
             )
+            self.viewer_3d.set_trajectory_lines_widget(
+                self.controls.show_lines_box
+            )
             self.controls.set_preview_ik_context_widget(
                 self.viewer_3d.preview_ik_context_widget()
             )
+            self.sync_viewer_status_panel()
         else:
             self.controls.set_robot_context_widget(None)
             self.controls.set_selection_context_widget(None)
@@ -340,7 +352,45 @@ class RobotGuiMainWindow(QMainWindow):
         viewer_3d.delete_timeslice_requested.connect(
             self.on_delete_timeslice_requested
         )
+        viewer_3d.status_label.text_changed.connect(
+            lambda text, viewer=viewer_3d: self.on_viewer_status_changed(
+                viewer, text
+            )
+        )
+        viewer_3d.timeline_state_label.text_changed.connect(
+            lambda text, viewer=viewer_3d: self.on_viewer_time_changed(
+                viewer, text
+            )
+        )
+        viewer_3d.root_pose_label.text_changed.connect(
+            lambda text, viewer=viewer_3d: self.on_viewer_root_pose_changed(
+                viewer, text
+            )
+        )
         viewer_2d_skeleton.target_dragged.connect(self.on_target_dragged)
+
+    def on_viewer_status_changed(self, viewer, text):
+        if viewer is self.viewer_3d:
+            self.viewer_status_label.setText(f"Status: {text}")
+
+    def on_viewer_time_changed(self, viewer, text):
+        if viewer is self.viewer_3d:
+            self.viewer_time_label.setText(text.replace("3D state time:", "Time:"))
+
+    def on_viewer_root_pose_changed(self, viewer, text):
+        if viewer is self.viewer_3d:
+            self.viewer_root_pose_label.setText(f"Root: {text}")
+
+    def sync_viewer_status_panel(self):
+        self.on_viewer_status_changed(
+            self.viewer_3d, self.viewer_3d.status_label.text()
+        )
+        self.on_viewer_time_changed(
+            self.viewer_3d, self.viewer_3d.timeline_state_label.text()
+        )
+        self.on_viewer_root_pose_changed(
+            self.viewer_3d, self.viewer_3d.root_pose_label.text()
+        )
 
     def on_model_changed(self, model_key):
         """Swap model-owned widgets while retaining the surrounding app."""
@@ -962,6 +1012,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.backend_label.setText(
             f"Backend: {self.backend_interface.backend_name()}"
         )
+        self.sync_viewer_status_panel()
 
         summary = []
         summary.append(f"Number of keyframes: {len(self.trajectory.frames)}")

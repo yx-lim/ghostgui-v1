@@ -96,6 +96,7 @@ class AppSidebar(QWidget):
         root.addWidget(self.scroll)
 
     def add_section(self, title, widget, expanded=True):
+        widget.setMaximumWidth(self.SECTION_MAX_WIDTH - 16)
         section = CollapsibleSection(title, widget, expanded=False)
         section.setMaximumWidth(self.SECTION_MAX_WIDTH)
         self.body_layout.addWidget(section)
@@ -148,6 +149,8 @@ class AppLeftSidebar(AppSidebar):
 
 
 class AppRightSidebar(AppSidebar):
+    SECTION_MAX_WIDTH = 260
+
     def __init__(self, status_panel, base_sections=None, parent=None):
         super().__init__(parent)
         if base_sections:

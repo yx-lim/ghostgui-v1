@@ -81,6 +81,16 @@ def _compact_spinbox(spinbox, width=68):
     spinbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
 
+class StatusValueLabel(QLabel):
+    text_changed = Signal(str)
+
+    def setText(self, text):
+        previous = self.text()
+        super().setText(text)
+        if text != previous:
+            self.text_changed.emit(text)
+
+
 class TimesliceSlider(QSlider):
     """Horizontal time slider with markers for accepted logical slices."""
 
@@ -404,26 +414,27 @@ class RobotViewer3D(QWidget):
         model_label = QLabel(f"Model: {model_text}")
         model_label.setWordWrap(True)
         model_layout.addWidget(model_label)
-        self.status_label = QLabel(error or "Robot model loaded; FK ready.")
+        self.status_label = StatusValueLabel(error or "Robot model loaded; FK ready.")
         self.status_label.setWordWrap(True)
-        model_layout.addWidget(self.status_label)
-        self.timeline_state_label = QLabel("3D state time: 0.00 s")
-        model_layout.addWidget(self.timeline_state_label)
+        self.timeline_state_label = StatusValueLabel("3D state time: 0.00 s")
 
         self.model_colors_box = QCheckBox("Use model colors")
         self.model_colors_box.setChecked(True)
         self.model_colors_box.toggled.connect(self.canvas.set_use_model_colors)
         display_panel = QWidget()
-        display_layout = QVBoxLayout(display_panel)
-        display_layout.setContentsMargins(0, 0, 0, 0)
-        display_layout.addWidget(self.model_colors_box)
+        self.display_layout = QVBoxLayout(display_panel)
+        self.display_layout.setContentsMargins(0, 0, 0, 0)
+        self.display_layout.addWidget(self.model_colors_box)
+        self.show_ghosts = QCheckBox("Show trajectory ghosts")
+        self.show_ghosts.toggled.connect(self._update_ghost_options)
+        self.display_layout.addWidget(self.show_ghosts)
         self.display_context_panel = display_panel
         if self.robot_model:
             texture_warnings = self.robot_model.get_visual_texture_warnings()
             if texture_warnings:
                 warning = QLabel("; ".join(texture_warnings))
                 warning.setWordWrap(True)
-                display_layout.addWidget(warning)
+                self.display_layout.addWidget(warning)
 
         self.reset_button = QPushButton("Reset 3D Pose")
         self.reset_button.clicked.connect(self.reset_robot_pose)
@@ -476,9 +487,8 @@ class RobotViewer3D(QWidget):
         )
         target_layout.addRow("Target", self.target_box)
         target_layout.addRow("Collision substeps", self.collision_substeps)
-        self.root_pose_label = QLabel()
+        self.root_pose_label = StatusValueLabel()
         self.root_pose_label.setWordWrap(True)
-        target_layout.addRow("Root pose", self.root_pose_label)
 
         self.preview_ik_context_panel = QWidget()
         preview_ik_layout = QVBoxLayout(self.preview_ik_context_panel)
@@ -520,8 +530,6 @@ class RobotViewer3D(QWidget):
         self.frame_slider = QSlider(Qt.Orientation.Horizontal)
         self.frame_slider.setRange(0, 0)
         self.frame_slider.valueChanged.connect(self.set_trajectory_frame)
-        self.show_ghosts = QCheckBox("Show trajectory ghosts")
-        self.show_ghosts.toggled.connect(self._update_ghost_options)
         self.ghost_stride = QSpinBox()
         _compact_spinbox(self.ghost_stride)
         self.ghost_stride.setRange(1, 100)
@@ -534,7 +542,7 @@ class RobotViewer3D(QWidget):
         self.ghost_alpha.setValue(0.16)
         self.ghost_alpha.valueChanged.connect(self._update_ghost_options)
         trajectory_layout.addRow(self.generate_button)
-        trajectory_layout.addRow(self.play_button, self.show_ghosts)
+        trajectory_layout.addRow(self.play_button)
         trajectory_layout.addRow("Frame", self.frame_slider)
         trajectory_layout.addRow("Ghost stride", self.ghost_stride)
         trajectory_layout.addRow("Ghost alpha", self.ghost_alpha)
@@ -646,9 +654,7 @@ class RobotViewer3D(QWidget):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(8)
 
-        self.timeslice_label = QLabel("Timeslice")
-        self.timeslice_time_label = QLabel("0.00 s")
-        self.timeslice_time_label.setMinimumWidth(48)
+        self.timeslice_label = QLabel("Time")
 
         self.timeslice_slider = TimesliceSlider(Qt.Orientation.Horizontal)
         self.timeslice_slider.setRange(0, 500)
@@ -667,29 +673,35 @@ class RobotViewer3D(QWidget):
         )
 
         self.timeslice_time_input = QDoubleSpinBox()
-        _compact_spinbox(self.timeslice_time_input, width=76)
+        _compact_spinbox(self.timeslice_time_input, width=72)
         self.timeslice_time_input.setRange(0.0, 5.0)
         self.timeslice_time_input.setDecimals(2)
         self.timeslice_time_input.setSingleStep(0.01)
+        self.timeslice_time_input.setSuffix(" s")
         self.timeslice_time_input.editingFinished.connect(
             self._emit_timeslice_input_time
         )
 
-        self.accept_timeslice_button = QPushButton("Accept Slice")
+        self.accept_timeslice_button = QPushButton("Accept")
         self.accept_timeslice_button.clicked.connect(self.accept_timeslice)
-        self.delete_timeslice_button = QPushButton("Delete Slice")
+        self.delete_timeslice_button = QPushButton("Delete")
         self.delete_timeslice_button.clicked.connect(self.delete_timeslice)
 
         layout.addWidget(self.timeslice_label)
         layout.addWidget(self.timeslice_slider, stretch=1)
         layout.addWidget(self.timeslice_time_input)
-        layout.addWidget(self.timeslice_time_label)
         layout.addWidget(self.accept_timeslice_button)
         layout.addWidget(self.delete_timeslice_button)
         return self.timeslice_editor
 
     def set_defined_timeslices(self, times):
         self.timeslice_slider.set_defined_times(times)
+
+    def set_trajectory_lines_widget(self, widget):
+        if widget is None:
+            return
+        if widget.parent() is not self.display_context_panel:
+            self.display_layout.insertWidget(1, widget)
 
     def _set_timeslice_widgets(self, time):
         raw_time = int(round(float(time) * 100.0))
@@ -701,14 +713,12 @@ class RobotViewer3D(QWidget):
         was_blocked = self.timeslice_time_input.blockSignals(True)
         self.timeslice_time_input.setValue(raw_time / 100.0)
         self.timeslice_time_input.blockSignals(was_blocked)
-        self.timeslice_time_label.setText(f"{raw_time / 100.0:.2f} s")
 
     def _preview_timeslice_slider_value(self, raw_value):
         time = raw_value / 100.0
         was_blocked = self.timeslice_time_input.blockSignals(True)
         self.timeslice_time_input.setValue(time)
         self.timeslice_time_input.blockSignals(was_blocked)
-        self.timeslice_time_label.setText(f"{time:.2f} s")
 
     def _emit_timeslice_slider_time(self):
         self.timeslice_time_changed.emit(self.timeslice_slider.value() / 100.0)

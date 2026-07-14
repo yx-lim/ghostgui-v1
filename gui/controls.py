@@ -49,12 +49,9 @@ class LabeledSlider(QWidget):
         self.decimals = max(2, int(math.ceil(math.log10(max(1, scale)))))
         self._syncing = False
 
-        layout = QVBoxLayout()
+        layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(3)
-        value_row = QHBoxLayout()
-        value_row.setContentsMargins(0, 0, 0, 0)
-        value_row.setSpacing(4)
+        layout.setSpacing(6)
 
         self.label = QLabel()
         self.slider = QSlider(Qt.Orientation.Horizontal)
@@ -74,14 +71,14 @@ class LabeledSlider(QWidget):
         self.slider.valueChanged.connect(self.on_slider_changed)
         self.input.valueChanged.connect(self.on_input_changed)
 
-        self.label.setWordWrap(True)
+        self.label.setText(self.name)
+        self.label.setMinimumWidth(64)
+        self.label.setMaximumWidth(86)
         layout.addWidget(self.label)
-        value_row.addWidget(self.slider, stretch=1)
-        value_row.addWidget(self.input)
-        layout.addLayout(value_row)
+        layout.addWidget(self.slider, stretch=1)
+        layout.addWidget(self.input)
 
         self.setLayout(layout)
-        self.update_label()
 
     def value(self):
         return self.slider.value() / self.scale
@@ -98,7 +95,6 @@ class LabeledSlider(QWidget):
         self.input.setValue(value)
         self._syncing = False
 
-        self.update_label()
         self.value_changed.emit(value)
 
     def on_input_changed(self, value):
@@ -109,11 +105,7 @@ class LabeledSlider(QWidget):
         self.slider.setValue(round(value * self.scale))
         self._syncing = False
 
-        self.update_label()
         self.value_changed.emit(self.value())
-
-    def update_label(self):
-        self.label.setText(f"{self.name}: {self.value():.{self.decimals}f}")
 
 
 class TrajectoryControlPanel(QGroupBox):
@@ -246,7 +238,7 @@ class TrajectoryControlPanel(QGroupBox):
         )
 
         self.x_slider = LabeledSlider(
-            "Target X [m]",
+            "X [m]",
             min_value=-2000,
             max_value=2000,
             initial_value=0,
@@ -254,7 +246,7 @@ class TrajectoryControlPanel(QGroupBox):
         )
 
         self.y_slider = LabeledSlider(
-            "Target Y [m]",
+            "Y [m]",
             min_value=-1000,
             max_value=1000,
             initial_value=0,
@@ -262,7 +254,7 @@ class TrajectoryControlPanel(QGroupBox):
         )
 
         self.z_slider = LabeledSlider(
-            "Target Z [m]",
+            "Z [m]",
             min_value=0,
             max_value=2000,
             initial_value=900,
@@ -270,7 +262,7 @@ class TrajectoryControlPanel(QGroupBox):
         )
 
         self.roll_slider = LabeledSlider(
-            "Target roll [rad]",
+            "Roll [rad]",
             min_value=-314,
             max_value=314,
             initial_value=0,
@@ -278,7 +270,7 @@ class TrajectoryControlPanel(QGroupBox):
         )
 
         self.pitch_slider = LabeledSlider(
-            "Target pitch [rad]",
+            "Pitch [rad]",
             min_value=-157,
             max_value=157,
             initial_value=0,
@@ -286,7 +278,7 @@ class TrajectoryControlPanel(QGroupBox):
         )
 
         self.yaw_slider = LabeledSlider(
-            "Target yaw [rad]",
+            "Yaw [rad]",
             min_value=-314,
             max_value=314,
             initial_value=0,
@@ -356,6 +348,9 @@ class TrajectoryControlPanel(QGroupBox):
         # Keyframe table
         # --------------------------------------------------------
         self.table = QTableWidget()
+        self.table.setMinimumHeight(96)
+        self.table.setMaximumHeight(180)
+        self.table.setMaximumWidth(212)
         self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
             "time",
@@ -442,15 +437,14 @@ class TrajectoryControlPanel(QGroupBox):
     def workflow_sections(self):
         return [
             ("Robot", self.robot_panel, True),
+            ("Target", self.target_panel, True),
+            ("Pose", self.transform_panel, True),
             ("Trajectory", self.trajectory_panel, True),
+            ("Advanced IK", self.preview_ik_panel, False),
         ]
 
     def inspector_sections(self):
-        return [
-            ("Target", self.target_panel, True),
-            ("Transform", self.transform_panel, True),
-            ("Preview / IK", self.preview_ik_panel, True),
-        ]
+        return []
 
     def set_frame_names(self, frame_names, preferred=None):
         """Replace target choices without emitting an intermediate selection."""
