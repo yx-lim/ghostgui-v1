@@ -31,7 +31,13 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from .trajectory import Trajectory, SampledTrajectory, quat_to_rpy, rpy_to_quat
+from .trajectory import (
+    TargetFrame,
+    Trajectory,
+    SampledTrajectory,
+    quat_to_rpy,
+    rpy_to_quat,
+)
 from .controls import TrajectoryControlPanel
 from .viewer_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
@@ -323,6 +329,15 @@ class RobotGuiMainWindow(QMainWindow):
         viewer_3d.target_frame_changed.connect(self.on_3d_target_frame_changed)
         viewer_3d.preview_cancelled.connect(self.on_preview_cancelled)
         viewer_3d.trajectory_csv_loaded.connect(self.on_trajectory_csv_loaded)
+        viewer_3d.timeslice_time_changed.connect(
+            self.on_viewer_timeslice_time_changed
+        )
+        viewer_3d.accept_timeslice_requested.connect(
+            self.on_accept_timeslice_requested
+        )
+        viewer_3d.delete_timeslice_requested.connect(
+            self.on_delete_timeslice_requested
+        )
         viewer_2d_skeleton.target_dragged.connect(self.on_target_dragged)
 
     def on_model_changed(self, model_key):
@@ -512,6 +527,142 @@ class RobotGuiMainWindow(QMainWindow):
             )
         self.refresh_display()
         self.viewer_3d.set_current_time(time)
+
+    def on_viewer_timeslice_time_changed(self, time):
+        """Keep the sidebar time editor in sync with the viewer-bottom scrubber."""
+        self.controls.time_slider.set_value(time)
+        self.on_time_changed(time)
+
+    def on_accept_timeslice_requested(self):
+        if self.viewer_3d.preview_active and not self.viewer_3d.accept_preview():
+            return
+
+        count = self.define_timeslice_from_committed_pose()
+        time = self.viewer_3d.get_current_time()
+        if count <= 0:
+            message = f"No logical target frames were available at t={time:.2f} s."
+            self.viewer_3d.status_label.setText(message)
+            self.status_text.setText(message)
+            return
+
+        self.refresh_display()
+        message = (
+            f"Accepted slice at t={time:.2f} s; captured {count} logical targets "
+            "from the committed solved pose."
+        )
+        self.viewer_3d.status_label.setText(message)
+        self.status_text.setText(message)
+
+    def on_delete_timeslice_requested(self):
+        time = self.viewer_3d.get_current_time()
+        deleted_targets = self.delete_timeslice_at_time(time)
+        deleted_qpos = False
+        if self.viewer_3d.state_timeline is not None:
+            deleted_qpos = self.viewer_3d.state_timeline.delete_state(time)
+
+        if deleted_targets <= 0 and not deleted_qpos:
+            message = f"No defined slice found at t={time:.2f} s."
+            self.viewer_3d.status_label.setText(message)
+            self.status_text.setText(message)
+            return
+
+        self.active_index = -1
+        next_time = time
+        if deleted_qpos and self.viewer_3d.state_timeline is not None:
+            remaining_times = self.viewer_3d.state_timeline.times()
+            if remaining_times:
+                next_time = min(
+                    remaining_times, key=lambda candidate: abs(candidate - time)
+                )
+        self.controls.time_slider.set_value(next_time)
+        self.viewer_3d.set_current_time(next_time)
+        self.refresh_display()
+        parts = []
+        if deleted_targets > 0:
+            parts.append(f"{deleted_targets} target frames")
+        if deleted_qpos:
+            parts.append("robot qpos")
+        detail = " and ".join(parts)
+        message = f"Deleted slice at t={time:.2f} s ({detail})."
+        self.viewer_3d.status_label.setText(message)
+        self.status_text.setText(message)
+
+    def define_timeslice_from_committed_pose(self):
+        """Snapshot every editable logical target from the committed MuJoCo pose."""
+        state = self.viewer_3d.committed_state
+        if state is None:
+            return 0
+
+        time = self.viewer_3d.get_current_time()
+        phase = self.controls.phase_box.currentText()
+        selected_frame_name = self.controls.frame_box.currentText()
+        selected_frame = None
+        selected_index = -1
+        last_index = -1
+        count = 0
+
+        frame_names = []
+        for name in getattr(self.robot_model_3d, "trajectory_frames", []):
+            if name not in frame_names:
+                frame_names.append(name)
+        for name in self.controls.frame_names:
+            if name not in frame_names:
+                frame_names.append(name)
+        for name in self.viewer_3d.frame_bindings:
+            if name not in frame_names:
+                frame_names.append(name)
+
+        for frame_name in frame_names:
+            binding = self.viewer_3d.frame_bindings.get(frame_name)
+            if binding is None:
+                continue
+            kind, object_name = binding
+            try:
+                position, quaternion = state.get_body_pose(object_name, kind)
+            except KeyError:
+                continue
+            roll, pitch, yaw = quat_to_rpy(quaternion)
+            frame = TargetFrame(
+                time=time,
+                phase=phase,
+                frame_name=frame_name,
+                x=float(position[0]),
+                y=float(position[1]),
+                z=float(position[2]),
+                roll=roll,
+                pitch=pitch,
+                yaw=yaw,
+            )
+            last_index = self.trajectory.upsert_frame(frame)
+            if frame_name == selected_frame_name:
+                selected_frame = frame
+                selected_index = last_index
+            count += 1
+
+        self.active_index = selected_index if selected_index >= 0 else last_index
+        if selected_frame is not None:
+            self.controls.set_position_values(
+                x=selected_frame.x,
+                y=selected_frame.y,
+                z=selected_frame.z,
+                roll=selected_frame.roll,
+                pitch=selected_frame.pitch,
+                yaw=selected_frame.yaw,
+                emit_pose_changed=False,
+            )
+        return count
+
+    def delete_timeslice_at_time(self, time, tolerance=1e-6):
+        count = 0
+        for track in self.trajectory.tracks.values():
+            kept = []
+            for frame in track:
+                if abs(frame.time - time) <= tolerance:
+                    count += 1
+                else:
+                    kept.append(frame)
+            track[:] = kept
+        return count
 
     def on_target_dragged(self, x, z):
         """
@@ -773,6 +924,9 @@ class RobotGuiMainWindow(QMainWindow):
         )
 
         self.controls.refresh_table(self.trajectory)
+        self.viewer_3d.set_defined_timeslices(
+            sorted({frame.time for frame in self.trajectory.frames})
+        )
 
         self.backend_label.setText(
             f"Backend: {self.backend_interface.backend_name()}"

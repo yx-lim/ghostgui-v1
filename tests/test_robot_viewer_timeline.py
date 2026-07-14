@@ -7,6 +7,8 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication, QScrollArea, QTabWidget
 
 from gui.collision_checker import Collision
@@ -301,6 +303,136 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.window.controls.time_slider.set_value(0.0)
         self.window.controls.emit_time_changed(0.0)
         self.assertAlmostEqual(self.window.controls.x_slider.value(), 0.10)
+
+    def test_viewer_timeslice_scrubber_loads_editable_time(self):
+        self.viewer.timeslice_slider.setValue(20)
+        self.viewer._emit_timeslice_slider_time()
+
+        self.assertEqual(self.viewer.get_current_time(), 0.2)
+        self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.2)
+        self.assertAlmostEqual(self.viewer.timeslice_time_input.value(), 0.2)
+
+    def test_accept_slice_captures_all_logical_targets_from_committed_pose(self):
+        self.window.controls.time_slider.set_value(0.2)
+        self.window.controls.emit_time_changed(0.2)
+        name = self.viewer.preview_state.get_joint_names()[-1]
+        self.viewer._joint_changed(
+            name, self.viewer.preview_state.get_joint_value(name) + 0.05
+        )
+        preview_qpos = self.viewer.preview_state.get_qpos()
+
+        self.viewer.accept_timeslice()
+
+        self.assertFalse(self.viewer.preview_active)
+        np.testing.assert_allclose(
+            self.viewer.state_timeline.get_state(0.2), preview_qpos
+        )
+        self.assertEqual(self.viewer.timeslice_slider.defined_times, {0.2})
+        state = self.viewer.committed_state
+        expected_names = []
+        for frame_name, (kind, object_name) in self.viewer.frame_bindings.items():
+            try:
+                state.get_body_pose(object_name, kind)
+            except KeyError:
+                continue
+            expected_names.append(frame_name)
+
+        actual_names = {
+            frame.frame_name
+            for frame in self.window.trajectory.frames
+            if abs(frame.time - 0.2) <= 1e-6
+        }
+        self.assertEqual(actual_names, set(expected_names))
+
+        for frame_name in expected_names:
+            with self.subTest(frame_name=frame_name):
+                frame = next(
+                    frame for frame in self.window.trajectory.tracks[frame_name]
+                    if abs(frame.time - 0.2) <= 1e-6
+                )
+                kind, object_name = self.viewer.frame_bindings[frame_name]
+                position, quaternion = state.get_body_pose(object_name, kind)
+                roll, pitch, yaw = quat_to_rpy(quaternion)
+                np.testing.assert_allclose(
+                    [frame.x, frame.y, frame.z], position, atol=1e-9
+                )
+                np.testing.assert_allclose(
+                    [frame.roll, frame.pitch, frame.yaw],
+                    [roll, pitch, yaw],
+                    atol=1e-9,
+                )
+
+    def test_defined_timeslice_marker_snaps_back_to_slice_time(self):
+        self.window.controls.time_slider.set_value(0.2)
+        self.window.controls.emit_time_changed(0.2)
+        self.viewer._joint_changed(
+            self.viewer.preview_state.get_joint_names()[-1],
+            self.viewer.preview_state.get_joint_value(
+                self.viewer.preview_state.get_joint_names()[-1]
+            ) + 0.05,
+        )
+        self.viewer.accept_timeslice()
+        self.viewer.set_current_time(0.0)
+
+        snapped = self.viewer.timeslice_slider.snap_to_nearest_defined_time(0.21)
+
+        self.assertTrue(snapped)
+        self.assertEqual(self.viewer.get_current_time(), 0.2)
+        self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.2)
+
+    def test_clicking_undefined_timeslice_groove_changes_time(self):
+        self.viewer.timeslice_slider.resize(500, 30)
+        self.viewer.timeslice_slider.set_defined_times([0.2])
+        pixel = self.viewer.timeslice_slider._time_to_pixel(0.37)
+
+        self.viewer.timeslice_slider.activate_time_at_pixel(pixel)
+
+        self.assertEqual(self.viewer.get_current_time(), 0.37)
+        self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.37)
+
+    def test_pressing_current_defined_slice_handle_allows_normal_drag(self):
+        self.viewer.timeslice_slider.resize(500, 30)
+        self.window.controls.time_slider.set_value(0.2)
+        self.window.controls.emit_time_changed(0.2)
+        self.viewer.timeslice_slider.set_defined_times([0.2])
+        activated = []
+        self.viewer.timeslice_slider.marker_activated.connect(activated.append)
+        handle_center = self.viewer.timeslice_slider._handle_rect().center()
+        position = QPointF(handle_center)
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            position,
+            position,
+            position,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+
+        self.viewer.timeslice_slider.mousePressEvent(event)
+
+        self.assertEqual(activated, [])
+        self.assertEqual(self.viewer.get_current_time(), 0.2)
+
+    def test_delete_slice_removes_defined_marker_and_logical_targets(self):
+        self.window.controls.time_slider.set_value(0.2)
+        self.window.controls.emit_time_changed(0.2)
+        self.viewer._joint_changed(
+            self.viewer.preview_state.get_joint_names()[-1],
+            self.viewer.preview_state.get_joint_value(
+                self.viewer.preview_state.get_joint_names()[-1]
+            ) + 0.05,
+        )
+        self.viewer.accept_timeslice()
+        self.assertEqual(self.viewer.timeslice_slider.defined_times, {0.2})
+
+        self.viewer.delete_timeslice()
+
+        self.assertNotIn(0.2, self.viewer.timeslice_slider.defined_times)
+        self.assertFalse(
+            any(abs(frame.time - 0.2) <= 1e-6 for frame in self.window.trajectory.frames)
+        )
+        self.assertIsNone(self.viewer.state_timeline.get_state(0.2))
 
     def test_sidebars_are_fixed_shells_with_collapsible_sections(self):
         self.window.resize(1700, 800)

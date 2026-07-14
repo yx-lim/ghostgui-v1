@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -23,6 +24,8 @@ from PySide6.QtWidgets import (
     QSlider,
     QSizePolicy,
     QSpinBox,
+    QStyle,
+    QStyleOptionSlider,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -75,6 +78,148 @@ def _compact_spinbox(spinbox, width=68):
     spinbox.setMinimumWidth(0)
     spinbox.setMaximumWidth(width)
     spinbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+
+class TimesliceSlider(QSlider):
+    """Horizontal time slider with markers for accepted logical slices."""
+
+    marker_activated = Signal(float)
+    time_activated = Signal(float)
+
+    def __init__(self, orientation, parent=None):
+        super().__init__(orientation, parent)
+        self.defined_times = set()
+        self.marker_snap_pixels = 10
+
+    def set_defined_times(self, times):
+        self.defined_times = {round(float(time), 6) for time in times}
+        self.update()
+
+    def snap_to_nearest_defined_time(self, time, tolerance=0.06):
+        nearest = self._nearest_defined_time(time)
+        if nearest is None or abs(nearest - float(time)) > tolerance:
+            return False
+        raw_value = self._time_to_raw(nearest)
+        self.setValue(raw_value)
+        self.marker_activated.emit(nearest)
+        return True
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.orientation() != Qt.Orientation.Horizontal or not self.defined_times:
+            return
+
+        painter = QPainter(self)
+        current_raw = self.value()
+        for time in sorted(self.defined_times):
+            x = self._time_to_pixel(time)
+            raw_value = self._time_to_raw(time)
+            current = abs(raw_value - current_raw) <= 1
+            color = QColor(21, 116, 214) if not current else QColor(15, 158, 255)
+            painter.setPen(QPen(color, 3 if current else 2))
+            groove = self._groove_rect()
+            top = groove.bottom() + 3
+            bottom = min(self.height() - 2, top + (8 if current else 6))
+            painter.drawLine(x, top, x, bottom)
+
+    def mousePressEvent(self, event):
+        if (
+            self.orientation() == Qt.Orientation.Horizontal
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            click_pos = event.position().toPoint()
+            if self._handle_rect().contains(click_pos):
+                super().mousePressEvent(event)
+                return
+            if self.activate_time_at_pixel(event.position().x()):
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def activate_time_at_pixel(self, x):
+        if self.defined_times:
+            nearest = self._nearest_time_by_pixel(x)
+            if nearest is not None:
+                marker_x = self._time_to_pixel(nearest)
+                if abs(marker_x - x) <= self.marker_snap_pixels:
+                    self.setValue(self._time_to_raw(nearest))
+                    self.marker_activated.emit(nearest)
+                    return True
+
+        raw_value = self._pixel_to_raw(x)
+        self.setValue(raw_value)
+        self.time_activated.emit(raw_value / 100.0)
+        return True
+
+    def _nearest_defined_time(self, time):
+        if not self.defined_times:
+            return None
+        return min(self.defined_times, key=lambda candidate: abs(candidate - time))
+
+    def _nearest_time_by_pixel(self, x):
+        if not self.defined_times:
+            return None
+        return min(
+            self.defined_times,
+            key=lambda candidate: abs(self._time_to_pixel(candidate) - x),
+        )
+
+    def _time_to_raw(self, time):
+        raw_value = int(round(float(time) * 100.0))
+        return max(self.minimum(), min(self.maximum(), raw_value))
+
+    def _groove_rect(self):
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        return self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderGroove,
+            self,
+        )
+
+    def _handle_rect(self):
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        return self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderHandle,
+            self,
+        )
+
+    def _time_to_pixel(self, time):
+        groove = self._groove_rect()
+        handle = self._handle_rect()
+        span = max(1, groove.width() - handle.width())
+        raw_value = self._time_to_raw(time)
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        offset = QStyle.sliderPositionFromValue(
+            self.minimum(),
+            self.maximum(),
+            raw_value,
+            span,
+            option.upsideDown,
+        )
+        return groove.x() + handle.width() // 2 + offset
+
+    def _pixel_to_raw(self, x):
+        groove = self._groove_rect()
+        handle = self._handle_rect()
+        span = max(1, groove.width() - handle.width())
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        start = groove.x() + handle.width() // 2
+        offset = int(round(float(x) - start))
+        offset = max(0, min(span, offset))
+        return QStyle.sliderValueFromPosition(
+            self.minimum(),
+            self.maximum(),
+            offset,
+            span,
+            option.upsideDown,
+        )
 
 
 class JointControl(QWidget):
@@ -167,6 +312,9 @@ class RobotViewer3D(QWidget):
     target_frame_changed = Signal(str)
     preview_cancelled = Signal()
     trajectory_csv_loaded = Signal(str)
+    timeslice_time_changed = Signal(float)
+    accept_timeslice_requested = Signal()
+    delete_timeslice_requested = Signal()
 
     def __init__(self, robot_model=None, error=None):
         super().__init__()
@@ -241,8 +389,9 @@ class RobotViewer3D(QWidget):
             self._set_target_to_selected_pose()
 
     def _build_ui(self, error):
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
         self.sidebar_controls = QWidget()
 
@@ -416,7 +565,8 @@ class RobotViewer3D(QWidget):
         editor_tabs.addTab(scroll, "Joint angles")
         editor_tabs.addTab(self._build_ik_settings_widget(), "IK controls")
         preview_ik_layout.addWidget(editor_tabs)
-        root.addWidget(self.canvas)
+        root.addWidget(self.canvas, stretch=1)
+        root.addWidget(self._build_timeslice_editor())
 
         enabled = self.robot_state is not None
         self.reset_button.setEnabled(enabled)
@@ -427,6 +577,97 @@ class RobotViewer3D(QWidget):
         self.selection_context_panel.setEnabled(enabled)
         trajectory_group.setEnabled(enabled)
         preview_group.setEnabled(enabled)
+        self.timeslice_editor.setEnabled(enabled)
+
+    def _build_timeslice_editor(self):
+        self.timeslice_editor = QWidget()
+        layout = QHBoxLayout(self.timeslice_editor)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(8)
+
+        self.timeslice_label = QLabel("Timeslice")
+        self.timeslice_time_label = QLabel("0.00 s")
+        self.timeslice_time_label.setMinimumWidth(48)
+
+        self.timeslice_slider = TimesliceSlider(Qt.Orientation.Horizontal)
+        self.timeslice_slider.setRange(0, 500)
+        self.timeslice_slider.setValue(0)
+        self.timeslice_slider.marker_activated.connect(
+            self._emit_timeslice_marker_time
+        )
+        self.timeslice_slider.time_activated.connect(
+            self._emit_timeslice_marker_time
+        )
+        self.timeslice_slider.sliderMoved.connect(
+            self._preview_timeslice_slider_value
+        )
+        self.timeslice_slider.sliderReleased.connect(
+            self._emit_timeslice_slider_time
+        )
+
+        self.timeslice_time_input = QDoubleSpinBox()
+        _compact_spinbox(self.timeslice_time_input, width=76)
+        self.timeslice_time_input.setRange(0.0, 5.0)
+        self.timeslice_time_input.setDecimals(2)
+        self.timeslice_time_input.setSingleStep(0.01)
+        self.timeslice_time_input.editingFinished.connect(
+            self._emit_timeslice_input_time
+        )
+
+        self.accept_timeslice_button = QPushButton("Accept Slice")
+        self.accept_timeslice_button.clicked.connect(self.accept_timeslice)
+        self.delete_timeslice_button = QPushButton("Delete Slice")
+        self.delete_timeslice_button.clicked.connect(self.delete_timeslice)
+
+        layout.addWidget(self.timeslice_label)
+        layout.addWidget(self.timeslice_slider, stretch=1)
+        layout.addWidget(self.timeslice_time_input)
+        layout.addWidget(self.timeslice_time_label)
+        layout.addWidget(self.accept_timeslice_button)
+        layout.addWidget(self.delete_timeslice_button)
+        return self.timeslice_editor
+
+    def set_defined_timeslices(self, times):
+        self.timeslice_slider.set_defined_times(times)
+
+    def _set_timeslice_widgets(self, time):
+        raw_time = int(round(float(time) * 100.0))
+        raw_time = max(self.timeslice_slider.minimum(), raw_time)
+        raw_time = min(self.timeslice_slider.maximum(), raw_time)
+        was_blocked = self.timeslice_slider.blockSignals(True)
+        self.timeslice_slider.setValue(raw_time)
+        self.timeslice_slider.blockSignals(was_blocked)
+        was_blocked = self.timeslice_time_input.blockSignals(True)
+        self.timeslice_time_input.setValue(raw_time / 100.0)
+        self.timeslice_time_input.blockSignals(was_blocked)
+        self.timeslice_time_label.setText(f"{raw_time / 100.0:.2f} s")
+
+    def _preview_timeslice_slider_value(self, raw_value):
+        time = raw_value / 100.0
+        was_blocked = self.timeslice_time_input.blockSignals(True)
+        self.timeslice_time_input.setValue(time)
+        self.timeslice_time_input.blockSignals(was_blocked)
+        self.timeslice_time_label.setText(f"{time:.2f} s")
+
+    def _emit_timeslice_slider_time(self):
+        self.timeslice_time_changed.emit(self.timeslice_slider.value() / 100.0)
+
+    def _emit_timeslice_marker_time(self, time):
+        self._set_timeslice_widgets(time)
+        self.timeslice_time_changed.emit(float(time))
+
+    def _emit_timeslice_input_time(self):
+        time = self.timeslice_time_input.value()
+        self._set_timeslice_widgets(time)
+        self.timeslice_time_changed.emit(time)
+
+    def accept_timeslice(self):
+        if self.preview_active and not self.accept_preview():
+            return
+        self.accept_timeslice_requested.emit()
+
+    def delete_timeslice(self):
+        self.delete_timeslice_requested.emit()
 
     def sidebar_context_widget(self):
         return self.sidebar_controls
@@ -977,13 +1218,13 @@ class RobotViewer3D(QWidget):
     def accept_preview(self):
         if not self.preview_active:
             self.status_label.setText("No preview changes to accept.")
-            return
+            return False
         preview_qpos = self.preview_state.get_qpos()
         if not np.all(np.isfinite(preview_qpos)):
             self.status_label.setText(
                 "Cannot accept preview: preview pose contains non-finite qpos values."
             )
-            return
+            return False
         collisions = (
             self.collision_checker.get_collisions(self.preview_state)
             if self.collision_checker else []
@@ -995,7 +1236,7 @@ class RobotViewer3D(QWidget):
             self.status_label.setText(
                 f"Cannot accept preview: collision detected ({names})."
             )
-            return
+            return False
         self.committed_state.set_qpos(preview_qpos)
         self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
         self.preview_state.set_qpos(self.committed_state.get_qpos())
@@ -1011,6 +1252,7 @@ class RobotViewer3D(QWidget):
             self.target_pose_drag_finished.emit(
                 *map(float, self.last_valid_target_position), roll, pitch, yaw
             )
+        return True
 
     def cancel_preview(self):
         if not self.robot_state:
@@ -1080,6 +1322,7 @@ class RobotViewer3D(QWidget):
         if not self.state_timeline:
             return
         self.current_time = self.state_timeline.time_key(time)
+        self._set_timeslice_widgets(self.current_time)
         qpos = self.ensure_keyframe_at_current_time()
         self.set_robot_state_for_current_time(qpos)
         self._refresh_timeline_trajectory()

@@ -557,6 +557,9 @@ class RobotStateTimeline:
         state = self.states.get(self.time_key(time))
         return None if state is None else state.copy()
 
+    def delete_state(self, time):
+        return self.states.pop(self.time_key(time), None) is not None
+
     def ensure_state(self, time, fallback_qpos=None):
         key = self.time_key(time)
         existing = self.states.get(key)
