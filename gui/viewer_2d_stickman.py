@@ -25,6 +25,8 @@ from PySide6.QtWidgets import QGraphicsView, QGraphicsScene
 
 from .trajectory_colors import qt_color_for_frame
 
+TRAJECTORY_LINE_DT = 0.02
+
 
 # ============================================================
 # Small 2D vector helpers
@@ -532,6 +534,7 @@ class Stickman2DViewer(QGraphicsView):
         active_frame=None,
         apply_active_frame=True,
         show_trajectory_lines=True,
+        trajectory_smoothing=0.0,
     ):
         """
         Redraw viewer.
@@ -579,7 +582,11 @@ class Stickman2DViewer(QGraphicsView):
 
         self.draw_ground()
         self.draw_stickman()
-        self.draw_trajectory(trajectory, show_lines=show_trajectory_lines)
+        self.draw_trajectory(
+            trajectory,
+            show_lines=show_trajectory_lines,
+            trajectory_smoothing=trajectory_smoothing,
+        )
         self.draw_target_frame()
         self.draw_legend()
 
@@ -835,20 +842,25 @@ class Stickman2DViewer(QGraphicsView):
             label.setData(2, object_name)
             label.setPos(x + radius + 4, y - radius - 12)
 
-    def draw_trajectory(self, trajectory, show_lines=True):
+    def draw_trajectory(
+        self,
+        trajectory,
+        show_lines=True,
+        trajectory_smoothing=0.0,
+    ):
         """
-        Draw stored keyframe target positions.
+        Draw stored keyframe target positions and sampled connecting lines.
         """
 
         if len(trajectory.frames) == 0:
             return
 
-        previous_by_frame = {}
+        if show_lines:
+            self.draw_sampled_trajectory_lines(trajectory, trajectory_smoothing)
 
         for frame in trajectory.frames:
             x, y = self.world_to_screen(frame.x, frame.z)
             color = qt_color_for_frame(frame.frame_name)
-            pen_line = QPen(color, 2)
             pen_point = QPen(color, 2)
             brush_point = QBrush(color)
 
@@ -865,12 +877,27 @@ class Stickman2DViewer(QGraphicsView):
                 f"{frame.frame_name}\n{frame.time:.1f}s"
             ).setPos(x + 6, y - 24)
 
-            previous = previous_by_frame.get(frame.frame_name)
-            if show_lines and previous is not None:
-                px, py = self.world_to_screen(previous.x, previous.z)
-                self.scene.addLine(px, py, x, y, pen_line)
+    def draw_sampled_trajectory_lines(self, trajectory, trajectory_smoothing):
+        samples = trajectory.sample_tracks_uniform_dt(
+            dt=TRAJECTORY_LINE_DT,
+            smoothing=trajectory_smoothing,
+        )
+        previous_by_frame = {}
 
-            previous_by_frame[frame.frame_name] = frame
+        for sample in samples:
+            for frame_name, target in sample["targets"].items():
+                previous = previous_by_frame.get(frame_name)
+                if previous is not None:
+                    px, py = self.world_to_screen(previous.x, previous.z)
+                    x, y = self.world_to_screen(target.x, target.z)
+                    self.scene.addLine(
+                        px,
+                        py,
+                        x,
+                        y,
+                        QPen(qt_color_for_frame(frame_name), 2),
+                    )
+                previous_by_frame[frame_name] = target
 
     def draw_target_frame(self):
         """

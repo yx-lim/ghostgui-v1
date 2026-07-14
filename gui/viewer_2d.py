@@ -19,6 +19,8 @@ from PySide6.QtWidgets import QGraphicsView, QGraphicsScene
 
 from .trajectory_colors import qt_color_for_frame
 
+TRAJECTORY_LINE_DT = 0.02
+
 
 class RobotCanvas(QGraphicsView):
     target_dragged = Signal(float, float)
@@ -58,7 +60,13 @@ class RobotCanvas(QGraphicsView):
     # Main draw function
     # ============================================================
 
-    def update_scene(self, trajectory, active_frame=None, show_trajectory_lines=True):
+    def update_scene(
+        self,
+        trajectory,
+        active_frame=None,
+        show_trajectory_lines=True,
+        trajectory_smoothing=0.0,
+    ):
         self.scene.clear()
 
         if active_frame is not None:
@@ -67,7 +75,11 @@ class RobotCanvas(QGraphicsView):
             self.target_yaw = active_frame.yaw
 
         self.draw_ground()
-        self.draw_trajectory(trajectory, show_lines=show_trajectory_lines)
+        self.draw_trajectory(
+            trajectory,
+            show_lines=show_trajectory_lines,
+            trajectory_smoothing=trajectory_smoothing,
+        )
         self.draw_target_frame()
         self.draw_legend()
 
@@ -75,20 +87,25 @@ class RobotCanvas(QGraphicsView):
         ground_y = self.world_to_screen(0.0, 0.0)[1]
         self.scene.addLine(-325, ground_y, 325, ground_y, QPen(Qt.GlobalColor.black, 2))
 
-    def draw_trajectory(self, trajectory, show_lines=True):
+    def draw_trajectory(
+        self,
+        trajectory,
+        show_lines=True,
+        trajectory_smoothing=0.0,
+    ):
         """
-        Draw stored trajectory keyframes and connecting lines.
+        Draw stored trajectory keyframes and sampled connecting lines.
         """
 
         if len(trajectory.frames) == 0:
             return
 
-        previous_by_frame = {}
+        if show_lines:
+            self.draw_sampled_trajectory_lines(trajectory, trajectory_smoothing)
 
         for frame in trajectory.frames:
             x, y = self.world_to_screen(frame.x, frame.z)
             color = qt_color_for_frame(frame.frame_name)
-            pen_line = QPen(color, 2)
             pen_point = QPen(color, 2)
             brush_point = QBrush(color)
 
@@ -103,12 +120,27 @@ class RobotCanvas(QGraphicsView):
 
             self.scene.addText(f"{frame.time:.1f}s").setPos(x + 6, y - 18)
 
-            previous = previous_by_frame.get(frame.frame_name)
-            if show_lines and previous is not None:
-                px, py = self.world_to_screen(previous.x, previous.z)
-                self.scene.addLine(px, py, x, y, pen_line)
+    def draw_sampled_trajectory_lines(self, trajectory, trajectory_smoothing):
+        samples = trajectory.sample_tracks_uniform_dt(
+            dt=TRAJECTORY_LINE_DT,
+            smoothing=trajectory_smoothing,
+        )
+        previous_by_frame = {}
 
-            previous_by_frame[frame.frame_name] = frame
+        for sample in samples:
+            for frame_name, target in sample["targets"].items():
+                previous = previous_by_frame.get(frame_name)
+                if previous is not None:
+                    px, py = self.world_to_screen(previous.x, previous.z)
+                    x, y = self.world_to_screen(target.x, target.z)
+                    self.scene.addLine(
+                        px,
+                        py,
+                        x,
+                        y,
+                        QPen(qt_color_for_frame(frame_name), 2),
+                    )
+                previous_by_frame[frame_name] = target
 
     def draw_target_frame(self):
         """

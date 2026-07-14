@@ -888,10 +888,21 @@ class RobotViewer3D(QWidget):
         else:
             self.status_label.setText("3D geometry ready.")
 
-    def update_scene(self, trajectory, active_frame=None, show_trajectory_lines=True):
+    def update_scene(
+        self,
+        trajectory,
+        active_frame=None,
+        show_trajectory_lines=True,
+        trajectory_smoothing=0.0,
+    ):
         # The live gizmo owns its quaternion while editing. Ordinary status
         # refreshes must not reset an in-progress ring rotation from controls.
-        self.canvas.update_scene(trajectory, None, show_trajectory_lines)
+        self.canvas.update_scene(
+            trajectory,
+            None,
+            show_trajectory_lines,
+            trajectory_smoothing,
+        )
         if active_frame is not None:
             binding = self.frame_bindings.get(active_frame.frame_name)
             if binding is not None:
@@ -1700,6 +1711,18 @@ class RobotViewer3D(QWidget):
         if self.ghost_renderer:
             self.ghost_renderer.clear()
         self._update_ghost_options()
+
+    def clear_editable_timeline(self, keep_current_pose=True):
+        if not self.state_timeline or not self.robot_state:
+            return
+
+        qpos = (
+            self.committed_state.get_qpos()
+            if keep_current_pose
+            else self.robot_model.home_qpos
+        )
+        self.state_timeline.reset(self.current_time, qpos)
+        self._update_timeline_label()
 
     def load_backend_states(self, states):
         if not self.robot_state:

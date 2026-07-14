@@ -854,6 +854,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.trajectory.clear()
         self.active_index = -1
         self.viewer_3d.clear_robot_trajectory()
+        self.viewer_3d.clear_editable_timeline(keep_current_pose=True)
         self.viewer_3d.set_defined_timeslices([])
         self.refresh_display()
         message = (
@@ -936,8 +937,12 @@ class RobotGuiMainWindow(QMainWindow):
             return
 
         export_dt = 0.01
+        smoothing = self.controls.corner_smoothing()
 
-        sampled_tracks = self.trajectory.sample_tracks_uniform_dt(dt=export_dt)
+        sampled_tracks = self.trajectory.sample_tracks_uniform_dt(
+            dt=export_dt,
+            smoothing=smoothing,
+        )
         sampled_trajectory = SampledTrajectory(samples=sampled_tracks)
 
         result_states = self.backend_interface.solve_trajectory(sampled_trajectory)
@@ -951,6 +956,7 @@ class RobotGuiMainWindow(QMainWindow):
         lines.append("Generated uniformly sampled per-frame target tracks.")
         lines.append(f"Backend: {self.backend_interface.last_backend_name()}")
         lines.append(f"Export dt: {export_dt:.4f} s")
+        lines.append(f"Corner smoothing: {smoothing * 100.0:.0f}%")
         lines.append(f"Number of GUI keyframes: {len(self.trajectory.frames)}")
         lines.append(f"Number of sampled time steps: {len(sampled_tracks)}")
         lines.append(f"Number of backend states: {len(result_states)}")
@@ -986,22 +992,26 @@ class RobotGuiMainWindow(QMainWindow):
 
         active_frame = self.controls.current_frame()
         show_trajectory_lines = self.controls.show_trajectory_lines()
+        trajectory_smoothing = self.controls.corner_smoothing()
 
         self.viewer_2d.update_scene(
             trajectory=self.trajectory,
             active_frame=active_frame,
             show_trajectory_lines=show_trajectory_lines,
+            trajectory_smoothing=trajectory_smoothing,
         )
         self.viewer_3d.update_scene(
             trajectory=self.trajectory,
             active_frame=active_frame,
             show_trajectory_lines=show_trajectory_lines,
+            trajectory_smoothing=trajectory_smoothing,
         )
         self.viewer_2d_stickman.update_scene(
             trajectory=self.trajectory,
             active_frame=active_frame,
             apply_active_frame=apply_stickman_frame,
             show_trajectory_lines=show_trajectory_lines,
+            trajectory_smoothing=trajectory_smoothing,
         )
 
         self.controls.refresh_table(self.trajectory)

@@ -23,6 +23,8 @@ from .trajectory_colors import gl_color_for_frame
 from .trajectory import rpy_to_quat
 from .transform_gizmo import GizmoInteractionState, TransformGizmo
 
+TRAJECTORY_LINE_DT = 0.02
+
 
 class RobotCanvas3D(QOpenGLWidget):
     target_dragged = Signal(float, float)
@@ -50,6 +52,7 @@ class RobotCanvas3D(QOpenGLWidget):
 
         self.trajectory = None
         self.show_trajectory_lines = True
+        self.trajectory_smoothing = 0.0
 
         self.target_x = 0.0
         self.target_y = 0.0
@@ -130,9 +133,16 @@ class RobotCanvas3D(QOpenGLWidget):
     # Scene API
     # ============================================================
 
-    def update_scene(self, trajectory, active_frame=None, show_trajectory_lines=True):
+    def update_scene(
+        self,
+        trajectory,
+        active_frame=None,
+        show_trajectory_lines=True,
+        trajectory_smoothing=0.0,
+    ):
         self.trajectory = trajectory
         self.show_trajectory_lines = show_trajectory_lines
+        self.trajectory_smoothing = max(0.0, min(1.0, float(trajectory_smoothing)))
 
         if active_frame is not None:
             self.target_x = active_frame.x
@@ -558,20 +568,25 @@ class RobotCanvas3D(QOpenGLWidget):
             return
 
         if self.show_trajectory_lines:
+            samples = self.trajectory.sample_tracks_uniform_dt(
+                dt=TRAJECTORY_LINE_DT,
+                smoothing=self.trajectory_smoothing,
+            )
             frames_by_name = {}
-            for frame in self.trajectory.frames:
-                frames_by_name.setdefault(frame.frame_name, []).append(frame)
+            for sample in samples:
+                for frame_name, target in sample["targets"].items():
+                    frames_by_name.setdefault(frame_name, []).append(target)
 
             GL.glLineWidth(2.0)
 
-            for frame_name, frames in frames_by_name.items():
-                if len(frames) < 2:
+            for frame_name, targets in frames_by_name.items():
+                if len(targets) < 2:
                     continue
 
                 GL.glColor3f(*gl_color_for_frame(frame_name))
                 GL.glBegin(GL.GL_LINE_STRIP)
-                for frame in sorted(frames, key=lambda f: f.time):
-                    GL.glVertex3f(frame.x, frame.y, frame.z)
+                for target in targets:
+                    GL.glVertex3f(target.x, target.y, target.z)
                 GL.glEnd()
 
         GL.glPointSize(7.0)

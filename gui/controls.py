@@ -318,6 +318,17 @@ class TrajectoryControlPanel(QGroupBox):
         self.show_lines_box.toggled.connect(self.trajectory_lines_changed.emit)
         self.view_layout.addWidget(self.show_lines_box)
 
+        self.corner_smoothing_slider = LabeledSlider(
+            "Smoothing [%]",
+            min_value=0,
+            max_value=100,
+            initial_value=0,
+            scale=1,
+        )
+        self.corner_smoothing_slider.input.setMaximumWidth(52)
+        self.corner_smoothing_slider.setMaximumWidth(212)
+        self.trajectory_layout.addWidget(self.corner_smoothing_slider)
+
         # --------------------------------------------------------
         # Keyframe buttons
         # --------------------------------------------------------
@@ -506,6 +517,9 @@ class TrajectoryControlPanel(QGroupBox):
 
     def show_trajectory_lines(self):
         return self.show_lines_box.isChecked()
+
+    def corner_smoothing(self):
+        return max(0.0, min(1.0, self.corner_smoothing_slider.value() / 100.0))
 
     def set_from_frame(self, frame):
         """

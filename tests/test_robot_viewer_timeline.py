@@ -491,6 +491,39 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(self.viewer.timeslice_slider.defined_times, set())
         np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), pose_before)
 
+    def test_clear_trajectory_drops_stale_editable_qpos_times(self):
+        self.window.controls.time_slider.set_value(0.2)
+        self.window.controls.emit_time_changed(0.2)
+        joint_name = self.viewer.preview_state.get_joint_names()[-1]
+        self.viewer._joint_changed(
+            joint_name,
+            self.viewer.preview_state.get_joint_value(joint_name) + 0.05,
+        )
+        self.viewer.accept_timeslice()
+        stale_qpos = self.viewer.state_timeline.get_state(0.2)
+        self.assertFalse(np.allclose(stale_qpos, self.viewer.robot_model.home_qpos))
+
+        original_question = QMessageBox.question
+        try:
+            QMessageBox.question = staticmethod(
+                lambda *args, **kwargs: QMessageBox.StandardButton.Yes
+            )
+            self.window.on_clear_trajectory()
+        finally:
+            QMessageBox.question = original_question
+
+        self.assertEqual(self.viewer.state_timeline.times(), [0.2])
+
+        self.viewer.reset_robot_pose()
+        self.window.controls.time_slider.set_value(0.0)
+        self.window.controls.emit_time_changed(0.0)
+
+        np.testing.assert_allclose(
+            self.viewer.committed_state.get_qpos(),
+            self.viewer.robot_model.home_qpos,
+        )
+        self.assertFalse(np.allclose(self.viewer.committed_state.get_qpos(), stale_qpos))
+
     def test_viewer_quick_actions_mirror_common_controls(self):
         self.assertIs(self.viewer.quick_actions_panel.parent(), self.viewer.canvas_workspace)
 
@@ -686,6 +719,37 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 self.assertEqual(slider.label.text(), label)
                 self.assertNotIn(":", slider.label.text())
                 self.assertLessEqual(slider.label.maximumWidth(), 86)
+
+    def test_corner_smoothing_slider_maps_percent_to_fraction(self):
+        controls = self.window.controls
+
+        self.assertEqual(controls.corner_smoothing_slider.label.text(), "Smoothing [%]")
+        self.assertAlmostEqual(controls.corner_smoothing(), 0.0)
+
+        controls.corner_smoothing_slider.set_value(50.0)
+
+        self.assertAlmostEqual(controls.corner_smoothing(), 0.5)
+
+    def test_refresh_display_passes_smoothing_to_trajectory_line_views(self):
+        captured = {}
+
+        def capture(name):
+            def update_scene(*args, **kwargs):
+                captured[name] = kwargs["trajectory_smoothing"]
+            return update_scene
+
+        self.window.viewer_2d.update_scene = capture("viewer_2d")
+        self.window.viewer_3d.update_scene = capture("viewer_3d")
+        self.window.viewer_2d_stickman.update_scene = capture("viewer_2d_stickman")
+        self.window.controls.corner_smoothing_slider.set_value(75.0)
+
+        self.window.refresh_display()
+
+        self.assertEqual(captured, {
+            "viewer_2d": 0.75,
+            "viewer_3d": 0.75,
+            "viewer_2d_stickman": 0.75,
+        })
 
     def test_accepted_3d_rotation_is_upserted_into_keyframe(self):
         self.window.on_3d_target_frame_changed("left_hand")

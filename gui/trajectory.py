@@ -12,7 +12,8 @@ Each TargetFrame says:
     At this time, this robot frame should be at this pose.
 
 Updated:
-    - Position is still linearly interpolated.
+    - Position is linearly interpolated by default.
+    - Generated samples can optionally blend toward a smoothed Hermite path.
     - Orientation is converted from roll/pitch/yaw to quaternion.
     - Quaternion orientation is interpolated using SLERP.
     - Result is converted back to roll/pitch/yaw for the existing backend/export format.
@@ -301,7 +302,7 @@ class Trajectory:
     # Uniform-dt sampling
     # ============================================================
 
-    def sample_uniform_dt(self, dt=0.01):
+    def sample_uniform_dt(self, dt=0.01, smoothing=0.0):
         """
         Backward-compatible flattened sampling.
 
@@ -311,12 +312,12 @@ class Trajectory:
         """
         sampled_frames = []
 
-        for sample in self.sample_tracks_uniform_dt(dt=dt):
+        for sample in self.sample_tracks_uniform_dt(dt=dt, smoothing=smoothing):
             sampled_frames.extend(sample["targets"].values())
 
         return sorted(sampled_frames, key=lambda f: (f.time, f.frame_name))
 
-    def sample_tracks_uniform_dt(self, dt=0.01):
+    def sample_tracks_uniform_dt(self, dt=0.01, smoothing=0.0):
         """
         Sample each robot frame/body-part track independently.
 
@@ -334,6 +335,8 @@ class Trajectory:
 
         if not non_empty_tracks:
             return []
+
+        smoothing = max(0.0, min(1.0, float(smoothing)))
 
         t_start = min(track[0].time for track in non_empty_tracks.values())
         t_end = max(track[-1].time for track in non_empty_tracks.values())
@@ -353,8 +356,7 @@ class Trajectory:
                 if t < track[0].time - 1e-9 or t > track[-1].time + 1e-9:
                     continue
 
-                f0, f1 = self.find_surrounding_keyframes(track, t)
-                targets[frame_name] = self.interpolate_frames(f0, f1, t)
+                targets[frame_name] = self.interpolate_track(track, t, smoothing)
 
             samples.append({
                 "time": t,
@@ -362,6 +364,27 @@ class Trajectory:
             })
 
         return samples
+
+    def interpolate_track(self, sorted_frames, t, smoothing=0.0):
+        """
+        Interpolate one sorted frame-name track at time t.
+
+        smoothing blends from the current linear position path at 0.0 to an
+        auto-tangent cubic Hermite position path at 1.0. Orientation keeps the
+        existing per-segment SLERP behavior.
+        """
+        f0, f1 = self.find_surrounding_keyframes(sorted_frames, t)
+        frame = self.interpolate_frames(f0, f1, t)
+
+        smoothing = max(0.0, min(1.0, float(smoothing)))
+        if smoothing <= 1e-9 or len(sorted_frames) < 3:
+            return frame
+
+        smooth_x, smooth_y, smooth_z = self.smooth_position(sorted_frames, t)
+        frame.x = frame.x + smoothing * (smooth_x - frame.x)
+        frame.y = frame.y + smoothing * (smooth_y - frame.y)
+        frame.z = frame.z + smoothing * (smooth_z - frame.z)
+        return frame
 
     def targets_at_time(self, t):
         """
@@ -411,6 +434,82 @@ class Trajectory:
                 return f0, f1
 
         return sorted_frames[-1], sorted_frames[-1]
+
+    def find_segment_index(self, sorted_frames, t):
+        if len(sorted_frames) < 2:
+            return 0
+
+        if t <= sorted_frames[0].time:
+            return 0
+
+        if t >= sorted_frames[-1].time:
+            return len(sorted_frames) - 2
+
+        for i in range(len(sorted_frames) - 1):
+            if sorted_frames[i].time <= t <= sorted_frames[i + 1].time:
+                return i
+
+        return len(sorted_frames) - 2
+
+    def smooth_position(self, sorted_frames, t):
+        """
+        Cubic Hermite position interpolation using automatic track tangents.
+        """
+        segment_index = self.find_segment_index(sorted_frames, t)
+        f0 = sorted_frames[segment_index]
+        f1 = sorted_frames[segment_index + 1]
+        duration = f1.time - f0.time
+
+        if abs(duration) < 1e-9:
+            return f0.x, f0.y, f0.z
+
+        alpha = max(0.0, min(1.0, (t - f0.time) / duration))
+        m0 = self.position_tangent(sorted_frames, segment_index)
+        m1 = self.position_tangent(sorted_frames, segment_index + 1)
+
+        h00 = 2.0 * alpha ** 3 - 3.0 * alpha ** 2 + 1.0
+        h10 = alpha ** 3 - 2.0 * alpha ** 2 + alpha
+        h01 = -2.0 * alpha ** 3 + 3.0 * alpha ** 2
+        h11 = alpha ** 3 - alpha ** 2
+
+        return tuple(
+            h00 * p0 + h10 * duration * tangent0
+            + h01 * p1 + h11 * duration * tangent1
+            for p0, p1, tangent0, tangent1 in zip(
+                self.position_tuple(f0),
+                self.position_tuple(f1),
+                m0,
+                m1,
+            )
+        )
+
+    def position_tangent(self, sorted_frames, index):
+        if len(sorted_frames) < 2:
+            return 0.0, 0.0, 0.0
+
+        if index <= 0:
+            return self.position_slope(sorted_frames[0], sorted_frames[1])
+
+        if index >= len(sorted_frames) - 1:
+            return self.position_slope(sorted_frames[-2], sorted_frames[-1])
+
+        return self.position_slope(
+            sorted_frames[index - 1],
+            sorted_frames[index + 1],
+        )
+
+    def position_slope(self, f0, f1):
+        duration = f1.time - f0.time
+        if abs(duration) < 1e-9:
+            return 0.0, 0.0, 0.0
+
+        return tuple(
+            (b - a) / duration
+            for a, b in zip(self.position_tuple(f0), self.position_tuple(f1))
+        )
+
+    def position_tuple(self, frame):
+        return frame.x, frame.y, frame.z
 
     def interpolate_frames(self, f0, f1, t):
         """

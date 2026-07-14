@@ -560,6 +560,13 @@ class RobotStateTimeline:
     def delete_state(self, time):
         return self.states.pop(self.time_key(time), None) is not None
 
+    def reset(self, time=0.0, qpos=None):
+        self.states.clear()
+        self.set_state(
+            time,
+            self.robot_model.home_qpos if qpos is None else qpos,
+        )
+
     def ensure_state(self, time, fallback_qpos=None):
         key = self.time_key(time)
         existing = self.states.get(key)
