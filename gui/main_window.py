@@ -309,6 +309,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.add_keyframe_clicked.connect(self.on_add_keyframe)
         self.controls.update_keyframe_clicked.connect(self.on_update_keyframe)
         self.controls.delete_keyframe_clicked.connect(self.on_delete_keyframe)
+        self.controls.clear_trajectory_clicked.connect(self.on_clear_trajectory)
         self.controls.generate_clicked.connect(self.on_generate_trajectory)
         self.controls.keyframe_selected.connect(self.on_keyframe_selected)
         self.controls.frame_name_changed.connect(self.on_frame_name_changed)
@@ -329,6 +330,7 @@ class RobotGuiMainWindow(QMainWindow):
         viewer_3d.target_frame_changed.connect(self.on_3d_target_frame_changed)
         viewer_3d.preview_cancelled.connect(self.on_preview_cancelled)
         viewer_3d.trajectory_csv_loaded.connect(self.on_trajectory_csv_loaded)
+        viewer_3d.generate_requested.connect(self.on_generate_trajectory)
         viewer_3d.timeslice_time_changed.connect(
             self.on_viewer_timeslice_time_changed
         )
@@ -781,6 +783,35 @@ class RobotGuiMainWindow(QMainWindow):
         self.active_index = -1
 
         self.refresh_display()
+
+    def on_clear_trajectory(self):
+        keyframe_count = len(self.trajectory.frames)
+        if keyframe_count == 0:
+            self.status_text.append("Trajectory is already empty.")
+            return
+
+        response = QMessageBox.question(
+            self,
+            "Clear trajectory",
+            f"Delete all {keyframe_count} trajectory keyframes?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if response != QMessageBox.StandardButton.Yes:
+            self.status_text.append("Clear trajectory cancelled.")
+            return
+
+        self.trajectory.clear()
+        self.active_index = -1
+        self.viewer_3d.clear_robot_trajectory()
+        self.viewer_3d.set_defined_timeslices([])
+        self.refresh_display()
+        message = (
+            f"Cleared {keyframe_count} trajectory keyframes; "
+            "current robot pose was left unchanged."
+        )
+        self.viewer_3d.status_label.setText(message)
+        self.status_text.setText(message)
 
     def on_keyframe_selected(self, row):
         """

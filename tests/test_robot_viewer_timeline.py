@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QApplication, QScrollArea, QTabWidget
+from PySide6.QtWidgets import QApplication, QMessageBox, QScrollArea, QTabWidget
 
 from gui.collision_checker import Collision
 from gui.backend_interface import PythonRobotConfiguration
@@ -433,6 +433,82 @@ class RobotViewerTimelineTests(unittest.TestCase):
             any(abs(frame.time - 0.2) <= 1e-6 for frame in self.window.trajectory.frames)
         )
         self.assertIsNone(self.viewer.state_timeline.get_state(0.2))
+
+    def test_clear_trajectory_requires_confirmation(self):
+        self.window.on_target_pose_drag_finished(0.10, 0.20, 0.80)
+        original_question = QMessageBox.question
+        try:
+            QMessageBox.question = staticmethod(
+                lambda *args, **kwargs: QMessageBox.StandardButton.No
+            )
+            self.window.on_clear_trajectory()
+        finally:
+            QMessageBox.question = original_question
+
+        self.assertEqual(len(self.window.trajectory.frames), 1)
+
+    def test_clear_trajectory_removes_keyframes_markers_and_playback(self):
+        self.window.controls.time_slider.set_value(0.2)
+        self.window.controls.emit_time_changed(0.2)
+        self.viewer._joint_changed(
+            self.viewer.preview_state.get_joint_names()[-1],
+            self.viewer.preview_state.get_joint_value(
+                self.viewer.preview_state.get_joint_names()[-1]
+            ) + 0.05,
+        )
+        self.viewer.accept_timeslice()
+        first = self.viewer.robot_model.home_qpos.copy()
+        second = first.copy()
+        second[-1] += 0.05
+        self.viewer.set_robot_trajectory([first, second])
+        self.viewer.show_ghosts.setChecked(True)
+        pose_before = self.viewer.committed_state.get_qpos()
+        self.assertTrue(self.window.trajectory.frames)
+        self.assertTrue(self.viewer.robot_trajectory)
+        self.assertTrue(self.viewer.timeslice_slider.defined_times)
+
+        original_question = QMessageBox.question
+        try:
+            QMessageBox.question = staticmethod(
+                lambda *args, **kwargs: QMessageBox.StandardButton.Yes
+            )
+            self.window.on_clear_trajectory()
+        finally:
+            QMessageBox.question = original_question
+
+        self.assertEqual(self.window.trajectory.frames, [])
+        self.assertEqual(self.window.active_index, -1)
+        self.assertEqual(self.viewer.robot_trajectory, [])
+        self.assertEqual(self.viewer.robot_trajectory_times, [])
+        self.assertEqual(self.viewer.ghost_trajectory, [])
+        self.assertEqual(self.viewer.timeslice_slider.defined_times, set())
+        np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), pose_before)
+
+    def test_viewer_quick_actions_mirror_common_controls(self):
+        self.assertIs(self.viewer.quick_actions_panel.parent(), self.viewer.canvas_workspace)
+
+        generated = []
+        self.viewer.generate_requested.connect(lambda: generated.append(True))
+        self.viewer.quick_generate_button.click()
+        self.assertEqual(generated, [True])
+
+        self.viewer.quick_show_ghosts.setChecked(True)
+        self.assertTrue(self.viewer.show_ghosts.isChecked())
+        self.viewer.show_ghosts.setChecked(False)
+        self.assertFalse(self.viewer.quick_show_ghosts.isChecked())
+
+        first = self.viewer.robot_model.home_qpos.copy()
+        second = first.copy()
+        second[-1] += 0.05
+        self.viewer.set_robot_trajectory([first, second])
+        self.viewer.quick_play_button.click()
+        self.assertTrue(self.viewer.play_timer.isActive())
+        self.assertEqual(self.viewer.quick_play_button.text(), "Pause")
+        self.assertEqual(self.viewer.play_button.text(), "Pause")
+        self.viewer.quick_play_button.click()
+        self.assertFalse(self.viewer.play_timer.isActive())
+        self.assertEqual(self.viewer.quick_play_button.text(), "Play")
+        self.assertEqual(self.viewer.play_button.text(), "Play")
 
     def test_sidebars_are_fixed_shells_with_collapsible_sections(self):
         self.window.resize(1700, 800)

@@ -133,6 +133,9 @@ class TrajectoryControlPanel(QGroupBox):
         delete_keyframe_clicked:
             emitted when user wants to delete selected keyframe.
 
+        clear_trajectory_clicked:
+            emitted when user wants to delete every trajectory keyframe.
+
         generate_clicked:
             emitted when user wants to send trajectory to backend.
     """
@@ -141,6 +144,7 @@ class TrajectoryControlPanel(QGroupBox):
     add_keyframe_clicked = Signal()
     update_keyframe_clicked = Signal()
     delete_keyframe_clicked = Signal()
+    clear_trajectory_clicked = Signal()
     generate_clicked = Signal()
     keyframe_selected = Signal(int)
     frame_name_changed = Signal(str)
@@ -330,10 +334,12 @@ class TrajectoryControlPanel(QGroupBox):
         self.add_button = QPushButton("Add Keyframe")
         self.update_button = QPushButton("Update")
         self.delete_button = QPushButton("Delete")
+        self.clear_button = QPushButton("Clear Trajectory")
 
         button_row.addWidget(self.add_button)
         button_row.addWidget(self.update_button)
         button_row.addWidget(self.delete_button)
+        button_row.addWidget(self.clear_button)
 
         self.trajectory_layout.addLayout(button_row)
 
@@ -343,6 +349,7 @@ class TrajectoryControlPanel(QGroupBox):
         self.add_button.clicked.connect(self.add_keyframe_clicked.emit)
         self.update_button.clicked.connect(self.update_keyframe_clicked.emit)
         self.delete_button.clicked.connect(self.delete_keyframe_clicked.emit)
+        self.clear_button.clicked.connect(self.clear_trajectory_clicked.emit)
         self.generate_button.clicked.connect(self.generate_clicked.emit)
 
         # --------------------------------------------------------

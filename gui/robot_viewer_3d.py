@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -312,6 +313,7 @@ class RobotViewer3D(QWidget):
     target_frame_changed = Signal(str)
     preview_cancelled = Signal()
     trajectory_csv_loaded = Signal(str)
+    generate_requested = Signal()
     timeslice_time_changed = Signal(float)
     accept_timeslice_requested = Signal()
     delete_timeslice_requested = Signal()
@@ -565,7 +567,7 @@ class RobotViewer3D(QWidget):
         editor_tabs.addTab(scroll, "Joint angles")
         editor_tabs.addTab(self._build_ik_settings_widget(), "IK controls")
         preview_ik_layout.addWidget(editor_tabs)
-        root.addWidget(self.canvas, stretch=1)
+        root.addWidget(self._build_canvas_workspace(), stretch=1)
         root.addWidget(self._build_timeslice_editor())
 
         enabled = self.robot_state is not None
@@ -577,7 +579,66 @@ class RobotViewer3D(QWidget):
         self.selection_context_panel.setEnabled(enabled)
         trajectory_group.setEnabled(enabled)
         preview_group.setEnabled(enabled)
+        self.quick_actions_panel.setEnabled(enabled)
         self.timeslice_editor.setEnabled(enabled)
+
+    def _build_canvas_workspace(self):
+        self.canvas_workspace = QWidget()
+        layout = QGridLayout(self.canvas_workspace)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.canvas, 0, 0)
+        layout.addWidget(
+            self._build_quick_actions_panel(),
+            0,
+            0,
+            alignment=Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
+        )
+        return self.canvas_workspace
+
+    def _build_quick_actions_panel(self):
+        self.quick_actions_panel = QWidget()
+        self.quick_actions_panel.setObjectName("viewerQuickActions")
+        self.quick_actions_panel.setStyleSheet(
+            "#viewerQuickActions {"
+            " background: rgba(245, 247, 250, 220);"
+            " border: 1px solid rgba(90, 105, 125, 120);"
+            " border-radius: 6px;"
+            "}"
+        )
+        layout = QHBoxLayout(self.quick_actions_panel)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(4)
+
+        self.quick_accept_preview_button = QPushButton("Accept")
+        self.quick_accept_timeslice_button = QPushButton("Slice")
+        self.quick_generate_button = QPushButton("Generate")
+        self.quick_play_button = QPushButton("Play")
+        self.quick_show_ghosts = QCheckBox("Ghosts")
+        self.quick_show_ghosts.setChecked(self.show_ghosts.isChecked())
+
+        for button in (
+            self.quick_accept_preview_button,
+            self.quick_accept_timeslice_button,
+            self.quick_generate_button,
+            self.quick_play_button,
+        ):
+            button.setMinimumWidth(0)
+            button.setMaximumWidth(82)
+
+        self.quick_accept_preview_button.clicked.connect(self.accept_preview)
+        self.quick_accept_timeslice_button.clicked.connect(self.accept_timeslice)
+        self.quick_generate_button.clicked.connect(self.generate_requested.emit)
+        self.quick_play_button.clicked.connect(self.toggle_playback)
+        self.quick_show_ghosts.toggled.connect(self.show_ghosts.setChecked)
+        self.show_ghosts.toggled.connect(self.quick_show_ghosts.setChecked)
+
+        layout.addWidget(self.quick_accept_preview_button)
+        layout.addWidget(self.quick_accept_timeslice_button)
+        layout.addWidget(self.quick_generate_button)
+        layout.addWidget(self.quick_play_button)
+        layout.addWidget(self.quick_show_ghosts)
+        return self.quick_actions_panel
 
     def _build_timeslice_editor(self):
         self.timeslice_editor = QWidget()
@@ -1619,6 +1680,17 @@ class RobotViewer3D(QWidget):
             self.set_trajectory_frame(0)
             self.status_label.setText(f"Loaded {len(valid)} robot trajectory states.")
 
+    def clear_robot_trajectory(self):
+        self.pause_playback()
+        self.robot_trajectory = []
+        self.robot_trajectory_times = []
+        self.ghost_trajectory = []
+        self.frame_slider.setRange(0, 0)
+        self.frame_slider.setValue(0)
+        if self.ghost_renderer:
+            self.ghost_renderer.clear()
+        self._update_ghost_options()
+
     def load_backend_states(self, states):
         if not self.robot_state:
             return
@@ -1678,11 +1750,16 @@ class RobotViewer3D(QWidget):
             self.pause_playback()
         elif self.robot_trajectory:
             self.play_timer.start()
-            self.play_button.setText("Pause")
+            self._set_playback_button_text("Pause")
 
     def pause_playback(self):
         self.play_timer.stop()
-        self.play_button.setText("Play")
+        self._set_playback_button_text("Play")
+
+    def _set_playback_button_text(self, text):
+        self.play_button.setText(text)
+        if hasattr(self, "quick_play_button"):
+            self.quick_play_button.setText(text)
 
     def _advance_frame(self):
         if not self.robot_trajectory:
