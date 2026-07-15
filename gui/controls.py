@@ -181,7 +181,7 @@ class TrajectoryControlPanel(QGroupBox):
                 lambda index: self.model_changed.emit(self.model_box.itemData(index))
             )
             robot_layout.addWidget(self.model_box)
-            self.open_model_button = QPushButton("Open Model")
+            self.open_model_button = QPushButton("Upload Model")
             self.open_model_button.clicked.connect(self.open_model_clicked.emit)
             robot_layout.addWidget(self.open_model_button)
             self.choose_mesh_folder_button = QPushButton("Mesh Folder (.stl)")

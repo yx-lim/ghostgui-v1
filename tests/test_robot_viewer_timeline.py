@@ -7,8 +7,8 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QPointF, Qt
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QMouseEvent, QWheelEvent
 from PySide6.QtWidgets import QApplication, QMessageBox, QScrollArea, QTabWidget
 
 from core.ik import Collision
@@ -311,6 +311,26 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(self.viewer.get_current_time(), 0.2)
         self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.2)
         self.assertAlmostEqual(self.viewer.timeslice_time_input.value(), 0.2)
+
+    def test_timeslice_wheel_scroll_updates_active_time(self):
+        self.assertEqual(self.viewer.get_current_time(), 0.0)
+
+        event = QWheelEvent(
+            QPointF(100, 15),
+            QPointF(100, 15),
+            QPoint(0, 0),
+            QPoint(0, 120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.NoScrollPhase,
+            False,
+        )
+        self.viewer.timeslice_slider.wheelEvent(event)
+
+        self.assertEqual(self.viewer.timeslice_slider.value(), 3)
+        self.assertAlmostEqual(self.viewer.get_current_time(), 0.03)
+        self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.03)
+        self.assertAlmostEqual(self.viewer.timeslice_time_input.value(), 0.03)
 
     def test_timeslice_bar_uses_single_compact_time_display(self):
         self.assertEqual(self.viewer.timeslice_label.text(), "Time")

@@ -61,6 +61,12 @@ class TimesliceSlider(QSlider):
                 return
         super().mousePressEvent(event)
 
+    def wheelEvent(self, event):
+        previous = self.value()
+        super().wheelEvent(event)
+        if self.value() != previous:
+            self.time_activated.emit(self.value() / 100.0)
+
     def activate_time_at_pixel(self, x):
         if self.defined_times:
             nearest = self._nearest_time_by_pixel(x)
