@@ -1,6 +1,6 @@
-"""Compatibility shim for the target-frame trajectory model."""
+"""Target-frame trajectory model."""
 
-from core.trajectory.model import (
+from .model import (
     DEFAULT_TRACK_NAMES,
     SampledTrajectory,
     TargetFrame,
