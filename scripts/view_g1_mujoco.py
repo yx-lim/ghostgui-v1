@@ -27,7 +27,7 @@ import mujoco.viewer
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = PROJECT_ROOT / "models" / "g1_29dof.xml"
-DEFAULT_CSV_PATH = PROJECT_ROOT / "pelvis_base_trajectory_uniform_dt.csv"
+DEFAULT_CSV_PATH = PROJECT_ROOT / "csv" / "pelvis_base_trajectory_uniform_dt.csv"
 
 
 BASE_COLUMNS = [

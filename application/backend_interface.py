@@ -15,6 +15,8 @@ import csv
 import math
 from pathlib import Path
 
+from application.paths import prepare_csv_save_path
+
 try:
     import mujoco
     import numpy as np
@@ -441,6 +443,7 @@ class PythonTrajectoryBackend:
     def export_last_solution_csv(self, csv_path):
         if not self.last_solution:
             raise RuntimeError("No solved trajectory to export.")
+        csv_path = prepare_csv_save_path(csv_path)
 
         header = [
             "time",

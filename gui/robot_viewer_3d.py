@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from application.paths import CSV_DIR, prepare_csv_save_path
 from core.models import (
     RobotStateTimeline,
     TrajectoryGhostRenderer,
@@ -1203,7 +1204,7 @@ class RobotViewer3D(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Load robot qpos",
-            str(Path.cwd()),
+            str(CSV_DIR),
             "CSV files (*.csv);;All files (*)",
         )
         if path:
@@ -1216,7 +1217,7 @@ class RobotViewer3D(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Load robot trajectory",
-            str(Path.cwd()),
+            str(CSV_DIR),
             "CSV files (*.csv);;All files (*)",
         )
         if path:
@@ -1231,7 +1232,7 @@ class RobotViewer3D(QWidget):
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save robot qpos",
-            str(Path.cwd() / "updated_qpos.csv"),
+            str(CSV_DIR / "updated_qpos.csv"),
             "CSV files (*.csv);;All files (*)",
         )
         if path:
@@ -1244,7 +1245,7 @@ class RobotViewer3D(QWidget):
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save robot trajectory",
-            str(Path.cwd() / "robot_trajectory.csv"),
+            str(CSV_DIR / "robot_trajectory.csv"),
             "CSV files (*.csv);;All files (*)",
         )
         if path:
@@ -1343,10 +1344,7 @@ class RobotViewer3D(QWidget):
 
     def save_qpos_csv(self, csv_path):
         """Save the committed active keyframe as one headerless qpos row."""
-        path = Path(csv_path).expanduser()
-        if path.suffix.lower() != ".csv":
-            path = path.with_suffix(".csv")
-        path = path.resolve()
+        path = prepare_csv_save_path(csv_path)
         with path.open("w", newline="") as handle:
             csv.writer(handle).writerow(
                 f"{value:.18e}" for value in self.committed_state.get_qpos()
@@ -1362,10 +1360,7 @@ class RobotViewer3D(QWidget):
         if not self.state_timeline:
             raise ValueError("no robot timeline is available")
 
-        path = Path(csv_path).expanduser()
-        if path.suffix.lower() != ".csv":
-            path = path.with_suffix(".csv")
-        path = path.resolve()
+        path = prepare_csv_save_path(csv_path)
 
         expected = int(self.robot_model.mj_model.nq)
         source_name = "generated trajectory"

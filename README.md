@@ -11,13 +11,13 @@ included.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install PySide6 PyOpenGL numpy mujoco
-python3 run_gui.py
+python3 scripts/run_gui.py
 ```
 
 Choose the model from the **Robot model** control, or start directly with Go2:
 
 ```bash
-python3 run_gui.py --model go2
+python3 scripts/run_gui.py --model go2
 ```
 
 G1 loads its MJCF and original STL visual meshes directly. Go2 loads its ROS
@@ -81,7 +81,7 @@ The existing 2D editors and separate **3D MuJoCo** CSV player remain available.
 
 To edit a saved single-pose qpos file, open the live **3D View** tab and click
 **Load qpos CSV**. The file must contain one headerless row with exactly the
-active model's `nq` values (36 for G1), such as `crawl_home_qpos_t0.5.csv`.
+active model's `nq` values (36 for G1), such as `csv/crawl_home_qpos_t0.5.csv`.
 Move the robot with the transform gizmo or joint sliders, click **Accept
 Preview**, then click **Save qpos CSV** and choose a new filename. Saving writes
 the committed pose as another headerless qpos row; an unaccepted orange preview
@@ -90,7 +90,7 @@ is deliberately not saved.
 Open a saved G1 pose directly in the standalone MuJoCo viewer with:
 
 ```bash
-python3 scripts/view_g1_mujoco.py --csv updated_qpos.csv --model models/g1_29dof.xml
+python3 scripts/view_g1_mujoco.py --csv csv/updated_qpos.csv --model models/g1_29dof.xml
 ```
 
 The player accepts both these headerless qpos pose files and the existing
@@ -123,11 +123,11 @@ textured visual materials in other models currently fall back to material RGBA.
 ghostgui/
 ├── README.md
 ├── backend/
+├── csv/
 ├── gui/
 ├── models/
 ├── scripts/
-├── tests/
-└── run_gui.py
+└── tests/
 ```
 
 Run the model/state sanity checks with:
@@ -138,15 +138,15 @@ python3 -m unittest discover -s tests -v
 
 ## Manual model checks
 
-- G1: run `python3 run_gui.py --model g1`; confirm 29 joint sliders, the
+- G1: run `python3 scripts/run_gui.py --model g1`; confirm 29 joint sliders, the
   humanoid kinematic skeleton, logical hand/foot targets, gizmo dragging,
   orange preview, Plan/Accept/Cancel, double-click selection, reset, timeline
   states, and ghosts.
-- Go2: run `python3 run_gui.py --model go2`; confirm 12 joint sliders, the
+- Go2: run `python3 scripts/run_gui.py --model go2`; confirm 12 joint sliders, the
   base/four-leg skeleton, `FL/FR/RL/RR_foot` targets, lit ground, and detailed
   colored mesh geometry rather than boxes/capsules.
 - Preview: drag a hand or foot and vary **Alpha**; confirm only the orange robot
   becomes transparent and the dark 3D background never exposes the desktop.
 - Path independence: from another directory run
-  `python3 /path/to/ghostgui/run_gui.py --model go2`. Registry paths are
+  `python3 /path/to/ghostgui/scripts/run_gui.py --model go2`. Registry paths are
   anchored to the source tree, not the shell working directory.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from application.paths import prepare_csv_save_path
 from core.trajectory import SampledTrajectory
 
 
@@ -22,6 +23,7 @@ def generate_trajectory_status(
     export_dt=0.01,
     csv_path="pelvis_base_trajectory_uniform_dt.csv",
 ):
+    csv_path = prepare_csv_save_path(csv_path)
     sampled_tracks = trajectory.sample_tracks_uniform_dt(
         dt=export_dt,
         smoothing=smoothing,
@@ -59,7 +61,7 @@ def generate_trajectory_status(
         lines.append(f"t={sample['time']:.3f}s | targets={frame_names}")
 
     return TrajectoryGenerationResult(
-        csv_path=csv_path,
+        csv_path=str(csv_path),
         result_states=result_states,
         status_text="\n".join(lines),
     )
