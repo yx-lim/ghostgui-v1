@@ -19,13 +19,13 @@ from core.models import MuJoCoRobotAdapter
 from gui.viewers.robot_canvas_3d import RobotCanvas3D
 from core.ik import CollisionAwareIKSolver, CollisionChecker
 from core.models import resolve_mesh_path, validate_model_assets
-from gui.model_importer import (
+from application.model_importer import (
     default_model_library_root,
     discover_imported_models,
     import_robot_model,
 )
 from core.models import PROJECT_ROOT, ROBOT_MODELS
-from gui.transform_gizmo import GizmoInteractionState
+from gui.viewers.transform_gizmo import GizmoInteractionState
 
 
 def tiny_binary_stl(name=b"part"):

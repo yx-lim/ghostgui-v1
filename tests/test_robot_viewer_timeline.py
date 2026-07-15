@@ -12,9 +12,9 @@ from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication, QMessageBox, QScrollArea, QTabWidget
 
 from core.ik import Collision
-from gui.backend_interface import PythonRobotConfiguration
+from application.backend_interface import PythonRobotConfiguration
 from gui.main_window import RobotGuiMainWindow
-from gui.transform_gizmo import GizmoInteractionState
+from gui.viewers.transform_gizmo import GizmoInteractionState
 from core.trajectory import quat_to_rpy, rpy_to_quat
 from scripts.view_g1_mujoco import RAW_QPOS_KEY, load_trajectory_csv
 

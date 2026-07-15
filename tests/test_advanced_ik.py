@@ -17,7 +17,7 @@ from core.ik import (
 from core.ik import DragSolveResult
 from gui.main_window import RobotGuiMainWindow
 from core.models import MuJoCoRobotAdapter
-from gui.backend_interface import MujocoIKBackend
+from application.backend_interface import MujocoIKBackend
 from core.trajectory import TargetFrame, quat_to_rpy, rpy_to_quat
 
 

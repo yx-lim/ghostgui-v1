@@ -1,6 +1,6 @@
 import unittest
 
-from gui.backend_interface import PythonTrajectoryBackend
+from application.backend_interface import PythonTrajectoryBackend
 from core.trajectory import SampledTrajectory, TargetFrame
 
 

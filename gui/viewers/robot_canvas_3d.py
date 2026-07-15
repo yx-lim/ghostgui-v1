@@ -19,9 +19,9 @@ from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QMatrix4x4, QSurfaceFormat, QVector3D
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
-from ..trajectory_colors import gl_color_for_frame
+from .trajectory_colors import gl_color_for_frame
 from core.trajectory import rpy_to_quat
-from ..transform_gizmo import GizmoInteractionState, TransformGizmo
+from .transform_gizmo import GizmoInteractionState, TransformGizmo
 
 TRAJECTORY_LINE_DT = 0.02
 

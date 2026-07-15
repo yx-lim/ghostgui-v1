@@ -23,7 +23,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPen, QBrush
 from PySide6.QtWidgets import QGraphicsView, QGraphicsScene
 
-from ..trajectory_colors import qt_color_for_frame
+from .trajectory_colors import qt_color_for_frame
 
 TRAJECTORY_LINE_DT = 0.02
 

@@ -43,11 +43,11 @@ from gui.viewers.reference_frame_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
 from gui.viewers.skeleton_2d import Stickman2DViewer
 from gui.viewers.mujoco_player import Mujoco3DViewerPanel
-from .backend_interface import BackendInterface
-from .model_reference import MujocoReferenceFrames
+from application.backend_interface import BackendInterface
+from core.models import MujocoReferenceFrames
 from .app_sidebars import AppLeftSidebar, AppRightSidebar
 from core.models import MuJoCoRobotAdapter, ROBOT_MODELS
-from .model_importer import (
+from application.model_importer import (
     default_model_library_root,
     discover_imported_models,
     import_robot_model,

@@ -23,6 +23,7 @@ from .model import (
     interpolate_qpos,
 )
 from .registry import PROJECT_ROOT, ROBOT_MODELS, RobotModelInfo, get_model_info
+from .reference import MujocoReferenceFrames
 
 __all__ = [
     "COLLADA_NS",
@@ -34,6 +35,7 @@ __all__ = [
     "IKResult",
     "JointInfo",
     "MuJoCoRobotAdapter",
+    "MujocoReferenceFrames",
     "PROJECT_ROOT",
     "ROBOT_MODELS",
     "ResolvedMeshAsset",

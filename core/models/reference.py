@@ -8,6 +8,8 @@ instead of the simplified 2D stickman skeleton.
 
 from pathlib import Path
 
+from .registry import PROJECT_ROOT
+
 try:
     import mujoco
     import numpy as np
@@ -16,7 +18,6 @@ except ImportError:
     np = None
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = PROJECT_ROOT / "models" / "g1_29dof.xml"
 
 
