@@ -12,7 +12,7 @@ Updated project flow:
     5. Backend maps robot to each target frame
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal
@@ -37,7 +37,7 @@ from .trajectory import (
     quat_to_rpy,
     rpy_to_quat,
 )
-from application import timeslice_service, trajectory_generation
+from application import model_sessions, timeslice_service, trajectory_generation
 from .controls import TrajectoryControlPanel
 from .viewer_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
@@ -57,17 +57,6 @@ from .model_importer import (
 
 LEFT_SIDEBAR_WIDTH = 250
 RIGHT_SIDEBAR_WIDTH = 270
-
-
-@dataclass
-class RobotModelSession:
-    adapter: object
-    backend: object
-    reference: object
-    viewer_3d: object
-    viewer_2d_skeleton: object
-    trajectory: object
-    active_index: int = -1
 
 
 class ModelLoadThread(QThread):
@@ -168,7 +157,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_2d_stickman = Stickman2DViewer(self.robot_model_3d)
         self.viewer_3d_mujoco = Mujoco3DViewerPanel(self.robot_model_3d)
         self.model_sessions = {
-            model_key: RobotModelSession(
+                model_key: model_sessions.RobotModelSession(
                 adapter=self.robot_model_3d,
                 backend=self.backend_interface,
                 reference=self.model_reference,
@@ -432,7 +421,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.connect_model_viewer_signals(viewer_3d, viewer_2d_skeleton)
         self.viewer_3d_stack.addWidget(viewer_3d)
         self.viewer_2d_skeleton_stack.addWidget(viewer_2d_skeleton)
-        session = RobotModelSession(
+        session = model_sessions.RobotModelSession(
             adapter, backend, reference, viewer_3d, viewer_2d_skeleton,
             Trajectory(), -1,
         )
@@ -516,19 +505,13 @@ class RobotGuiMainWindow(QMainWindow):
             self.model_loading_dialog = None
 
     def activate_model_session(self, model_key, session):
-        current = self.model_sessions.get(self.model_key)
-        if current is not None:
-            current.trajectory = self.trajectory
-            current.active_index = self.active_index
-        self.model_key = model_key
-        self.robot_model_3d = session.adapter
-        self.robot_model_error = session.adapter.load_warning
-        self.backend_interface = session.backend
-        self.model_reference = session.reference
-        self.viewer_3d = session.viewer_3d
-        self.viewer_2d_stickman = session.viewer_2d_skeleton
-        self.trajectory = session.trajectory
-        self.active_index = session.active_index
+        model_sessions.remember_current_session(
+            self.model_sessions, self.model_key, self.trajectory, self.active_index
+        )
+        for name, value in model_sessions.activated_session_state(
+            model_key, session
+        ).items():
+            setattr(self, name, value)
         self.viewer_3d_stack.setCurrentWidget(self.viewer_3d)
         self.viewer_2d_skeleton_stack.setCurrentWidget(self.viewer_2d_stickman)
         self.viewer_3d_mujoco.set_model_adapter(session.adapter)
