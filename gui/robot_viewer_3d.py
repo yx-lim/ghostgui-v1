@@ -78,6 +78,7 @@ class RobotViewer3D(QWidget):
     preview_cancelled = Signal()
     trajectory_csv_loaded = Signal(str)
     generate_requested = Signal()
+    clear_trajectory_requested = Signal()
     timeslice_time_changed = Signal(float)
     accept_timeslice_requested = Signal()
     delete_timeslice_requested = Signal()
@@ -164,10 +165,6 @@ class RobotViewer3D(QWidget):
         self.robot_context_panel = QWidget()
         model_layout = QVBoxLayout(self.robot_context_panel)
         model_layout.setContentsMargins(6, 6, 6, 6)
-        model_text = str(self.robot_model.model_path) if self.robot_model else "Unavailable"
-        model_label = QLabel(f"Model: {model_text}")
-        model_label.setWordWrap(True)
-        model_layout.addWidget(model_label)
         self.status_label = StatusValueLabel(error or "Robot model loaded; FK ready.")
         self.status_label.setWordWrap(True)
         self.timeline_state_label = StatusValueLabel("3D state time: 0.00 s")
@@ -306,8 +303,6 @@ class RobotViewer3D(QWidget):
         self.ghost_alpha.setSingleStep(0.05)
         self.ghost_alpha.setValue(0.16)
         self.ghost_alpha.valueChanged.connect(self._update_ghost_options)
-        trajectory_layout.addRow(self.generate_button)
-        trajectory_layout.addRow(self.play_button)
         trajectory_layout.addRow("Frame", self.frame_slider)
         trajectory_layout.addRow("Ghost stride", self.ghost_stride)
         trajectory_layout.addRow("Ghost alpha", self.ghost_alpha)
@@ -388,6 +383,7 @@ class RobotViewer3D(QWidget):
         self.quick_accept_timeslice_button = QPushButton("Slice")
         self.quick_generate_button = QPushButton("Generate")
         self.quick_play_button = QPushButton("Play")
+        self.quick_clear_button = QPushButton("Clear")
         self.quick_show_ghosts = QCheckBox("Ghosts")
         self.quick_show_ghosts.setChecked(self.show_ghosts.isChecked())
 
@@ -396,6 +392,7 @@ class RobotViewer3D(QWidget):
             self.quick_accept_timeslice_button,
             self.quick_generate_button,
             self.quick_play_button,
+            self.quick_clear_button,
         ):
             button.setMinimumWidth(0)
             button.setMaximumWidth(82)
@@ -404,6 +401,7 @@ class RobotViewer3D(QWidget):
         self.quick_accept_timeslice_button.clicked.connect(self.accept_timeslice)
         self.quick_generate_button.clicked.connect(self.generate_requested.emit)
         self.quick_play_button.clicked.connect(self.toggle_playback)
+        self.quick_clear_button.clicked.connect(self.clear_trajectory_requested.emit)
         self.quick_show_ghosts.toggled.connect(self.show_ghosts.setChecked)
         self.show_ghosts.toggled.connect(self.quick_show_ghosts.setChecked)
 
@@ -411,14 +409,15 @@ class RobotViewer3D(QWidget):
         layout.addWidget(self.quick_accept_timeslice_button)
         layout.addWidget(self.quick_generate_button)
         layout.addWidget(self.quick_play_button)
+        layout.addWidget(self.quick_clear_button)
         layout.addWidget(self.quick_show_ghosts)
         return self.quick_actions_panel
 
     def _build_timeslice_editor(self):
         self.timeslice_editor = QWidget()
-        layout = QHBoxLayout(self.timeslice_editor)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(8)
+        self.timeslice_layout = QHBoxLayout(self.timeslice_editor)
+        self.timeslice_layout.setContentsMargins(8, 4, 8, 4)
+        self.timeslice_layout.setSpacing(8)
 
         self.timeslice_label = QLabel("Time")
 
@@ -453,15 +452,24 @@ class RobotViewer3D(QWidget):
         self.delete_timeslice_button = QPushButton("Delete")
         self.delete_timeslice_button.clicked.connect(self.delete_timeslice)
 
-        layout.addWidget(self.timeslice_label)
-        layout.addWidget(self.timeslice_slider, stretch=1)
-        layout.addWidget(self.timeslice_time_input)
-        layout.addWidget(self.accept_timeslice_button)
-        layout.addWidget(self.delete_timeslice_button)
+        self.timeslice_layout.addWidget(self.timeslice_label)
+        self.timeslice_layout.addWidget(self.timeslice_slider, stretch=1)
+        self.timeslice_layout.addWidget(self.timeslice_time_input)
+        self.timeslice_layout.addWidget(self.accept_timeslice_button)
+        self.timeslice_layout.addWidget(self.delete_timeslice_button)
         return self.timeslice_editor
 
     def set_defined_timeslices(self, times):
         self.timeslice_slider.set_defined_times(times)
+
+    def set_smoothing_widget(self, widget):
+        if widget is None:
+            return
+        if widget.parent() is not self.timeslice_editor:
+            widget.setParent(self.timeslice_editor)
+        widget.setMaximumWidth(180)
+        insert_at = max(0, self.timeslice_layout.count() - 2)
+        self.timeslice_layout.insertWidget(insert_at, widget)
 
     def set_trajectory_lines_widget(self, widget):
         if widget is None:

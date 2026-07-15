@@ -285,7 +285,6 @@ class TrajectoryControlPanel(QGroupBox):
             scale=100,
         )
 
-        self.trajectory_layout.addWidget(self.time_slider)
         transform_layout.addWidget(self.x_slider)
         transform_layout.addWidget(self.y_slider)
         transform_layout.addWidget(self.z_slider)
@@ -327,27 +326,16 @@ class TrajectoryControlPanel(QGroupBox):
         )
         self.corner_smoothing_slider.input.setMaximumWidth(52)
         self.corner_smoothing_slider.setMaximumWidth(212)
-        self.trajectory_layout.addWidget(self.corner_smoothing_slider)
 
         # --------------------------------------------------------
         # Keyframe buttons
         # --------------------------------------------------------
-        button_row = QVBoxLayout()
-
         self.add_button = QPushButton("Add Keyframe")
         self.update_button = QPushButton("Update")
         self.delete_button = QPushButton("Delete")
         self.clear_button = QPushButton("Clear Trajectory")
 
-        button_row.addWidget(self.add_button)
-        button_row.addWidget(self.update_button)
-        button_row.addWidget(self.delete_button)
-        button_row.addWidget(self.clear_button)
-
-        self.trajectory_layout.addLayout(button_row)
-
         self.generate_button = QPushButton("Generate / Simulate")
-        self.trajectory_layout.addWidget(self.generate_button)
 
         self.add_button.clicked.connect(self.add_keyframe_clicked.emit)
         self.update_button.clicked.connect(self.update_keyframe_clicked.emit)

@@ -169,6 +169,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.model_loaders = {}
         self.model_loading_dialog = None
         self.viewer_tabs = self.build_viewer_tabs()
+        self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
         self.status_panel = self.build_status_panel()
         self.left_sidebar_content = AppLeftSidebar(self.controls, self.viewer_tabs)
         self.right_sidebar_content = AppRightSidebar(self.status_panel)
@@ -180,6 +181,9 @@ class RobotGuiMainWindow(QMainWindow):
         self.right_sidebar.setMaximumWidth(RIGHT_SIDEBAR_WIDTH)
 
         self.connect_signals()
+        self.controls.corner_smoothing_slider.value_changed.connect(
+            lambda _value: self.refresh_display()
+        )
         self.set_current_frame_to_model_reference(
             self.controls.frame_box.currentText(),
             emit_pose_changed=False,
@@ -239,6 +243,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_time_label.setWordWrap(True)
         self.viewer_root_pose_label = QLabel()
         self.viewer_root_pose_label.setWordWrap(True)
+        self.model_source_label = QLabel(self.model_source_text(self.robot_model_3d))
+        self.model_source_label.setWordWrap(True)
         self.status_text = QTextEdit()
         self.status_text.setReadOnly(True)
         self.status_text.setMinimumWidth(0)
@@ -250,6 +256,7 @@ class RobotGuiMainWindow(QMainWindow):
         layout.addWidget(self.viewer_status_label)
         layout.addWidget(self.viewer_time_label)
         layout.addWidget(self.viewer_root_pose_label)
+        layout.addWidget(self.model_source_label)
         layout.addWidget(self.status_text)
 
         panel.setLayout(layout)
@@ -261,12 +268,20 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_3d_stack.addWidget(self.viewer_3d)
         self.viewer_2d_skeleton_stack = QStackedWidget()
         self.viewer_2d_skeleton_stack.addWidget(self.viewer_2d_stickman)
-        tabs.addTab(self.viewer_2d, "2D Side View")
         tabs.addTab(self.viewer_3d_stack, "3D Pose")
+        tabs.addTab(self.viewer_2d, "2D Side View")
         tabs.addTab(self.viewer_2d_skeleton_stack, "2D Skeleton")
         tabs.addTab(self.viewer_3d_mujoco, "Simulation")
         tabs.currentChanged.connect(self.update_editor_context)
+        tabs.setCurrentIndex(0)
+        tabs.tabBar().hide()
         return tabs
+
+    def model_source_text(self, adapter):
+        path = getattr(adapter, "model_path", None)
+        if path is None:
+            return "Model source: unavailable"
+        return f"Model source: {path}"
 
     def update_editor_context(self, index=None):
         active = self.viewer_tabs.currentWidget()
@@ -331,6 +346,7 @@ class RobotGuiMainWindow(QMainWindow):
         viewer_3d.preview_cancelled.connect(self.on_preview_cancelled)
         viewer_3d.trajectory_csv_loaded.connect(self.on_trajectory_csv_loaded)
         viewer_3d.generate_requested.connect(self.on_generate_trajectory)
+        viewer_3d.clear_trajectory_requested.connect(self.on_clear_trajectory)
         viewer_3d.timeslice_time_changed.connect(
             self.on_viewer_timeslice_time_changed
         )
@@ -514,6 +530,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_3d_stack.setCurrentWidget(self.viewer_3d)
         self.viewer_2d_skeleton_stack.setCurrentWidget(self.viewer_2d_stickman)
         self.viewer_3d_mujoco.set_model_adapter(session.adapter)
+        self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
+        self.model_source_label.setText(self.model_source_text(session.adapter))
         self.controls.set_frame_names(session.adapter.trajectory_frames)
         self.setWindowTitle(
             f"Reference Frame Trajectory GUI — {session.adapter.model_name}"

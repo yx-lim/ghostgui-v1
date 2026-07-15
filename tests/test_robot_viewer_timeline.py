@@ -9,7 +9,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QMouseEvent, QWheelEvent
-from PySide6.QtWidgets import QApplication, QMessageBox, QScrollArea, QTabWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QTabWidget,
+    QWidget,
+)
 
 from core.ik import Collision
 from application.backend_interface import PythonRobotConfiguration
@@ -552,6 +560,11 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.viewer.quick_generate_button.click()
         self.assertEqual(generated, [True])
 
+        cleared = []
+        self.viewer.clear_trajectory_requested.connect(lambda: cleared.append(True))
+        self.viewer.quick_clear_button.click()
+        self.assertEqual(cleared, [True])
+
         self.viewer.quick_show_ghosts.setChecked(True)
         self.assertTrue(self.viewer.show_ghosts.isChecked())
         self.viewer.show_ghosts.setChecked(False)
@@ -611,6 +624,52 @@ class RobotViewerTimelineTests(unittest.TestCase):
             + self.window.right_sidebar_content.sections
         ):
             self.assertFalse(section.content.isVisible())
+        self.assertTrue(self.window.viewer_tabs.tabBar().isHidden())
+        self.assertEqual(self.window.viewer_tabs.tabText(0), "3D Pose")
+        self.assertIs(
+            self.window.viewer_tabs.widget(0), self.window.viewer_3d_stack
+        )
+        view_buttons = [
+            button.text()
+            for button in self.window.left_sidebar_content.view_panel.findChildren(
+                QPushButton
+            )
+        ]
+        self.assertEqual(
+            view_buttons,
+            ["3D Pose", "2D Side View", "2D Skeleton", "Simulation"],
+        )
+        self.assertTrue(
+            self.window.model_source_label.text().startswith("Model source:")
+        )
+        robot_labels = [
+            label.text()
+            for label in self.viewer.robot_context_widget().findChildren(QLabel)
+        ]
+        self.assertFalse(
+            any(text.startswith("Model:") for text in robot_labels)
+        )
+        trajectory_widgets = set(
+            self.window.controls.trajectory_panel.findChildren(QWidget)
+        )
+        for removed_widget in (
+            self.window.controls.time_slider,
+            self.window.controls.corner_smoothing_slider,
+            self.window.controls.add_button,
+            self.window.controls.update_button,
+            self.window.controls.delete_button,
+            self.window.controls.generate_button,
+            self.viewer.generate_button,
+            self.viewer.play_button,
+        ):
+            self.assertNotIn(removed_widget, trajectory_widgets)
+        self.assertIs(
+            self.window.controls.corner_smoothing_slider.parent(),
+            self.viewer.timeslice_editor,
+        )
+        self.assertIs(
+            self.viewer.quick_clear_button.parent(), self.viewer.quick_actions_panel
+        )
         for section in self.window.left_sidebar_content.sections:
             section.set_expanded(True)
             self.app.processEvents()
