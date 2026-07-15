@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from .trajectory import TargetFrame
+from core.trajectory import TargetFrame
 
 
 class LabeledSlider(QWidget):

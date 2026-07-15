@@ -1,6 +1,6 @@
 # Model-agnostic foundation diagnosis
 
-The application starts in `run_gui.py` and is assembled by
+The application starts in `scripts/run_gui.py` and is assembled by
 `gui.main_window.RobotGuiMainWindow`.  Before this refactor the same G1 MJCF
 path was independently selected in `robot_model_3d.py`, `model_reference.py`,
 `backend_interface.py`, `viewer_3d_mujoco.py`, and the external viewer script.

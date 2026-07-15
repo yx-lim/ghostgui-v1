@@ -6,11 +6,10 @@ import unittest
 import mujoco
 import numpy as np
 
-from gui.backend_interface import MujocoIKBackend, rpy_to_quaternion
-from gui.model_importer import default_model_library_root, discover_imported_models
-from gui.robot_model_adapter import MuJoCoRobotAdapter
-from gui.robot_model_registry import ROBOT_MODELS
-from gui.trajectory import TargetFrame, quat_to_rpy, rpy_to_quat
+from application.backend_interface import MujocoIKBackend, rpy_to_quaternion
+from application.model_importer import default_model_library_root, discover_imported_models
+from core.models import MuJoCoRobotAdapter, ROBOT_MODELS
+from core.trajectory import TargetFrame, quat_to_rpy, rpy_to_quat
 
 
 POSE_TARGET_PREFERENCES = {

@@ -7,18 +7,18 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from gui.ik_tasks import (
+from core.ik import (
     FootLockTask,
     JointRegularizationTask,
     PostureTask,
     RootPoseTask,
     TaskLinearization,
 )
-from gui.collision_checker import DragSolveResult
+from core.ik import DragSolveResult
 from gui.main_window import RobotGuiMainWindow
-from gui.robot_model_adapter import MuJoCoRobotAdapter
-from gui.backend_interface import MujocoIKBackend
-from gui.trajectory import TargetFrame, quat_to_rpy, rpy_to_quat
+from core.models import MuJoCoRobotAdapter
+from application.backend_interface import MujocoIKBackend
+from core.trajectory import TargetFrame, quat_to_rpy, rpy_to_quat
 
 
 class AdvancedIKTests(unittest.TestCase):

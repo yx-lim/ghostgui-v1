@@ -12,7 +12,7 @@ Updated project flow:
     5. Backend maps robot to each target frame
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal
@@ -31,24 +31,23 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from .trajectory import (
+from core.trajectory import (
     TargetFrame,
     Trajectory,
-    SampledTrajectory,
     quat_to_rpy,
     rpy_to_quat,
 )
+from application import model_sessions, timeslice_service, trajectory_generation
 from .controls import TrajectoryControlPanel
-from .viewer_2d import RobotCanvas
+from gui.viewers.reference_frame_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
-from .viewer_2d_stickman import Stickman2DViewer
-from .viewer_3d_mujoco import Mujoco3DViewerPanel
-from .backend_interface import BackendInterface
-from .model_reference import MujocoReferenceFrames
+from gui.viewers.skeleton_2d import Stickman2DViewer
+from gui.viewers.mujoco_player import Mujoco3DViewerPanel
+from application.backend_interface import BackendInterface
+from core.models import MujocoReferenceFrames
 from .app_sidebars import AppLeftSidebar, AppRightSidebar
-from .robot_model_adapter import MuJoCoRobotAdapter
-from .robot_model_registry import ROBOT_MODELS
-from .model_importer import (
+from core.models import MuJoCoRobotAdapter, ROBOT_MODELS
+from application.model_importer import (
     default_model_library_root,
     discover_imported_models,
     import_robot_model,
@@ -57,17 +56,6 @@ from .model_importer import (
 
 LEFT_SIDEBAR_WIDTH = 250
 RIGHT_SIDEBAR_WIDTH = 270
-
-
-@dataclass
-class RobotModelSession:
-    adapter: object
-    backend: object
-    reference: object
-    viewer_3d: object
-    viewer_2d_skeleton: object
-    trajectory: object
-    active_index: int = -1
 
 
 class ModelLoadThread(QThread):
@@ -168,7 +156,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_2d_stickman = Stickman2DViewer(self.robot_model_3d)
         self.viewer_3d_mujoco = Mujoco3DViewerPanel(self.robot_model_3d)
         self.model_sessions = {
-            model_key: RobotModelSession(
+                model_key: model_sessions.RobotModelSession(
                 adapter=self.robot_model_3d,
                 backend=self.backend_interface,
                 reference=self.model_reference,
@@ -432,7 +420,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.connect_model_viewer_signals(viewer_3d, viewer_2d_skeleton)
         self.viewer_3d_stack.addWidget(viewer_3d)
         self.viewer_2d_skeleton_stack.addWidget(viewer_2d_skeleton)
-        session = RobotModelSession(
+        session = model_sessions.RobotModelSession(
             adapter, backend, reference, viewer_3d, viewer_2d_skeleton,
             Trajectory(), -1,
         )
@@ -516,19 +504,13 @@ class RobotGuiMainWindow(QMainWindow):
             self.model_loading_dialog = None
 
     def activate_model_session(self, model_key, session):
-        current = self.model_sessions.get(self.model_key)
-        if current is not None:
-            current.trajectory = self.trajectory
-            current.active_index = self.active_index
-        self.model_key = model_key
-        self.robot_model_3d = session.adapter
-        self.robot_model_error = session.adapter.load_warning
-        self.backend_interface = session.backend
-        self.model_reference = session.reference
-        self.viewer_3d = session.viewer_3d
-        self.viewer_2d_stickman = session.viewer_2d_skeleton
-        self.trajectory = session.trajectory
-        self.active_index = session.active_index
+        model_sessions.remember_current_session(
+            self.model_sessions, self.model_key, self.trajectory, self.active_index
+        )
+        for name, value in model_sessions.activated_session_state(
+            model_key, session
+        ).items():
+            setattr(self, name, value)
         self.viewer_3d_stack.setCurrentWidget(self.viewer_3d)
         self.viewer_2d_skeleton_stack.setCurrentWidget(self.viewer_2d_stickman)
         self.viewer_3d_mujoco.set_model_adapter(session.adapter)
@@ -647,49 +629,18 @@ class RobotGuiMainWindow(QMainWindow):
 
     def define_timeslice_from_committed_pose(self):
         """Snapshot every editable logical target from the committed MuJoCo pose."""
-        state = self.viewer_3d.committed_state
-        if state is None:
-            return 0
-
-        time = self.viewer_3d.get_current_time()
-        phase = self.controls.phase_box.currentText()
-        selected_frame_name = self.controls.frame_box.currentText()
-        selected_frame = None
-        selected_index = -1
-        last_index = -1
-        count = 0
-
-        frame_names = self.editable_logical_frame_names()
-
-        for frame_name in frame_names:
-            binding = self.viewer_3d.frame_bindings.get(frame_name)
-            if binding is None:
-                continue
-            kind, object_name = binding
-            try:
-                position, quaternion = state.get_body_pose(object_name, kind)
-            except KeyError:
-                continue
-            roll, pitch, yaw = quat_to_rpy(quaternion)
-            frame = TargetFrame(
-                time=time,
-                phase=phase,
-                frame_name=frame_name,
-                x=float(position[0]),
-                y=float(position[1]),
-                z=float(position[2]),
-                roll=roll,
-                pitch=pitch,
-                yaw=yaw,
-            )
-            last_index = self.trajectory.upsert_frame(frame)
-            if frame_name == selected_frame_name:
-                selected_frame = frame
-                selected_index = last_index
-            count += 1
-
-        self.active_index = selected_index if selected_index >= 0 else last_index
-        if selected_frame is not None:
+        result = timeslice_service.define_timeslice_from_committed_pose(
+            self.trajectory,
+            self.viewer_3d.committed_state,
+            time=self.viewer_3d.get_current_time(),
+            phase=self.controls.phase_box.currentText(),
+            selected_frame_name=self.controls.frame_box.currentText(),
+            frame_names=self.editable_logical_frame_names(),
+            frame_bindings=self.viewer_3d.frame_bindings,
+        )
+        self.active_index = result.active_index
+        if result.selected_frame is not None:
+            selected_frame = result.selected_frame
             self.controls.set_position_values(
                 x=selected_frame.x,
                 y=selected_frame.y,
@@ -699,20 +650,12 @@ class RobotGuiMainWindow(QMainWindow):
                 yaw=selected_frame.yaw,
                 emit_pose_changed=False,
             )
-        return count
+        return result.count
 
     def editable_logical_frame_names(self):
-        frame_names = []
-        for name in getattr(self.robot_model_3d, "trajectory_frames", []):
-            if name not in frame_names:
-                frame_names.append(name)
-        for name in self.controls.frame_names:
-            if name not in frame_names:
-                frame_names.append(name)
-        for name in self.viewer_3d.frame_bindings:
-            if name not in frame_names:
-                frame_names.append(name)
-        return frame_names
+        return timeslice_service.editable_logical_frame_names(
+            self.robot_model_3d, self.controls, self.viewer_3d
+        )
 
     def import_loaded_robot_trajectory_as_keyframes(self):
         """Convert loaded qpos playback rows into editable logical target frames."""
@@ -793,39 +736,14 @@ class RobotGuiMainWindow(QMainWindow):
         return count
 
     def selected_loaded_trajectory_import_samples(self, times, qposes):
-        if not times or not qposes:
-            return []
-
-        interval = max(0.0, float(self.viewer_3d.trajectory_import_dt.value()))
-        samples = []
-        last_import_time = None
-        for time, qpos in zip(times, qposes):
-            time = float(time)
-            if (
-                last_import_time is None
-                or interval <= 1e-9
-                or time >= last_import_time + interval - 1e-9
-            ):
-                samples.append((time, qpos))
-                last_import_time = time
-
-        final_time = float(times[-1])
-        if abs(samples[-1][0] - final_time) > 1e-9:
-            samples.append((final_time, qposes[-1]))
-
-        return samples
+        return timeslice_service.selected_loaded_trajectory_import_samples(
+            times, qposes, self.viewer_3d.trajectory_import_dt.value()
+        )
 
     def delete_timeslice_at_time(self, time, tolerance=1e-6):
-        count = 0
-        for track in self.trajectory.tracks.values():
-            kept = []
-            for frame in track:
-                if abs(frame.time - time) <= tolerance:
-                    count += 1
-                else:
-                    kept.append(frame)
-            track[:] = kept
-        return count
+        return timeslice_service.delete_timeslice_at_time(
+            self.trajectory, time, tolerance
+        )
 
     def on_target_dragged(self, x, z):
         """
@@ -1047,50 +965,14 @@ class RobotGuiMainWindow(QMainWindow):
             self.status_text.setText("Trajectory is empty. Add keyframes first.")
             return
 
-        export_dt = 0.01
-        smoothing = self.controls.corner_smoothing()
-
-        sampled_tracks = self.trajectory.sample_tracks_uniform_dt(
-            dt=export_dt,
-            smoothing=smoothing,
+        result = trajectory_generation.generate_trajectory_status(
+            self.trajectory,
+            self.backend_interface,
+            smoothing=self.controls.corner_smoothing(),
         )
-        sampled_trajectory = SampledTrajectory(samples=sampled_tracks)
-
-        result_states = self.backend_interface.solve_trajectory(sampled_trajectory)
-        self.viewer_3d.load_backend_states(result_states)
-
-        csv_path = "pelvis_base_trajectory_uniform_dt.csv"
-        self.backend_interface.export_last_solution_csv(csv_path)
-        self.viewer_3d_mujoco.set_trajectory_csv(csv_path)
-
-        lines = []
-        lines.append("Generated uniformly sampled per-frame target tracks.")
-        lines.append(f"Backend: {self.backend_interface.last_backend_name()}")
-        lines.append(f"Export dt: {export_dt:.4f} s")
-        lines.append(f"Corner smoothing: {smoothing * 100.0:.0f}%")
-        lines.append(f"Number of GUI keyframes: {len(self.trajectory.frames)}")
-        lines.append(f"Number of sampled time steps: {len(sampled_tracks)}")
-        lines.append(f"Number of backend states: {len(result_states)}")
-        if result_states:
-            max_ik_error = max(state.ik_error for state in result_states)
-            lines.append(f"Max IK position error: {max_ik_error:.4f} m")
-            max_orientation_error = max(
-                state.orientation_error for state in result_states
-            )
-            lines.append(
-                "Max IK orientation error: "
-                f"{max_orientation_error:.4f} rad"
-            )
-        lines.append(f"Exported CSV to: {csv_path}")
-        lines.append("")
-        lines.append("First few sampled time groups:")
-        lines.append("")
-
-        for sample in sampled_tracks[:10]:
-            frame_names = ", ".join(sorted(sample["targets"].keys()))
-            lines.append(f"t={sample['time']:.3f}s | targets={frame_names}")
-
-        self.status_text.setText("\n".join(lines))
+        self.viewer_3d.load_backend_states(result.result_states)
+        self.viewer_3d_mujoco.set_trajectory_csv(result.csv_path)
+        self.status_text.setText(result.status_text)
 
     # ============================================================
     # Display update

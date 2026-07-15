@@ -14,7 +14,7 @@ except ImportError:  # The rest of GhostGUI remains usable without MuJoCo.
     np = None
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL_PATH = PROJECT_ROOT / "models" / "g1_29dof.xml"
 
 
@@ -374,7 +374,7 @@ class RobotState3D:
                 0,
                 "Selected root body has no movable MuJoCo free joint",
             )
-        from .ik_tasks import TCPOrientationTask, TCPPositionTask
+        from core.ik.tasks import TCPOrientationTask, TCPPositionTask
 
         tasks = [TCPPositionTask(
             name="TCP position",

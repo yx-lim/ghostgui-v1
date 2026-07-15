@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from gui.transform_gizmo import (
+from gui.viewers.transform_gizmo import (
     GizmoInteractionState,
     TransformGizmo,
 )

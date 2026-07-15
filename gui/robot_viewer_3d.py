@@ -9,7 +9,6 @@ from pathlib import Path
 import numpy as np
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -23,29 +22,32 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
-    QSizePolicy,
     QSpinBox,
-    QStyle,
-    QStyleOptionSlider,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from .robot_model_3d import (
+from application.paths import CSV_DIR, prepare_csv_save_path
+from core.models import (
     RobotStateTimeline,
     TrajectoryGhostRenderer,
     interpolate_qpos,
 )
-from .collision_checker import CollisionAwareIKSolver, CollisionChecker
-from .trajectory import quat_to_rpy, rpy_to_quat
-from .viewer_3d import RobotCanvas3D
-from .ik_tasks import (
+from core.ik import CollisionAwareIKSolver, CollisionChecker
+from core.trajectory import quat_to_rpy, rpy_to_quat
+from gui.viewers.robot_canvas_3d import RobotCanvas3D
+from core.ik import (
     FootLockTask,
     JointRegularizationTask,
     PostureTask,
     RootPoseTask,
 )
+from .widgets.compact import compact_combo as _compact_combo
+from .widgets.compact import compact_spinbox as _compact_spinbox
+from .widgets.joint_controls import IKInfluenceControl, JointControl
+from .widgets.status import StatusValueLabel
+from .widgets.timeline import TimesliceSlider
 
 
 FRAME_BINDINGS = {
@@ -64,254 +66,6 @@ class PreviewPathValidation:
     ok: bool
     message: str
     failed_index: int | None = None
-
-
-def _compact_combo(combo, minimum_chars=10):
-    combo.setSizeAdjustPolicy(
-        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-    )
-    combo.setMinimumContentsLength(minimum_chars)
-    combo.setMinimumWidth(0)
-    combo.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-
-
-def _compact_spinbox(spinbox, width=68):
-    spinbox.setMinimumWidth(0)
-    spinbox.setMaximumWidth(width)
-    spinbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-
-
-class StatusValueLabel(QLabel):
-    text_changed = Signal(str)
-
-    def setText(self, text):
-        previous = self.text()
-        super().setText(text)
-        if text != previous:
-            self.text_changed.emit(text)
-
-
-class TimesliceSlider(QSlider):
-    """Horizontal time slider with markers for accepted logical slices."""
-
-    marker_activated = Signal(float)
-    time_activated = Signal(float)
-
-    def __init__(self, orientation, parent=None):
-        super().__init__(orientation, parent)
-        self.defined_times = set()
-        self.marker_snap_pixels = 10
-
-    def set_defined_times(self, times):
-        self.defined_times = {round(float(time), 6) for time in times}
-        self.update()
-
-    def snap_to_nearest_defined_time(self, time, tolerance=0.06):
-        nearest = self._nearest_defined_time(time)
-        if nearest is None or abs(nearest - float(time)) > tolerance:
-            return False
-        raw_value = self._time_to_raw(nearest)
-        self.setValue(raw_value)
-        self.marker_activated.emit(nearest)
-        return True
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if self.orientation() != Qt.Orientation.Horizontal or not self.defined_times:
-            return
-
-        painter = QPainter(self)
-        current_raw = self.value()
-        for time in sorted(self.defined_times):
-            x = self._time_to_pixel(time)
-            raw_value = self._time_to_raw(time)
-            current = abs(raw_value - current_raw) <= 1
-            color = QColor(21, 116, 214) if not current else QColor(15, 158, 255)
-            painter.setPen(QPen(color, 3 if current else 2))
-            groove = self._groove_rect()
-            top = groove.bottom() + 3
-            bottom = min(self.height() - 2, top + (8 if current else 6))
-            painter.drawLine(x, top, x, bottom)
-
-    def mousePressEvent(self, event):
-        if (
-            self.orientation() == Qt.Orientation.Horizontal
-            and event.button() == Qt.MouseButton.LeftButton
-        ):
-            click_pos = event.position().toPoint()
-            if self._handle_rect().contains(click_pos):
-                super().mousePressEvent(event)
-                return
-            if self.activate_time_at_pixel(event.position().x()):
-                event.accept()
-                return
-        super().mousePressEvent(event)
-
-    def activate_time_at_pixel(self, x):
-        if self.defined_times:
-            nearest = self._nearest_time_by_pixel(x)
-            if nearest is not None:
-                marker_x = self._time_to_pixel(nearest)
-                if abs(marker_x - x) <= self.marker_snap_pixels:
-                    self.setValue(self._time_to_raw(nearest))
-                    self.marker_activated.emit(nearest)
-                    return True
-
-        raw_value = self._pixel_to_raw(x)
-        self.setValue(raw_value)
-        self.time_activated.emit(raw_value / 100.0)
-        return True
-
-    def _nearest_defined_time(self, time):
-        if not self.defined_times:
-            return None
-        return min(self.defined_times, key=lambda candidate: abs(candidate - time))
-
-    def _nearest_time_by_pixel(self, x):
-        if not self.defined_times:
-            return None
-        return min(
-            self.defined_times,
-            key=lambda candidate: abs(self._time_to_pixel(candidate) - x),
-        )
-
-    def _time_to_raw(self, time):
-        raw_value = int(round(float(time) * 100.0))
-        return max(self.minimum(), min(self.maximum(), raw_value))
-
-    def _groove_rect(self):
-        option = QStyleOptionSlider()
-        self.initStyleOption(option)
-        return self.style().subControlRect(
-            QStyle.ComplexControl.CC_Slider,
-            option,
-            QStyle.SubControl.SC_SliderGroove,
-            self,
-        )
-
-    def _handle_rect(self):
-        option = QStyleOptionSlider()
-        self.initStyleOption(option)
-        return self.style().subControlRect(
-            QStyle.ComplexControl.CC_Slider,
-            option,
-            QStyle.SubControl.SC_SliderHandle,
-            self,
-        )
-
-    def _time_to_pixel(self, time):
-        groove = self._groove_rect()
-        handle = self._handle_rect()
-        span = max(1, groove.width() - handle.width())
-        raw_value = self._time_to_raw(time)
-        option = QStyleOptionSlider()
-        self.initStyleOption(option)
-        offset = QStyle.sliderPositionFromValue(
-            self.minimum(),
-            self.maximum(),
-            raw_value,
-            span,
-            option.upsideDown,
-        )
-        return groove.x() + handle.width() // 2 + offset
-
-    def _pixel_to_raw(self, x):
-        groove = self._groove_rect()
-        handle = self._handle_rect()
-        span = max(1, groove.width() - handle.width())
-        option = QStyleOptionSlider()
-        self.initStyleOption(option)
-        start = groove.x() + handle.width() // 2
-        offset = int(round(float(x) - start))
-        offset = max(0, min(span, offset))
-        return QStyle.sliderValueFromPosition(
-            self.minimum(),
-            self.maximum(),
-            offset,
-            span,
-            option.upsideDown,
-        )
-
-
-class JointControl(QWidget):
-    value_changed = Signal(str, float)
-
-    def __init__(self, name, limits, value):
-        super().__init__()
-        self.name = name
-        self.lo, self.hi = limits if limits is not None else (-3.14159, 3.14159)
-        self._syncing = False
-        self.slider = QSlider(Qt.Orientation.Horizontal)
-        self.slider.setRange(0, 2000)
-        self.value_label = QLabel()
-        self.value_label.setMinimumWidth(56)
-        name_label = QLabel(name)
-        name_label.setWordWrap(True)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        value_row = QHBoxLayout()
-        value_row.addWidget(self.slider, 1)
-        value_row.addWidget(self.value_label)
-        layout.addWidget(name_label)
-        layout.addLayout(value_row)
-        self.slider.valueChanged.connect(self._changed)
-        self.set_value(value)
-
-    def _to_value(self, raw):
-        return self.lo + (self.hi - self.lo) * raw / 2000.0
-
-    def _to_raw(self, value):
-        if self.hi <= self.lo:
-            return 0
-        return round((value - self.lo) * 2000.0 / (self.hi - self.lo))
-
-    def _changed(self, raw):
-        value = self._to_value(raw)
-        self.value_label.setText(f"{value:+.3f} rad")
-        if not self._syncing:
-            self.value_changed.emit(self.name, value)
-
-    def set_value(self, value):
-        self._syncing = True
-        self.slider.setValue(max(0, min(2000, self._to_raw(value))))
-        self._syncing = False
-        self.value_label.setText(f"{float(value):+.3f} rad")
-
-
-class IKInfluenceControl(QWidget):
-    value_changed = Signal(str, float)
-
-    def __init__(self, name, value=1.0):
-        super().__init__()
-        self.name = name
-        self._syncing = False
-        self.slider = QSlider(Qt.Orientation.Horizontal)
-        self.slider.setRange(0, 300)
-        self.value_label = QLabel()
-        self.value_label.setMinimumWidth(38)
-        name_label = QLabel(name)
-        name_label.setWordWrap(True)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        value_row = QHBoxLayout()
-        value_row.addWidget(self.slider, 1)
-        value_row.addWidget(self.value_label)
-        layout.addWidget(name_label)
-        layout.addLayout(value_row)
-        self.slider.valueChanged.connect(self._changed)
-        self.set_value(value)
-
-    def _changed(self, raw):
-        value = raw / 100.0
-        self.value_label.setText(f"{value:.2f}")
-        if not self._syncing:
-            self.value_changed.emit(self.name, value)
-
-    def set_value(self, value):
-        self._syncing = True
-        self.slider.setValue(round(max(0.0, min(3.0, float(value))) * 100.0))
-        self._syncing = False
-        self.value_label.setText(f"{float(value):.2f}")
 
 
 class RobotViewer3D(QWidget):
@@ -1210,12 +964,6 @@ class RobotViewer3D(QWidget):
             *map(float, self.last_valid_target_position), roll, pitch, yaw
         )
 
-    def _on_gizmo_moved(self, x, y, z):
-        """Compatibility shim for older callers/tests using position only."""
-        self._on_transform_moved(
-            (x, y, z), self.canvas.gizmo.quaternion.copy()
-        )
-
     def _set_collision_substeps(self, count):
         if self.collision_solver:
             self.collision_solver.collision_drag_substeps = int(count)
@@ -1456,7 +1204,7 @@ class RobotViewer3D(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Load robot qpos",
-            str(Path.cwd()),
+            str(CSV_DIR),
             "CSV files (*.csv);;All files (*)",
         )
         if path:
@@ -1469,7 +1217,7 @@ class RobotViewer3D(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Load robot trajectory",
-            str(Path.cwd()),
+            str(CSV_DIR),
             "CSV files (*.csv);;All files (*)",
         )
         if path:
@@ -1484,7 +1232,7 @@ class RobotViewer3D(QWidget):
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save robot qpos",
-            str(Path.cwd() / "updated_qpos.csv"),
+            str(CSV_DIR / "updated_qpos.csv"),
             "CSV files (*.csv);;All files (*)",
         )
         if path:
@@ -1497,7 +1245,7 @@ class RobotViewer3D(QWidget):
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save robot trajectory",
-            str(Path.cwd() / "robot_trajectory.csv"),
+            str(CSV_DIR / "robot_trajectory.csv"),
             "CSV files (*.csv);;All files (*)",
         )
         if path:
@@ -1596,10 +1344,7 @@ class RobotViewer3D(QWidget):
 
     def save_qpos_csv(self, csv_path):
         """Save the committed active keyframe as one headerless qpos row."""
-        path = Path(csv_path).expanduser()
-        if path.suffix.lower() != ".csv":
-            path = path.with_suffix(".csv")
-        path = path.resolve()
+        path = prepare_csv_save_path(csv_path)
         with path.open("w", newline="") as handle:
             csv.writer(handle).writerow(
                 f"{value:.18e}" for value in self.committed_state.get_qpos()
@@ -1615,10 +1360,7 @@ class RobotViewer3D(QWidget):
         if not self.state_timeline:
             raise ValueError("no robot timeline is available")
 
-        path = Path(csv_path).expanduser()
-        if path.suffix.lower() != ".csv":
-            path = path.with_suffix(".csv")
-        path = path.resolve()
+        path = prepare_csv_save_path(csv_path)
 
         expected = int(self.robot_model.mj_model.nq)
         source_name = "generated trajectory"

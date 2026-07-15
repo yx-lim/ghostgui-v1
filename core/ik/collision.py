@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 import mujoco
 import numpy as np
 
-from .transform_gizmo import quaternion_slerp
-from .ik_tasks import TCPOrientationTask, TCPPositionTask
+from core.math3d import quaternion_slerp
+from .tasks import TCPOrientationTask, TCPPositionTask
 
 
 @dataclass(frozen=True)

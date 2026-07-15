@@ -11,9 +11,9 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from .robot_model_3d import RobotModel3D
-from .robot_model_registry import RobotModelInfo, get_model_info
-from .model_assets import prepare_urdf_visual_meshes, resolve_mesh_path
+from .model import RobotModel3D
+from .registry import RobotModelInfo, get_model_info
+from .assets import prepare_urdf_visual_meshes, resolve_mesh_path
 
 
 MODEL_CACHE_VERSION = 3

@@ -2,8 +2,8 @@ import unittest
 
 import numpy as np
 
-from gui.collision_checker import Collision, CollisionAwareIKSolver, CollisionChecker
-from gui.robot_model_3d import IKResult, RobotModel3D
+from core.ik import Collision, CollisionAwareIKSolver, CollisionChecker
+from core.models import IKResult, RobotModel3D
 
 
 class FakeCandidateState:
