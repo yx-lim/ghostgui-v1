@@ -28,15 +28,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .robot_model_3d import (
+from core.models import (
     RobotStateTimeline,
     TrajectoryGhostRenderer,
     interpolate_qpos,
 )
-from .collision_checker import CollisionAwareIKSolver, CollisionChecker
-from .trajectory import quat_to_rpy, rpy_to_quat
-from .viewer_3d import RobotCanvas3D
-from .ik_tasks import (
+from core.ik import CollisionAwareIKSolver, CollisionChecker
+from core.trajectory import quat_to_rpy, rpy_to_quat
+from gui.viewers.robot_canvas_3d import RobotCanvas3D
+from core.ik import (
     FootLockTask,
     JointRegularizationTask,
     PostureTask,
@@ -961,12 +961,6 @@ class RobotViewer3D(QWidget):
         roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
         self.target_pose_dragged.emit(
             *map(float, self.last_valid_target_position), roll, pitch, yaw
-        )
-
-    def _on_gizmo_moved(self, x, y, z):
-        """Compatibility shim for older callers/tests using position only."""
-        self._on_transform_moved(
-            (x, y, z), self.canvas.gizmo.quaternion.copy()
         )
 
     def _set_collision_substeps(self, count):

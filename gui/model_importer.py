@@ -9,8 +9,13 @@ import xml.etree.ElementTree as ET
 import os
 from pathlib import Path
 
-from .model_assets import ResolvedMeshAsset, resolve_mesh_path
-from .robot_model_registry import PROJECT_ROOT, ROBOT_MODELS, RobotModelInfo
+from core.models import (
+    PROJECT_ROOT,
+    ROBOT_MODELS,
+    ResolvedMeshAsset,
+    RobotModelInfo,
+    resolve_mesh_path,
+)
 
 
 SUPPORTED_MODEL_EXTENSIONS = {".urdf", ".xml"}
@@ -241,7 +246,7 @@ def _model_info_for_path(path, key=None):
 
 
 def _validate_model_file(model_path):
-    from .robot_model_adapter import MuJoCoRobotAdapter
+    from core.models import MuJoCoRobotAdapter
 
     cache_root = model_path.parent / ".cache"
     old_cache_root = os.environ.get("GHOSTGUI_CACHE_DIR")

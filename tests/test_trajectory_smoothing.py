@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from gui.trajectory import TargetFrame, Trajectory, quat_to_rpy, rpy_to_quat, slerp
+from core.trajectory import TargetFrame, Trajectory, quat_to_rpy, rpy_to_quat, slerp
 
 
 class TrajectorySmoothingTests(unittest.TestCase):

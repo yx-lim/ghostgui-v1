@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from .trajectory import (
+from core.trajectory import (
     TargetFrame,
     Trajectory,
     quat_to_rpy,
@@ -39,15 +39,14 @@ from .trajectory import (
 )
 from application import model_sessions, timeslice_service, trajectory_generation
 from .controls import TrajectoryControlPanel
-from .viewer_2d import RobotCanvas
+from gui.viewers.reference_frame_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
-from .viewer_2d_stickman import Stickman2DViewer
-from .viewer_3d_mujoco import Mujoco3DViewerPanel
+from gui.viewers.skeleton_2d import Stickman2DViewer
+from gui.viewers.mujoco_player import Mujoco3DViewerPanel
 from .backend_interface import BackendInterface
 from .model_reference import MujocoReferenceFrames
 from .app_sidebars import AppLeftSidebar, AppRightSidebar
-from .robot_model_adapter import MuJoCoRobotAdapter
-from .robot_model_registry import ROBOT_MODELS
+from core.models import MuJoCoRobotAdapter, ROBOT_MODELS
 from .model_importer import (
     default_model_library_root,
     discover_imported_models,

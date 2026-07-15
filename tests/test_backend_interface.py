@@ -1,7 +1,7 @@
 import unittest
 
 from gui.backend_interface import PythonTrajectoryBackend
-from gui.trajectory import SampledTrajectory, TargetFrame
+from core.trajectory import SampledTrajectory, TargetFrame
 
 
 class PythonTrajectoryBackendTests(unittest.TestCase):
