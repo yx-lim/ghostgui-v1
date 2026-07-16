@@ -451,6 +451,14 @@ class RobotViewer3D(QWidget):
         self.accept_timeslice_button.clicked.connect(self.accept_timeslice)
         self.delete_timeslice_button = QPushButton("Delete")
         self.delete_timeslice_button.clicked.connect(self.delete_timeslice)
+        self.timeslice_step_label = QLabel("Time Step")
+        self.timeslice_step_input = QDoubleSpinBox()
+        _compact_spinbox(self.timeslice_step_input, width=72)
+        self.timeslice_step_input.setRange(0.01, 5.0)
+        self.timeslice_step_input.setDecimals(2)
+        self.timeslice_step_input.setSingleStep(0.01)
+        self.timeslice_step_input.setValue(0.10)
+        self.timeslice_step_input.setSuffix(" s")
 
         self.timeslice_time_row = QHBoxLayout()
         self.timeslice_time_row.setContentsMargins(0, 0, 0, 0)
@@ -469,6 +477,8 @@ class RobotViewer3D(QWidget):
         self.timeslice_action_row = QHBoxLayout()
         self.timeslice_action_row.setContentsMargins(0, 0, 0, 0)
         self.timeslice_action_row.setSpacing(8)
+        self.timeslice_action_row.addWidget(self.timeslice_step_label)
+        self.timeslice_action_row.addWidget(self.timeslice_step_input)
         self.timeslice_action_row.addStretch(1)
         self.timeslice_action_row.addWidget(self.accept_timeslice_button)
         self.timeslice_action_row.addWidget(self.delete_timeslice_button)
@@ -529,6 +539,16 @@ class RobotViewer3D(QWidget):
         time = self.timeslice_time_input.value()
         self._set_timeslice_widgets(time)
         self.timeslice_time_changed.emit(time)
+
+    def timeslice_step(self):
+        return float(self.timeslice_step_input.value())
+
+    def next_timeslice_time(self, time=None):
+        base_time = self.current_time if time is None else float(time)
+        raw_time = int(round((base_time + self.timeslice_step()) * 100.0))
+        raw_time = max(self.timeslice_slider.minimum(), raw_time)
+        raw_time = min(self.timeslice_slider.maximum(), raw_time)
+        return raw_time / 100.0
 
     def accept_timeslice(self):
         if self.preview_active and not self.accept_preview():
@@ -1526,7 +1546,7 @@ class RobotViewer3D(QWidget):
             self.ghost_renderer.clear()
         self._update_ghost_options()
 
-    def clear_editable_timeline(self, keep_current_pose=True):
+    def clear_editable_timeline(self, keep_current_pose=True, reset_time=None):
         if not self.state_timeline or not self.robot_state:
             return
 
@@ -1535,7 +1555,11 @@ class RobotViewer3D(QWidget):
             if keep_current_pose
             else self.robot_model.home_qpos
         )
+        if reset_time is not None:
+            self.current_time = self.state_timeline.time_key(reset_time)
+            self._set_timeslice_widgets(self.current_time)
         self.state_timeline.reset(self.current_time, qpos)
+        self.set_robot_state_for_current_time(qpos)
         self._update_timeline_label()
 
     def load_backend_states(self, states):

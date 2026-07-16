@@ -410,6 +410,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
     def test_timeslice_bar_uses_single_compact_time_display(self):
         self.assertEqual(self.viewer.timeslice_label.text(), "Time")
         self.assertEqual(self.viewer.timeslice_time_input.suffix(), " s")
+        self.assertEqual(self.viewer.timeslice_step_label.text(), "Step")
+        self.assertEqual(self.viewer.timeslice_step_input.suffix(), " s")
+        self.assertAlmostEqual(self.viewer.timeslice_step_input.value(), 0.10)
         self.assertFalse(hasattr(self.viewer, "timeslice_time_label"))
         self.assertEqual(self.viewer.accept_timeslice_button.text(), "Accept")
         self.assertEqual(self.viewer.delete_timeslice_button.text(), "Delete")
@@ -422,15 +425,20 @@ class RobotViewerTimelineTests(unittest.TestCase):
             name, self.viewer.preview_state.get_joint_value(name) + 0.05
         )
         preview_qpos = self.viewer.preview_state.get_qpos()
+        expected_state = self.viewer.robot_model.create_state()
+        expected_state.set_qpos(preview_qpos)
 
         self.viewer.accept_timeslice()
 
         self.assertFalse(self.viewer.preview_active)
+        self.assertAlmostEqual(self.viewer.get_current_time(), 0.3)
+        self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.3)
+        self.assertAlmostEqual(self.viewer.timeslice_time_input.value(), 0.3)
         np.testing.assert_allclose(
             self.viewer.state_timeline.get_state(0.2), preview_qpos
         )
         self.assertEqual(self.viewer.timeslice_slider.defined_times, {0.2})
-        state = self.viewer.committed_state
+        state = expected_state
         expected_names = []
         for frame_name, (kind, object_name) in self.viewer.frame_bindings.items():
             try:
@@ -463,6 +471,31 @@ class RobotViewerTimelineTests(unittest.TestCase):
                     [roll, pitch, yaw],
                     atol=1e-9,
                 )
+
+    def test_accept_slice_auto_advance_uses_step_control(self):
+        self.viewer.timeslice_step_input.setValue(0.25)
+        self.window.controls.time_slider.set_value(0.2)
+        self.window.controls.emit_time_changed(0.2)
+
+        self.viewer.accept_timeslice()
+
+        self.assertEqual(self.viewer.timeslice_slider.defined_times, {0.2})
+        self.assertAlmostEqual(self.viewer.get_current_time(), 0.45)
+        self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.45)
+        self.assertAlmostEqual(self.viewer.timeslice_time_input.value(), 0.45)
+        self.assertIn("advanced to t=0.45 s", self.viewer.status_label.text())
+
+    def test_accept_slice_auto_advance_clamps_at_timeline_end(self):
+        self.viewer.timeslice_step_input.setValue(1.0)
+        self.window.controls.time_slider.set_value(4.8)
+        self.window.controls.emit_time_changed(4.8)
+
+        self.viewer.accept_timeslice()
+
+        self.assertEqual(self.viewer.timeslice_slider.defined_times, {4.8})
+        self.assertAlmostEqual(self.viewer.get_current_time(), 5.0)
+        self.assertAlmostEqual(self.window.controls.time_slider.value(), 5.0)
+        self.assertIn("advanced to t=5.00 s", self.viewer.status_label.text())
 
     def test_defined_timeslice_marker_snaps_back_to_slice_time(self):
         self.window.controls.time_slider.set_value(0.2)
@@ -528,6 +561,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.viewer.accept_timeslice()
         self.assertEqual(self.viewer.timeslice_slider.defined_times, {0.2})
 
+        self.viewer.set_current_time(0.2)
         self.viewer.delete_timeslice()
 
         self.assertNotIn(0.2, self.viewer.timeslice_slider.defined_times)
@@ -584,6 +618,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(self.viewer.robot_trajectory_times, [])
         self.assertEqual(self.viewer.ghost_trajectory, [])
         self.assertEqual(self.viewer.timeslice_slider.defined_times, set())
+        self.assertAlmostEqual(self.viewer.get_current_time(), 0.0)
+        self.assertEqual(self.viewer.timeslice_slider.value(), 0)
+        self.assertAlmostEqual(self.viewer.timeslice_time_input.value(), 0.0)
+        self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.0)
         np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), pose_before)
 
     def test_clear_trajectory_drops_stale_editable_qpos_times(self):
@@ -595,6 +633,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.preview_state.get_joint_value(joint_name) + 0.05,
         )
         self.viewer.accept_timeslice()
+        self.assertAlmostEqual(self.viewer.get_current_time(), 0.3)
         stale_qpos = self.viewer.state_timeline.get_state(0.2)
         self.assertFalse(np.allclose(stale_qpos, self.viewer.robot_model.home_qpos))
 
@@ -607,11 +646,13 @@ class RobotViewerTimelineTests(unittest.TestCase):
         finally:
             QMessageBox.question = original_question
 
-        self.assertEqual(self.viewer.state_timeline.times(), [0.2])
+        self.assertEqual(self.viewer.state_timeline.times(), [0.0])
+        self.assertAlmostEqual(self.viewer.get_current_time(), 0.0)
+        self.assertEqual(self.viewer.timeslice_slider.value(), 0)
+        self.assertAlmostEqual(self.viewer.timeslice_time_input.value(), 0.0)
+        self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.0)
 
         self.viewer.reset_robot_pose()
-        self.window.controls.time_slider.set_value(0.0)
-        self.window.controls.emit_time_changed(0.0)
 
         np.testing.assert_allclose(
             self.viewer.committed_state.get_qpos(),
@@ -811,11 +852,19 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.controls.corner_smoothing_slider,
         )
         self.assertIs(
+            self.viewer.timeslice_action_row.itemAt(1).widget(),
+            self.viewer.timeslice_step_label,
+        )
+        self.assertIs(
             self.viewer.timeslice_action_row.itemAt(2).widget(),
+            self.viewer.timeslice_step_input,
+        )
+        self.assertIs(
+            self.viewer.timeslice_action_row.itemAt(4).widget(),
             self.viewer.accept_timeslice_button,
         )
         self.assertIs(
-            self.viewer.timeslice_action_row.itemAt(3).widget(),
+            self.viewer.timeslice_action_row.itemAt(5).widget(),
             self.viewer.delete_timeslice_button,
         )
         self.assertIs(

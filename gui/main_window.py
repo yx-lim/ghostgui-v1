@@ -1096,9 +1096,15 @@ class RobotGuiMainWindow(QMainWindow):
             return
 
         self.refresh_display()
+        next_time = self.viewer_3d.next_timeslice_time(time)
+        if abs(next_time - time) > 1e-9:
+            self.on_viewer_timeslice_time_changed(next_time)
+            advance_note = f" advanced to t={next_time:.2f} s."
+        else:
+            advance_note = " already at the timeline end."
         message = (
             f"Accepted slice at t={time:.2f} s; captured {count} logical targets "
-            "from the committed solved pose."
+            f"from the committed solved pose;{advance_note}"
         )
         self.viewer_3d.status_label.setText(message)
         self.status_text.setText(message)
@@ -1404,7 +1410,11 @@ class RobotGuiMainWindow(QMainWindow):
         self.trajectory.clear()
         self.active_index = -1
         self.viewer_3d.clear_robot_trajectory()
-        self.viewer_3d.clear_editable_timeline(keep_current_pose=True)
+        self.viewer_3d.clear_editable_timeline(
+            keep_current_pose=True,
+            reset_time=0.0,
+        )
+        self.controls.time_slider.set_value(0.0)
         self.viewer_3d.set_defined_timeslices([])
         self.refresh_display()
         message = (
