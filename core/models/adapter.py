@@ -453,6 +453,12 @@ class MuJoCoRobotAdapter(RobotModel3D):
         return bindings
 
     def resolve_logical_frame(self, name):
+        if isinstance(name, str) and ":" in name:
+            kind, object_name = name.split(":", 1)
+            if kind == "site" and object_name in self.site_names:
+                return "site", object_name
+            if kind == "body" and object_name in self.body_names:
+                return "body", object_name
         binding = self.logical_frame_bindings.get(name)
         if binding is not None:
             return binding

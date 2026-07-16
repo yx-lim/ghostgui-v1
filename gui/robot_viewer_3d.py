@@ -92,12 +92,14 @@ class RobotViewer3D(QWidget):
             if robot_model is not None and hasattr(robot_model, "logical_frame_bindings")
             else dict(FRAME_BINDINGS)
         )
+        self.exposed_target_frames = set(self.frame_bindings)
         self.reverse_bindings = {value: key for key, value in self.frame_bindings.items()}
         self.committed_state = robot_model.create_state() if robot_model else None
         self.preview_state = robot_model.create_state() if robot_model else None
         # Compatibility alias: external readers historically used robot_state.
         # It now always means the timeline-backed committed state.
         self.robot_state = self.committed_state
+        self.target_entries = self._build_target_entries()
         self.preview_active = False
         self.current_time = 0.0
         self.state_timeline = (
@@ -221,22 +223,19 @@ class RobotViewer3D(QWidget):
         target_layout = QFormLayout(self.selection_context_panel)
         target_layout.setContentsMargins(6, 6, 6, 6)
         target_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        self.target_box = QComboBox()
+        self.target_box = QComboBox(self.selection_context_panel)
         _compact_combo(self.target_box, minimum_chars=12)
-        if self.robot_model:
-            for frame_name, (kind, name) in self.frame_bindings.items():
-                try:
-                    self.robot_state.resolve_object(name, kind)
-                except KeyError:
-                    continue
-                self.target_box.addItem(frame_name.replace("_", " "), (kind, name))
-            known = {self.target_box.itemData(i) for i in range(self.target_box.count())}
-            for kind, names in (("site", self.robot_model.site_names),
-                                ("body", self.robot_model.body_names)):
-                for name in names:
-                    if (kind, name) not in known and name != "world":
-                        self.target_box.addItem(f"{kind}: {name}", (kind, name))
+        known_bindings = set()
+        for entry in self.target_entries:
+            binding = (entry["kind"], entry["name"])
+            if entry["key"] in self.frame_bindings or binding not in known_bindings:
+                self.target_box.addItem(
+                    entry["label"],
+                    binding,
+                )
+                known_bindings.add(binding)
         self.target_box.currentIndexChanged.connect(self._target_selected)
+        self.target_box.setVisible(False)
         self.collision_substeps = QSpinBox()
         _compact_spinbox(self.collision_substeps)
         self.collision_substeps.setRange(1, 32)
@@ -244,7 +243,6 @@ class RobotViewer3D(QWidget):
         self.collision_substeps.valueChanged.connect(
             self._set_collision_substeps
         )
-        target_layout.addRow("Target", self.target_box)
         target_layout.addRow("Collision substeps", self.collision_substeps)
         self.root_pose_label = StatusValueLabel()
         self.root_pose_label.setWordWrap(True)
@@ -346,6 +344,40 @@ class RobotViewer3D(QWidget):
         preview_group.setEnabled(enabled)
         self.quick_actions_panel.setEnabled(enabled)
         self.timeslice_editor.setEnabled(enabled)
+
+    def _build_target_entries(self):
+        entries = []
+        if not self.robot_model or not self.robot_state:
+            return entries
+
+        for frame_name, (kind, name) in self.frame_bindings.items():
+            try:
+                self.robot_state.resolve_object(name, kind)
+            except KeyError:
+                continue
+            entries.append({
+                "key": frame_name,
+                "label": frame_name.replace("_", " "),
+                "kind": kind,
+                "name": name,
+                "checked": True,
+            })
+
+        for kind, names in (
+            ("site", self.robot_model.site_names),
+            ("body", self.robot_model.body_names),
+        ):
+            for name in names:
+                if name == "world":
+                    continue
+                entries.append({
+                    "key": f"{kind}:{name}",
+                    "label": f"{kind}: {name}",
+                    "kind": kind,
+                    "name": name,
+                    "checked": False,
+                })
+        return entries
 
     def _build_canvas_workspace(self):
         self.canvas_workspace = QWidget()
@@ -702,7 +734,7 @@ class RobotViewer3D(QWidget):
             trajectory_smoothing,
         )
         if active_frame is not None:
-            binding = self.frame_bindings.get(active_frame.frame_name)
+            binding = self.binding_for_target_key(active_frame.frame_name)
             if binding is not None:
                 self.select_target(*binding, emit=False)
 
@@ -715,6 +747,36 @@ class RobotViewer3D(QWidget):
                 return True
         return False
 
+    def set_exposed_target_frames(self, frame_names):
+        known = {entry["key"] for entry in self.target_entries}
+        self.exposed_target_frames = {
+            frame_name for frame_name in frame_names
+            if frame_name in known
+        }
+
+    def target_frame_entries(self):
+        return [dict(entry) for entry in self.target_entries]
+
+    def binding_for_target_key(self, target_key):
+        binding = self.frame_bindings.get(target_key)
+        if binding is not None:
+            return binding
+        if isinstance(target_key, str) and ":" in target_key:
+            kind, name = target_key.split(":", 1)
+            if kind in ("body", "site"):
+                try:
+                    self.robot_state.resolve_object(name, kind)
+                except (AttributeError, KeyError):
+                    return None
+                return kind, name
+        return None
+
+    def target_key_for_binding(self, kind, name):
+        logical = self.reverse_bindings.get((kind, name))
+        if logical is not None:
+            return logical
+        return f"{kind}:{name}"
+
     def _selected_target(self):
         data = self.target_box.currentData()
         return tuple(data) if data else (None, None)
@@ -724,7 +786,7 @@ class RobotViewer3D(QWidget):
             return
         kind, name = self._selected_target()
         self._set_target_to_selected_pose()
-        frame_name = self.reverse_bindings.get((kind, name))
+        frame_name = self.target_key_for_binding(kind, name)
         if frame_name and not self._syncing_target:
             self.target_frame_changed.emit(frame_name)
 
@@ -744,7 +806,7 @@ class RobotViewer3D(QWidget):
         self._update_root_pose_label()
 
     def preview_target_pose(self, frame_name, position, quaternion):
-        binding = self.frame_bindings.get(frame_name)
+        binding = self.binding_for_target_key(frame_name)
         if binding is None:
             self.status_label.setText(
                 f"Frame {frame_name!r} has no editable 3D body/site target."
@@ -1145,15 +1207,34 @@ class RobotViewer3D(QWidget):
             self.robot_model.logical_frame_for_body(body_name)
             if hasattr(self.robot_model, "logical_frame_for_body") else None
         )
-        binding = self.frame_bindings.get(logical) if logical else None
-        if binding is None or not self.select_target(*binding, emit=False):
+        raw_key = f"body:{body_name}"
+        selected_key = None
+        binding = None
+        if raw_key in self.exposed_target_frames:
+            selected_key = raw_key
+            binding = ("body", body_name)
+        elif logical in self.exposed_target_frames:
+            selected_key = logical
+            binding = self.frame_bindings.get(logical)
+
+        if binding is None and logical and logical not in self.exposed_target_frames:
+            self.status_label.setText(
+                f"Frame {logical!r} is hidden from double-click selection."
+            )
+            return
+        if binding is None:
             self.status_label.setText(
                 f"Body {body_name!r} has no nearby editable trajectory frame."
             )
             return
-        self.target_frame_changed.emit(logical)
+        if not self.select_target(*binding, emit=False):
+            self.status_label.setText(
+                f"Body {body_name!r} has no nearby editable trajectory frame."
+            )
+            return
+        self.target_frame_changed.emit(selected_key)
         self.status_label.setText(
-            f"Selected {logical} from double-clicked body {body_name}."
+            f"Selected {selected_key} from double-clicked body {body_name}."
         )
 
     def get_current_time(self):

@@ -563,6 +563,12 @@ class MujocoIKBackend(PythonTrajectoryBackend):
                 for name, (kind, mujoco_name)
                 in self.adapter.logical_frame_bindings.items()
             }
+        if self.adapter is not None:
+            for site_name in getattr(self.adapter, "site_names", []):
+                configured.setdefault(f"site:{site_name}", ("site", site_name, 1.0))
+            for body_name in getattr(self.adapter, "body_names", []):
+                if body_name != "world":
+                    configured.setdefault(f"body:{body_name}", ("body", body_name, 1.0))
         for frame_name, (kind, mujoco_name, weight) in configured.items():
             if kind == "site":
                 object_id = mujoco.mj_name2id(

@@ -149,6 +149,36 @@ class RobotModelAdapterTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_target_panel_uses_checkable_exposed_frame_list(self):
+        window = RobotGuiMainWindow("g1")
+        try:
+            self.assertFalse(window.viewer_3d.target_box.isVisible())
+            items = [
+                window.controls.exposed_frame_list.item(index)
+                for index in range(window.controls.exposed_frame_list.count())
+            ]
+            keys = [item.data(Qt.ItemDataRole.UserRole) for item in items]
+            self.assertEqual(keys[:len(window.controls.frame_names)],
+                             window.controls.frame_names)
+            self.assertIn("body:robot/left_wrist_yaw_link", keys)
+            self.assertIn("site:robot/left_palm", keys)
+            logical_items = items[:len(window.controls.frame_names)]
+            raw_items = items[len(window.controls.frame_names):]
+            self.assertTrue(all(
+                item.checkState() == Qt.CheckState.Checked
+                for item in logical_items
+            ))
+            self.assertTrue(any(
+                item.checkState() == Qt.CheckState.Unchecked
+                for item in raw_items
+            ))
+            self.assertEqual(
+                window.controls.exposed_frame_names(),
+                window.controls.frame_names,
+            )
+        finally:
+            window.close()
+
     def test_generated_skeleton_marks_only_editable_model_objects(self):
         window = RobotGuiMainWindow("go2")
         try:
@@ -743,6 +773,36 @@ class RobotModelAdapterTests(unittest.TestCase):
         finally:
             g1_window.close()
             go2_window.close()
+
+    def test_hidden_exposed_frame_ignores_body_double_click(self):
+        window = RobotGuiMainWindow("g1")
+        try:
+            window.controls.set_current_frame_name("pelvis")
+            window.controls.set_exposed_frame_names(["pelvis"])
+            window.viewer_3d._on_body_double_clicked("robot/left_wrist_yaw_link")
+            self.assertEqual(window.controls.frame_box.currentText(), "pelvis")
+            self.assertEqual(
+                window.viewer_3d._selected_target(), ("body", "robot/pelvis")
+            )
+            self.assertIn("hidden", window.viewer_3d.status_label.text())
+
+            window.controls.set_exposed_frame_names(["pelvis", "left_hand"])
+            window.viewer_3d._on_body_double_clicked("robot/left_wrist_yaw_link")
+            self.assertEqual(window.controls.frame_box.currentText(), "left_hand")
+            self.assertEqual(
+                window.viewer_3d._selected_target(), ("site", "robot/left_palm")
+            )
+
+            raw_key = "body:robot/left_wrist_yaw_link"
+            window.controls.set_exposed_frame_names(["pelvis", raw_key])
+            window.viewer_3d._on_body_double_clicked("robot/left_wrist_yaw_link")
+            self.assertEqual(window.controls.current_frame_name(), raw_key)
+            self.assertEqual(
+                window.viewer_3d._selected_target(),
+                ("body", "robot/left_wrist_yaw_link"),
+            )
+        finally:
+            window.close()
 
     def test_generated_skeleton_uses_ik_and_whole_body_follow(self):
         window = RobotGuiMainWindow("go2")

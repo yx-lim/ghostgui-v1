@@ -32,6 +32,8 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QHBoxLayout,
     QCheckBox,
+    QListWidget,
+    QListWidgetItem,
     QSizePolicy,
 )
 
@@ -145,10 +147,15 @@ class TrajectoryControlPanel(QGroupBox):
     model_changed = Signal(str)
     open_model_clicked = Signal()
     choose_mesh_folder_clicked = Signal()
+    exposed_frames_changed = Signal(object)
 
     def __init__(self, model_registry=None, model_key="g1", frame_names=None):
         super().__init__("Reference Frame Trajectory Editor")
         self._suppress_pose_changed = False
+        self._syncing_frame_selection = False
+        self.current_target_key = None
+        self.target_frame_entries = []
+        self.target_frame_keys = []
         self.model_registry = model_registry or {}
         self.model_key = model_key
         self.frame_names = list(frame_names or [
@@ -190,23 +197,39 @@ class TrajectoryControlPanel(QGroupBox):
             )
             robot_layout.addWidget(self.choose_mesh_folder_button)
 
-        # --------------------------------------------------------
-        # Select which robot frame this target refers to
-        # --------------------------------------------------------
-        self.target_layout.addWidget(QLabel("Target robot frame"))
-
         self.frame_box = QComboBox()
         self.frame_box.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.frame_box.setMinimumContentsLength(10)
         self.frame_box.addItems(self.frame_names)
-        # A hand is the most useful default for the 3D transform gizmo. The
-        # user can still select pelvis/feet exactly as before.
         preferred = "left_hand" if "left_hand" in self.frame_names else self.frame_names[0]
         self.frame_box.setCurrentText(preferred)
-        self.frame_box.currentTextChanged.connect(self.frame_name_changed.emit)
-        self.target_layout.addWidget(self.frame_box)
+        self.current_target_key = preferred
+        self.frame_box.currentTextChanged.connect(self._on_frame_box_text_changed)
+
+        # --------------------------------------------------------
+        # Select and expose logical robot frames for viewer picking.
+        # --------------------------------------------------------
+        self.target_layout.addWidget(QLabel("Exposed robot frames"))
+        self.exposed_frame_list = QListWidget()
+        self.exposed_frame_list.setMaximumHeight(138)
+        self.exposed_frame_list.setMaximumWidth(212)
+        self.exposed_frame_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        self.exposed_frame_list.setSelectionMode(
+            QListWidget.SelectionMode.SingleSelection
+        )
+        self.exposed_frame_list.itemChanged.connect(
+            self._on_exposed_frame_item_changed
+        )
+        self.exposed_frame_list.currentItemChanged.connect(
+            self._on_exposed_frame_current_changed
+        )
+        self.set_exposed_frame_entries(self.frame_names, current_key=preferred)
+        self.target_layout.addWidget(self.exposed_frame_list)
 
         # --------------------------------------------------------
         # Motion phase
@@ -457,7 +480,170 @@ class TrajectoryControlPanel(QGroupBox):
         choice = preferred if preferred in names else old if old in names else names[0]
         self.frame_box.setCurrentText(choice)
         self.frame_box.blockSignals(False)
+        self.set_exposed_frame_entries(names, current_key=choice)
         self.frame_name_changed.emit(choice)
+        self.exposed_frames_changed.emit(self.exposed_frame_names())
+
+    def set_exposed_frame_entries(self, entries, checked_keys=None, current_key=None):
+        normalized = []
+        for entry in entries:
+            if isinstance(entry, dict):
+                key = entry.get("key")
+                label = entry.get("label", key)
+                checked = bool(entry.get("checked", False))
+            elif isinstance(entry, (tuple, list)):
+                key = entry[0]
+                label = entry[1] if len(entry) > 1 else key
+                checked = bool(entry[2]) if len(entry) > 2 else key in self.frame_names
+            else:
+                key = str(entry)
+                label = key
+                checked = key in self.frame_names
+            if not key:
+                continue
+            normalized.append({
+                "key": str(key),
+                "label": str(label),
+                "checked": checked,
+            })
+        if not normalized:
+            normalized = [
+                {"key": name, "label": name, "checked": True}
+                for name in self.frame_names
+            ]
+        if checked_keys is not None:
+            checked = set(checked_keys)
+            for entry in normalized:
+                entry["checked"] = entry["key"] in checked
+        self.target_frame_entries = normalized
+        self.target_frame_keys = [entry["key"] for entry in normalized]
+        target_key = (
+            current_key
+            if current_key in self.target_frame_keys
+            else self.current_target_key
+            if self.current_target_key in self.target_frame_keys
+            else self.frame_box.currentText()
+            if self.frame_box.currentText() in self.target_frame_keys
+            else self.target_frame_keys[0]
+        )
+        self._populate_exposed_frame_list(normalized, target_key)
+        self.current_target_key = target_key
+
+    def exposed_frame_names(self):
+        names = []
+        for index in range(self.exposed_frame_list.count()):
+            item = self.exposed_frame_list.item(index)
+            if item.checkState() == Qt.CheckState.Checked:
+                names.append(item.data(Qt.ItemDataRole.UserRole))
+        return names
+
+    def set_exposed_frame_names(self, frame_names, emit=True):
+        exposed = set(frame_names)
+        self._syncing_frame_selection = True
+        self.exposed_frame_list.blockSignals(True)
+        try:
+            for index in range(self.exposed_frame_list.count()):
+                item = self.exposed_frame_list.item(index)
+                state = (
+                    Qt.CheckState.Checked
+                    if item.data(Qt.ItemDataRole.UserRole) in exposed
+                    else Qt.CheckState.Unchecked
+                )
+                item.setCheckState(state)
+        finally:
+            self.exposed_frame_list.blockSignals(False)
+            self._syncing_frame_selection = False
+        if emit:
+            self.exposed_frames_changed.emit(self.exposed_frame_names())
+
+    def set_current_frame_name(self, frame_name, emit=True):
+        if frame_name not in self.target_frame_keys:
+            return False
+        self._syncing_frame_selection = True
+        frame_blocked = self.frame_box.blockSignals(True)
+        list_blocked = self.exposed_frame_list.blockSignals(True)
+        try:
+            if frame_name in self.frame_names:
+                self.frame_box.setCurrentText(frame_name)
+            self.current_target_key = frame_name
+            self._select_exposed_frame_item(frame_name)
+        finally:
+            self.exposed_frame_list.blockSignals(list_blocked)
+            self.frame_box.blockSignals(frame_blocked)
+            self._syncing_frame_selection = False
+        if emit:
+            self.frame_name_changed.emit(frame_name)
+        return True
+
+    def current_frame_name(self):
+        return self.current_target_key or self.frame_box.currentText()
+
+    def _populate_exposed_frame_list(self, entries, current_frame):
+        self._syncing_frame_selection = True
+        blocked = self.exposed_frame_list.blockSignals(True)
+        try:
+            self.exposed_frame_list.clear()
+            for entry in entries:
+                frame_name = entry["key"]
+                item = QListWidgetItem(entry["label"])
+                item.setData(Qt.ItemDataRole.UserRole, frame_name)
+                item.setFlags(
+                    item.flags()
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsSelectable
+                    | Qt.ItemFlag.ItemIsEnabled
+                )
+                item.setCheckState(
+                    Qt.CheckState.Checked
+                    if entry["checked"]
+                    else Qt.CheckState.Unchecked
+                )
+                self.exposed_frame_list.addItem(item)
+            self._select_exposed_frame_item(current_frame)
+        finally:
+            self.exposed_frame_list.blockSignals(blocked)
+            self._syncing_frame_selection = False
+
+    def _select_exposed_frame_item(self, frame_name):
+        for index in range(self.exposed_frame_list.count()):
+            item = self.exposed_frame_list.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) == frame_name:
+                self.exposed_frame_list.setCurrentRow(index)
+                return True
+        return False
+
+    def _on_frame_box_text_changed(self, frame_name):
+        if self._syncing_frame_selection:
+            return
+        self._syncing_frame_selection = True
+        blocked = self.exposed_frame_list.blockSignals(True)
+        try:
+            self.current_target_key = frame_name
+            self._select_exposed_frame_item(frame_name)
+        finally:
+            self.exposed_frame_list.blockSignals(blocked)
+            self._syncing_frame_selection = False
+        self.frame_name_changed.emit(frame_name)
+
+    def _on_exposed_frame_current_changed(self, current, previous):
+        if self._syncing_frame_selection or current is None:
+            return
+        frame_name = current.data(Qt.ItemDataRole.UserRole)
+        self._syncing_frame_selection = True
+        blocked = self.frame_box.blockSignals(True)
+        try:
+            if frame_name in self.frame_names:
+                self.frame_box.setCurrentText(frame_name)
+            self.current_target_key = frame_name
+        finally:
+            self.frame_box.blockSignals(blocked)
+            self._syncing_frame_selection = False
+        self.frame_name_changed.emit(frame_name)
+
+    def _on_exposed_frame_item_changed(self, item):
+        if self._syncing_frame_selection:
+            return
+        self.exposed_frames_changed.emit(self.exposed_frame_names())
 
     def add_model(self, key, display_name, select=True):
         if not hasattr(self, "model_box"):
@@ -494,7 +680,7 @@ class TrajectoryControlPanel(QGroupBox):
         return TargetFrame(
             time=self.time_slider.value(),
             phase=self.phase_box.currentText(),
-            frame_name=self.frame_box.currentText(),
+            frame_name=self.current_frame_name(),
             x=self.x_slider.value(),
             y=self.y_slider.value(),
             z=self.z_slider.value(),
@@ -526,9 +712,7 @@ class TrajectoryControlPanel(QGroupBox):
             self.yaw_slider.set_value(frame.yaw)
 
             self.phase_box.setCurrentText(frame.phase)
-            previous_block_state = self.frame_box.blockSignals(True)
-            self.frame_box.setCurrentText(frame.frame_name)
-            self.frame_box.blockSignals(previous_block_state)
+            self.set_current_frame_name(frame.frame_name, emit=False)
         finally:
             self._suppress_pose_changed = False
 

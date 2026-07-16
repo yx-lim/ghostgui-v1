@@ -307,6 +307,9 @@ class RobotGuiMainWindow(QMainWindow):
             robot_model=self.robot_model_3d,
             error=self.robot_model_error,
         )
+        self.controls.set_exposed_frame_entries(
+            self.viewer_3d.target_frame_entries()
+        )
         self.viewer_2d_stickman = Stickman2DViewer(self.robot_model_3d)
         self.viewer_3d_mujoco = Mujoco3DViewerPanel(self.robot_model_3d)
         self.model_sessions = {
@@ -347,7 +350,7 @@ class RobotGuiMainWindow(QMainWindow):
             lambda _value: self.refresh_display()
         )
         self.set_current_frame_to_model_reference(
-            self.controls.frame_box.currentText(),
+            self.controls.current_frame_name(),
             emit_pose_changed=False,
         )
 
@@ -617,6 +620,9 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.open_model_clicked.connect(self.on_open_model_file)
         self.controls.choose_mesh_folder_clicked.connect(self.on_choose_mesh_folder)
         self.controls.pose_changed.connect(self.on_pose_changed)
+        self.controls.exposed_frames_changed.connect(
+            self.on_exposed_target_frames_changed
+        )
         self.controls.add_keyframe_clicked.connect(self.on_add_keyframe)
         self.controls.update_keyframe_clicked.connect(self.on_update_keyframe)
         self.controls.delete_keyframe_clicked.connect(self.on_delete_keyframe)
@@ -642,6 +648,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.redo_shortcut.activated.connect(self.redo_last_action)
 
     def connect_model_viewer_signals(self, viewer_3d, viewer_2d_skeleton):
+        viewer_3d.set_exposed_target_frames(self.controls.exposed_frame_names())
         viewer_3d.target_dragged.connect(self.on_target_dragged)
         viewer_3d.target_pose_dragged.connect(self.on_target_pose_dragged)
         viewer_3d.target_pose_drag_finished.connect(
@@ -738,9 +745,7 @@ class RobotGuiMainWindow(QMainWindow):
             controls.pitch_slider.set_value(frame.pitch)
             controls.yaw_slider.set_value(frame.yaw)
             controls.phase_box.setCurrentText(frame.phase)
-            blocked = controls.frame_box.blockSignals(True)
-            controls.frame_box.setCurrentText(frame.frame_name)
-            controls.frame_box.blockSignals(blocked)
+            controls.set_current_frame_name(frame.frame_name, emit=False)
         finally:
             controls._suppress_pose_changed = False
 
@@ -1019,6 +1024,12 @@ class RobotGuiMainWindow(QMainWindow):
             viewer=self.viewer_3d,
         )
         self.controls.set_frame_names(session.adapter.trajectory_frames)
+        self.controls.set_exposed_frame_entries(
+            self.viewer_3d.target_frame_entries()
+        )
+        self.viewer_3d.set_exposed_target_frames(
+            self.controls.exposed_frame_names()
+        )
         self.setWindowTitle(
             f"Reference Frame Trajectory GUI — {session.adapter.model_name}"
         )
@@ -1052,7 +1063,7 @@ class RobotGuiMainWindow(QMainWindow):
         The committed keyframe is overwritten only when the preview is accepted.
         """
 
-        frame_name = self.controls.frame_box.currentText()
+        frame_name = self.controls.current_frame_name()
         self.viewer_3d.preview_target_pose(
             frame_name,
             (x, y, z),
@@ -1062,7 +1073,7 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_time_changed(self, time):
         """Load or create the editable qpos keyframe for this GUI time."""
-        frame_name = self.controls.frame_box.currentText()
+        frame_name = self.controls.current_frame_name()
         target = self.trajectory.targets_at_time(time).get(frame_name)
         if target is not None:
             self.controls.set_position_values(
@@ -1146,7 +1157,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.viewer_3d.committed_state,
             time=self.viewer_3d.get_current_time(),
             phase=self.controls.phase_box.currentText(),
-            selected_frame_name=self.controls.frame_box.currentText(),
+            selected_frame_name=self.controls.current_frame_name(),
             frame_names=self.editable_logical_frame_names(),
             frame_bindings=self.viewer_3d.frame_bindings,
         )
@@ -1183,7 +1194,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.trajectory.clear()
         self.active_index = -1
         phase = self.controls.phase_box.currentText()
-        selected_frame_name = self.controls.frame_box.currentText()
+        selected_frame_name = self.controls.current_frame_name()
         selected_frame = None
         selected_index = -1
         last_index = -1
@@ -1300,10 +1311,11 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_3d_target_frame_changed(self, frame_name):
         """Map common 3D body/site selections back to the 2D frame concept."""
-        self.controls.frame_box.blockSignals(True)
-        self.controls.frame_box.setCurrentText(frame_name)
-        self.controls.frame_box.blockSignals(False)
-        binding = self.robot_model_3d.resolve_logical_frame(frame_name)
+        self.controls.set_current_frame_name(frame_name, emit=False)
+        binding = (
+            self.viewer_3d.binding_for_target_key(frame_name)
+            or self.robot_model_3d.resolve_logical_frame(frame_name)
+        )
         if binding is not None:
             kind, name = binding
             state = (
@@ -1319,6 +1331,9 @@ class RobotGuiMainWindow(QMainWindow):
                 emit_pose_changed=False,
             )
         self.refresh_display(apply_stickman_frame=False)
+
+    def on_exposed_target_frames_changed(self, frame_names):
+        self.viewer_3d.set_exposed_target_frames(frame_names)
 
     def on_preview_cancelled(self):
         kind, name = self.viewer_3d._selected_target()
