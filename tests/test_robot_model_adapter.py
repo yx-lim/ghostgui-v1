@@ -514,6 +514,73 @@ class RobotModelAdapterTests(unittest.TestCase):
         finally:
             canvas.close()
 
+    def test_selected_body_highlight_applies_only_to_owner_geoms(self):
+        adapter = MuJoCoRobotAdapter("go2")
+        state = adapter.create_state()
+        canvas = RobotCanvas3D()
+        try:
+            canvas.set_robot_states(state, adapter.create_state())
+            calf_id = mujoco.mj_name2id(
+                adapter.mj_model, mujoco.mjtObj.mjOBJ_BODY, "FL_calf"
+            )
+            selected_geom = next(
+                geom_id for geom_id in RobotCanvas3D.render_geom_ids(adapter.mj_model)
+                if int(adapter.mj_model.geom_bodyid[geom_id]) == calf_id
+            )
+            other_geom = next(
+                geom_id for geom_id in RobotCanvas3D.render_geom_ids(adapter.mj_model)
+                if int(adapter.mj_model.geom_bodyid[geom_id]) != calf_id
+            )
+
+            canvas.set_selected_target("body", "FL_calf", calf_id)
+
+            self.assertTrue(canvas._geom_is_selected_body(
+                adapter.mj_model, selected_geom
+            ))
+            self.assertFalse(canvas._geom_is_selected_body(
+                adapter.mj_model, other_geom
+            ))
+            original = adapter.get_geom_rgba(selected_geom)
+            highlighted = canvas._selected_body_rgba(original)
+            self.assertEqual(highlighted[3], original[3])
+            self.assertTrue(np.all(np.asarray(highlighted[:3]) >= original[:3]))
+        finally:
+            canvas.close()
+
+    def test_site_target_highlight_uses_owning_body(self):
+        window = RobotGuiMainWindow("g1")
+        try:
+            viewer = window.viewer_3d
+            kind, site_name = viewer.robot_model.resolve_logical_frame("left_hand")
+            viewer.select_target(kind, site_name, emit=False)
+            viewer._set_target_to_selected_pose()
+
+            site_id = mujoco.mj_name2id(
+                viewer.robot_model.mj_model,
+                mujoco.mjtObj.mjOBJ_SITE,
+                site_name,
+            )
+            owner_body_id = int(viewer.robot_model.mj_model.site_bodyid[site_id])
+            self.assertEqual(viewer.canvas.selected_target_kind, "site")
+            self.assertEqual(viewer.canvas.selected_target_name, site_name)
+            self.assertEqual(viewer.canvas.selected_body_id, owner_body_id)
+        finally:
+            window.close()
+
+    def test_target_marker_rotation_matrix_uses_selected_quaternion(self):
+        matrix = RobotCanvas3D._quaternion_rotation_matrix(
+            np.array([0.0, 0.0, 0.0, 1.0])
+        )
+        np.testing.assert_allclose(
+            matrix,
+            np.array([
+                [-1.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ]),
+            atol=1e-12,
+        )
+
     def test_transform_gizmo_hotkeys_switch_modes_and_cancel(self):
         canvas = RobotCanvas3D()
         try:

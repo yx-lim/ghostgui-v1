@@ -712,6 +712,7 @@ class RobotViewer3D(QWidget):
                 self._syncing_target = not emit
                 self.target_box.setCurrentIndex(index)
                 self._syncing_target = False
+                self._set_canvas_selected_target(kind, name)
                 return True
         return False
 
@@ -738,10 +739,26 @@ class RobotViewer3D(QWidget):
         except KeyError as exc:
             self.status_label.setText(str(exc))
             return
+        self._set_canvas_selected_target(kind, name)
         self.canvas.set_target_pose(position, quaternion)
         self.last_valid_target_position = position.copy()
         self.last_valid_target_quaternion = quaternion.copy()
         self._update_root_pose_label()
+
+    def _set_canvas_selected_target(self, kind, name):
+        if not name or self.committed_state is None:
+            self.canvas.set_selected_target()
+            return
+        try:
+            resolved_kind, object_id = self.committed_state.resolve_object(name, kind)
+        except KeyError:
+            self.canvas.set_selected_target()
+            return
+        if resolved_kind == "site":
+            owner_body_id = int(self.robot_model.mj_model.site_bodyid[object_id])
+        else:
+            owner_body_id = int(object_id)
+        self.canvas.set_selected_target(resolved_kind, name, owner_body_id)
 
     def preview_target_pose(self, frame_name, position, quaternion):
         binding = self.frame_bindings.get(frame_name)

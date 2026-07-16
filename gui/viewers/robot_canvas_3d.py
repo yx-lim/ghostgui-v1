@@ -81,6 +81,9 @@ class RobotCanvas3D(QOpenGLWidget):
         self.show_ghosts = False
         self.ghost_alpha = 0.18
         self.use_model_colors = True
+        self.selected_target_kind = None
+        self.selected_target_name = None
+        self.selected_body_id = None
         self._geom_lists = []
         self._mesh_display_lists = {}
         self._quadric = None
@@ -122,6 +125,14 @@ class RobotCanvas3D(QOpenGLWidget):
 
     def set_use_model_colors(self, enabled):
         self.use_model_colors = bool(enabled)
+        self.update()
+
+    def set_selected_target(self, kind=None, name=None, owner_body_id=None):
+        self.selected_target_kind = kind
+        self.selected_target_name = name
+        self.selected_body_id = (
+            None if owner_body_id is None else int(owner_body_id)
+        )
         self.update()
 
     def set_target_pose(self, position, quaternion=None):
@@ -217,6 +228,7 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glDisable(GL.GL_LIGHTING)
         GL.glDisable(GL.GL_LIGHT0)
         self.draw_trajectory()
+        self.draw_selected_target_marker()
         self.draw_transform_gizmo()
 
     def _build_robot_geometry(self):
@@ -390,13 +402,18 @@ class RobotCanvas3D(QOpenGLWidget):
         for geom_id, list_id in enumerate(self._geom_lists):
             if list_id is None:
                 continue
+            selected = color_override is None and self._geom_is_selected_body(
+                model, geom_id
+            )
             if color_override is not None:
                 rgba = color_override
             elif self.use_model_colors:
                 rgba = self.robot_state.robot_model.get_geom_rgba(geom_id)
             else:
                 rgba = (0.55, 0.55, 0.55, 1.0)
-            self._apply_geom_material(model, geom_id)
+            if selected:
+                rgba = self._selected_body_rgba(rgba)
+            self._apply_geom_material(model, geom_id, selected=selected)
             GL.glColor4f(float(rgba[0]), float(rgba[1]), float(rgba[2]),
                          float(rgba[3]) * alpha_scale)
             GL.glPushMatrix()
@@ -404,8 +421,24 @@ class RobotCanvas3D(QOpenGLWidget):
             GL.glCallList(list_id)
             GL.glPopMatrix()
 
+    def _geom_is_selected_body(self, model, geom_id):
+        return (
+            self.selected_body_id is not None
+            and int(model.geom_bodyid[geom_id]) == int(self.selected_body_id)
+        )
+
     @staticmethod
-    def _apply_geom_material(model, geom_id):
+    def _selected_body_rgba(rgba):
+        rgba = np.asarray(rgba, dtype=float)
+        bright = np.clip(
+            rgba[:3] * 1.35 + np.array([0.18, 0.14, 0.03]),
+            0.0,
+            1.0,
+        )
+        return (float(bright[0]), float(bright[1]), float(bright[2]), float(rgba[3]))
+
+    @staticmethod
+    def _apply_geom_material(model, geom_id, selected=False):
         material_id = int(model.geom_matid[geom_id])
         if material_id >= 0:
             specular = float(model.mat_specular[material_id])
@@ -426,7 +459,12 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glMaterialfv(
             GL.GL_FRONT_AND_BACK,
             GL.GL_EMISSION,
-            (emission, emission, emission, 1.0),
+            (
+                min(1.0, emission + (0.18 if selected else 0.0)),
+                min(1.0, emission + (0.14 if selected else 0.0)),
+                min(1.0, emission + (0.04 if selected else 0.0)),
+                1.0,
+            ),
         )
 
     def draw_robot(self):
@@ -606,6 +644,59 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glBegin(GL.GL_POINTS)
         GL.glVertex3f(x, y, z)
         GL.glEnd()
+
+    def draw_selected_target_marker(self):
+        if self.selected_target_name is None:
+            return
+        origin = np.asarray(self.gizmo.position, dtype=float)
+        rotation = self._quaternion_rotation_matrix(self.gizmo.quaternion)
+        length = max(self.gizmo.sphere_radius * 2.6, 0.045)
+        colors = (
+            ((1.0, 0.10, 0.08), rotation[:, 0]),
+            ((0.10, 0.85, 0.25), rotation[:, 1]),
+            ((0.22, 0.50, 1.0), rotation[:, 2]),
+        )
+
+        GL.glDisable(GL.GL_DEPTH_TEST)
+        GL.glLineWidth(4.0)
+        GL.glBegin(GL.GL_LINES)
+        for color, axis in colors:
+            endpoint = origin + np.asarray(axis, dtype=float) * length
+            GL.glColor3f(*color)
+            GL.glVertex3fv(origin)
+            GL.glVertex3fv(endpoint)
+        GL.glEnd()
+        GL.glPointSize(7.0)
+        GL.glColor3f(1.0, 0.92, 0.18)
+        GL.glBegin(GL.GL_POINTS)
+        GL.glVertex3fv(origin)
+        GL.glEnd()
+        GL.glEnable(GL.GL_DEPTH_TEST)
+
+    @staticmethod
+    def _quaternion_rotation_matrix(quaternion):
+        w, x, y, z = np.asarray(quaternion, dtype=float)
+        norm = math.sqrt(w * w + x * x + y * y + z * z)
+        if norm < 1e-12:
+            return np.eye(3)
+        w, x, y, z = w / norm, x / norm, y / norm, z / norm
+        return np.array([
+            [
+                1.0 - 2.0 * (y * y + z * z),
+                2.0 * (x * y - z * w),
+                2.0 * (x * z + y * w),
+            ],
+            [
+                2.0 * (x * y + z * w),
+                1.0 - 2.0 * (x * x + z * z),
+                2.0 * (y * z - x * w),
+            ],
+            [
+                2.0 * (x * z - y * w),
+                2.0 * (y * z + x * w),
+                1.0 - 2.0 * (x * x + y * y),
+            ],
+        ], dtype=float)
 
     def draw_transform_gizmo(self):
         self._sync_gizmo_screen_scale()
