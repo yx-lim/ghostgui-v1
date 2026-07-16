@@ -24,7 +24,21 @@ BUILT_IN_MODEL_FILENAMES = {
     "g1_29dof.xml",
     "go2.xml",
     "go2_description.urdf",
+    "h2.urdf",
+    "z1.urdf",
 }
+UNITREE_MODEL_CODES = {
+    "a1": "A1",
+    "b1": "B1",
+    "b2": "B2",
+    "g1": "G1",
+    "go1": "Go1",
+    "go2": "Go2",
+    "h1": "H1",
+    "h2": "H2",
+    "z1": "Z1",
+}
+DESCRIPTOR_TOKENS = {"description", "robot", "model", "urdf", "mjcf", "xml"}
 
 
 def default_model_library_root():
@@ -38,6 +52,34 @@ def _slug(value):
 
 def _display_name(value):
     return _slug(value).replace("-", " ").replace("_", " ").title()
+
+
+def _name_tokens(value):
+    return [
+        token
+        for token in re.split(r"[^A-Za-z0-9]+", str(value or "").lower())
+        if token and token not in DESCRIPTOR_TOKENS
+    ]
+
+
+def _unitree_model_code(*values):
+    for value in values:
+        tokens = _name_tokens(value)
+        for token in tokens:
+            if token in UNITREE_MODEL_CODES:
+                return token
+        if tokens and tokens[-1].isdigit():
+            base = "-".join(tokens[:-1])
+            if base in UNITREE_MODEL_CODES:
+                return base
+    return None
+
+
+def _display_name_from_hints(value, *hints):
+    code = _unitree_model_code(value, *hints)
+    if code is not None:
+        return f"Unitree {UNITREE_MODEL_CODES[code]}"
+    return _display_name(value)
 
 
 def _unique_stem(directory, stem, suffix):
@@ -230,12 +272,12 @@ def _rewrite_mjcf_meshes(root, source_path, asset_dir, mesh_roots=None):
         mesh.set("file", copied_name)
 
 
-def _model_info_for_path(path, key=None):
+def _model_info_for_path(path, key=None, name_hints=()):
     path = Path(path).expanduser().resolve()
     stem = _slug(key or path.stem)
     return RobotModelInfo(
         key=stem,
-        display_name=_display_name(stem),
+        display_name=_display_name_from_hints(stem, path.stem, *name_hints),
         model_type="generic",
         model_path=path,
         root_body_candidates=(
@@ -335,6 +377,8 @@ def import_robot_model(source_path, library_root=None, mesh_roots=None):
 
             tree = ET.parse(source_path)
             root = tree.getroot()
+            name_hints = [root.get("name"), root.get("model")]
+            name_hints.extend(_package_names(root))
             if root.tag == "robot":
                 _rewrite_urdf_meshes(root, source_path, staged_asset_dir, mesh_roots)
             else:
@@ -351,4 +395,4 @@ def import_robot_model(source_path, library_root=None, mesh_roots=None):
             shutil.rmtree(asset_dir)
         raise
 
-    return _model_info_for_path(model_path, key=stem)
+    return _model_info_for_path(model_path, key=stem, name_hints=name_hints)

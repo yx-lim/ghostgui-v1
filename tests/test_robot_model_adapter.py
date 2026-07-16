@@ -77,6 +77,12 @@ class RobotModelAdapterTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_unitree_bundled_model_display_names(self):
+        self.assertEqual(ROBOT_MODELS["g1"].display_name, "Unitree G1")
+        self.assertEqual(ROBOT_MODELS["go2"].display_name, "Unitree Go2")
+        self.assertEqual(ROBOT_MODELS["h2"].display_name, "Unitree H2")
+        self.assertEqual(ROBOT_MODELS["z1"].display_name, "Unitree Z1")
+
     def test_g1_metadata_and_logical_frames(self):
         adapter = MuJoCoRobotAdapter("g1")
         self.assertEqual(adapter.model_type, "humanoid")
@@ -334,6 +340,7 @@ class RobotModelAdapterTests(unittest.TestCase):
                 info = import_robot_model(source, root / "models")
                 adapter = MuJoCoRobotAdapter(info)
 
+            self.assertEqual(info.display_name, "Unitree Z1")
             self.assertEqual(adapter.root_body, "link00")
             self.assertIn("joint1", adapter.actuated_joints)
 
@@ -398,6 +405,19 @@ class RobotModelAdapterTests(unittest.TestCase):
 
             self.assertIn("go3", models)
             self.assertEqual(models["go3"].model_path, broken.resolve())
+            self.assertEqual(models["go3"].display_name, "Go3")
+
+    def test_discover_imported_models_infers_known_unitree_display_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp) / "models"
+            model_dir.mkdir()
+            (model_dir / "h2-5.urdf").write_text("<robot/>")
+            (model_dir / "unitree-z1.xml").write_text("<mujoco/>")
+
+            models = discover_imported_models(model_dir)
+
+            self.assertEqual(models["h2-5"].display_name, "Unitree H2")
+            self.assertEqual(models["unitree-z1"].display_name, "Unitree Z1")
 
     def test_discover_imported_models_skips_builtin_repo_filenames(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -405,11 +425,13 @@ class RobotModelAdapterTests(unittest.TestCase):
             model_dir.mkdir()
             (model_dir / "g1_29dof.xml").write_text("<mujoco/>")
             (model_dir / "go2_description.urdf").write_text("<robot/>")
+            (model_dir / "h2.urdf").write_text("<robot/>")
             (model_dir / "z1.urdf").write_text("<robot/>")
+            (model_dir / "custom_bot.urdf").write_text("<robot/>")
 
             models = discover_imported_models(model_dir)
 
-            self.assertEqual(set(models), {"z1"})
+            self.assertEqual(set(models), {"custom_bot"})
 
     def test_startup_registers_persisted_models_without_loading_them(self):
         with tempfile.TemporaryDirectory() as tmp:

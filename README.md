@@ -2,8 +2,8 @@
 # GhostGUI
 
 A lightweight graphical interface for editing reference-frame and robot-state
-trajectories against registered MuJoCo robot models. Unitree G1 and Go2 are
-included.
+trajectories against registered MuJoCo robot models. Unitree G1, Go2, H2, and
+Z1 are included.
 
 ## Setup and run
 
@@ -20,13 +20,14 @@ Choose the model from the **Robot model** control, or start directly with Go2:
 python3 scripts/run_gui.py --model go2
 ```
 
-G1 loads its MJCF and original STL visual meshes directly. Go2 loads its ROS
-URDF, resolves the vendored `package://go2_description/dae/...` assets, and
-converts the DAE material parts to MuJoCo-compatible OBJ files once in the
-versioned model cache. The runtime model retains its 12 joints, limits,
-collision shapes, foot sites, lighting, visual meshes, colors, and kinematic
-tree. Missing or unsupported visual assets fail with an explicit path/format
-message instead of silently displaying collision primitives.
+G1 loads its MJCF and original STL visual meshes directly. Go2, H2, and Z1 load
+from URDF registrations with their bundled visual assets. Go2 resolves the
+vendored `package://go2_description/dae/...` assets and converts the DAE
+material parts to MuJoCo-compatible OBJ files once in the versioned model cache.
+The runtime model retains its joints, limits, collision shapes, semantic
+targets, lighting, visual meshes, colors, and kinematic tree. Missing or
+unsupported visual assets fail with an explicit path/format message instead of
+silently displaying collision primitives.
 
 Model files are loaded off the GUI thread when switching. Each loaded model
 keeps its own in-memory editor/viewer session, including its OpenGL context, so
@@ -145,6 +146,9 @@ python3 -m unittest discover -s tests -v
 - Go2: run `python3 scripts/run_gui.py --model go2`; confirm 12 joint sliders, the
   base/four-leg skeleton, `FL/FR/RL/RR_foot` targets, lit ground, and detailed
   colored mesh geometry rather than boxes/capsules.
+- H2/Z1: run `python3 scripts/run_gui.py --model h2` or `--model z1`; confirm the
+  robot selector shows `Unitree H2` / `Unitree Z1`, logical targets populate,
+  and the bundled visual meshes render.
 - Preview: drag a hand or foot and vary **Alpha**; confirm only the orange robot
   becomes transparent and the dark 3D background never exposes the desktop.
 - Path independence: from another directory run

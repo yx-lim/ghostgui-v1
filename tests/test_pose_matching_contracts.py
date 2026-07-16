@@ -15,7 +15,9 @@ from core.trajectory import TargetFrame, quat_to_rpy, rpy_to_quat
 POSE_TARGET_PREFERENCES = {
     "g1": ("right_hand",),
     "go2": ("FL_foot",),
+    "h2": ("right_hand", "left_hand", "right_wrist_yaw_link", "left_wrist_yaw_link"),
     "h2-5": ("right_wrist_yaw_link", "left_wrist_yaw_link"),
+    "z1": ("tool", "link06"),
     "z1-3": ("link06",),
 }
 

@@ -68,6 +68,39 @@ ROBOT_MODELS = {
             **{f"{leg}_calf_joint": -1.5 for leg in ("FL", "FR", "RL", "RR")},
         },
     ),
+    "h2": RobotModelInfo(
+        key="h2",
+        display_name="Unitree H2",
+        model_type="humanoid",
+        model_path=PROJECT_ROOT / "models" / "h2.urdf",
+        root_body_candidates=("pelvis", "torso_link", "base", "base_link"),
+        root_joint_candidates=("floating_base", "root", "freejoint"),
+        logical_frames={
+            "pelvis": ("pelvis", "base", "base_link"),
+            "torso": ("torso_link", "torso"),
+            "left_hand": ("left_hand_link", "left_wrist_yaw_link"),
+            "right_hand": ("right_hand_link", "right_wrist_yaw_link"),
+            "left_foot": (
+                "left_ankle_pitch_link", "left_ankle_roll_link", "left_foot",
+            ),
+            "right_foot": (
+                "right_ankle_pitch_link", "right_ankle_roll_link", "right_foot",
+            ),
+        },
+    ),
+    "z1": RobotModelInfo(
+        key="z1",
+        display_name="Unitree Z1",
+        model_type="manipulator",
+        model_path=PROJECT_ROOT / "models" / "z1.urdf",
+        root_body_candidates=("link00", "base", "base_link", "world"),
+        root_joint_candidates=("floating_base", "root", "freejoint"),
+        logical_frames={
+            "base": ("link00", "base", "base_link"),
+            "tool": ("link06", "tool", "ee_link"),
+            "wrist": ("link05", "link06"),
+        },
+    ),
 }
 
 
