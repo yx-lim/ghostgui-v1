@@ -5,20 +5,64 @@ A lightweight graphical interface for editing reference-frame and robot-state
 trajectories against registered MuJoCo robot models. Unitree G1, Go2, H2, and
 Z1 are included.
 
-## Setup and run
+## Installation
+
+Linux/Ubuntu is the primary tested platform. macOS and Windows install scripts
+are provided for convenience, but should be treated as experimental until they
+are verified on those platforms.
+
+The Python dependencies are declared in `pyproject.toml`. The platform install
+scripts create or reuse `.venv`, upgrade the packaging tools, and install this
+checkout in editable mode so the bundled model assets remain available from the
+cloned repository.
+
+### Linux / Ubuntu
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install PySide6 PyOpenGL numpy mujoco
-python3 scripts/run_gui.py
+git clone <your-ghostgui-repository-url> ghostgui
+cd ghostgui
+bash scripts/install_linux.sh
+bash scripts/run_linux.sh
+```
+
+### macOS
+
+```bash
+git clone <your-ghostgui-repository-url> ghostgui
+cd ghostgui
+bash scripts/install_macos.sh
+bash scripts/run_macos.sh
+```
+
+### Windows PowerShell
+
+```powershell
+git clone <your-ghostgui-repository-url> ghostgui
+cd ghostgui
+powershell -ExecutionPolicy Bypass -File scripts/install_windows.ps1
+powershell -ExecutionPolicy Bypass -File scripts/run_windows.ps1
+```
+
+After installation, the app can also be launched from the activated virtual
+environment with:
+
+```bash
+ghostgui
 ```
 
 Choose the model from the **Robot model** control, or start directly with Go2:
 
 ```bash
+ghostgui --model go2
+```
+
+The legacy direct launcher is still available for development checkouts:
+
+```bash
 python3 scripts/run_gui.py --model go2
 ```
+
+See `docs/install.md` for additional troubleshooting notes.
 
 G1 loads its MJCF and original STL visual meshes directly. Go2, H2, and Z1 load
 from URDF registrations with their bundled visual assets. Go2 resolves the
@@ -123,10 +167,14 @@ textured visual materials in other models currently fall back to material RGBA.
 ```
 ghostgui/
 ├── README.md
+├── application/
 ├── backend/
+├── core/
 ├── csv/
+├── docs/
 ├── gui/
 ├── models/
+├── pyproject.toml
 ├── scripts/
 └── tests/
 ```
