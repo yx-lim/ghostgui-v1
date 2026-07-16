@@ -12,10 +12,11 @@ Updated project flow:
     5. Backend maps robot to each target frame
 """
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -58,6 +59,32 @@ from application.model_importer import (
 LEFT_SIDEBAR_WIDTH = 250
 RIGHT_SIDEBAR_WIDTH = 270
 INITIAL_RENDER_PROGRESS_DELAY_MS = 500
+MAX_HISTORY_DEPTH = 100
+
+
+@dataclass(frozen=True)
+class GuiHistorySnapshot:
+    trajectory_frames: tuple
+    trajectory_track_names: tuple
+    active_index: int
+    control_frame: dict
+    selected_row: int
+    current_time: float
+    timeline_states: tuple
+    committed_qpos: object
+    preview_qpos: object
+    preview_active: bool
+    robot_trajectory: tuple
+    robot_trajectory_times: tuple
+    ghost_trajectory: tuple
+    frame_slider_value: int
+    show_ghosts: bool
+
+
+@dataclass(frozen=True)
+class GuiHistoryEntry:
+    description: str
+    snapshot: GuiHistorySnapshot
 
 
 class RenderProgressOverlay(QWidget):
@@ -298,6 +325,10 @@ class RobotGuiMainWindow(QMainWindow):
         self.render_progress_viewer = None
         self.render_progress_restore_widget = None
         self.pending_initial_render_progress = None
+        self.undo_stack = []
+        self.redo_stack = []
+        self._history_restoring = False
+        self._last_history_snapshot = None
         self.viewer_tabs = self.build_viewer_tabs()
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
         self.status_panel = self.build_status_panel()
@@ -311,6 +342,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.right_sidebar.setMaximumWidth(RIGHT_SIDEBAR_WIDTH)
 
         self.connect_signals()
+        self.install_history_shortcuts()
         self.controls.corner_smoothing_slider.value_changed.connect(
             lambda _value: self.refresh_display()
         )
@@ -345,6 +377,7 @@ class RobotGuiMainWindow(QMainWindow):
             )
         self.update_editor_context()
         self.refresh_display()
+        self._refresh_history_baseline()
 
     def register_model_info(self, info):
         if info.key not in self.model_registry:
@@ -599,6 +632,15 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_2d.target_dragged.connect(self.on_target_dragged)
         self.connect_model_viewer_signals(self.viewer_3d, self.viewer_2d_stickman)
 
+    def install_history_shortcuts(self):
+        self.undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self)
+        self.undo_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.undo_shortcut.activated.connect(self.undo_last_action)
+
+        self.redo_shortcut = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
+        self.redo_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.redo_shortcut.activated.connect(self.redo_last_action)
+
     def connect_model_viewer_signals(self, viewer_3d, viewer_2d_skeleton):
         viewer_3d.target_dragged.connect(self.on_target_dragged)
         viewer_3d.target_pose_dragged.connect(self.on_target_pose_dragged)
@@ -624,6 +666,9 @@ class RobotGuiMainWindow(QMainWindow):
         viewer_3d.delete_timeslice_requested.connect(
             self.on_delete_timeslice_requested
         )
+        viewer_3d.history_action_finished.connect(
+            self.on_viewer_history_action_finished
+        )
         viewer_3d.status_label.text_changed.connect(
             lambda text, viewer=viewer_3d: self.on_viewer_status_changed(
                 viewer, text
@@ -640,6 +685,169 @@ class RobotGuiMainWindow(QMainWindow):
             )
         )
         viewer_2d_skeleton.target_dragged.connect(self.on_target_dragged)
+
+    def capture_history_snapshot(self):
+        viewer = self.viewer_3d
+        timeline_states = ()
+        if viewer.state_timeline is not None:
+            timeline_states = tuple(
+                (time, viewer.state_timeline.get_state(time))
+                for time in viewer.state_timeline.times()
+            )
+
+        committed_qpos = (
+            None if viewer.committed_state is None
+            else viewer.committed_state.get_qpos()
+        )
+        preview_qpos = (
+            None if viewer.preview_state is None
+            else viewer.preview_state.get_qpos()
+        )
+
+        return GuiHistorySnapshot(
+            trajectory_frames=tuple(
+                frame.to_dict() for frame in self.trajectory.frames
+            ),
+            trajectory_track_names=tuple(self.trajectory.tracks.keys()),
+            active_index=int(self.active_index),
+            control_frame=self.controls.current_frame().to_dict(),
+            selected_row=int(self.controls.selected_row()),
+            current_time=float(viewer.get_current_time()),
+            timeline_states=timeline_states,
+            committed_qpos=committed_qpos,
+            preview_qpos=preview_qpos,
+            preview_active=bool(viewer.preview_active),
+            robot_trajectory=tuple(
+                qpos.copy() for qpos in viewer.robot_trajectory
+            ),
+            robot_trajectory_times=tuple(float(t) for t in viewer.robot_trajectory_times),
+            ghost_trajectory=tuple(qpos.copy() for qpos in viewer.ghost_trajectory),
+            frame_slider_value=int(viewer.frame_slider.value()),
+            show_ghosts=bool(viewer.show_ghosts.isChecked()),
+        )
+
+    def _restore_control_frame(self, frame):
+        controls = self.controls
+        controls._suppress_pose_changed = True
+        try:
+            controls.time_slider.set_value(frame.time)
+            controls.x_slider.set_value(frame.x)
+            controls.y_slider.set_value(frame.y)
+            controls.z_slider.set_value(frame.z)
+            controls.roll_slider.set_value(frame.roll)
+            controls.pitch_slider.set_value(frame.pitch)
+            controls.yaw_slider.set_value(frame.yaw)
+            controls.phase_box.setCurrentText(frame.phase)
+            blocked = controls.frame_box.blockSignals(True)
+            controls.frame_box.setCurrentText(frame.frame_name)
+            controls.frame_box.blockSignals(blocked)
+        finally:
+            controls._suppress_pose_changed = False
+
+    def restore_history_snapshot(self, snapshot):
+        viewer = self.viewer_3d
+        self._history_restoring = True
+        try:
+            self.trajectory.tracks = {
+                name: [] for name in snapshot.trajectory_track_names
+            }
+            for frame_data in snapshot.trajectory_frames:
+                self.trajectory.add_frame(TargetFrame.from_dict(dict(frame_data)))
+            self.active_index = snapshot.active_index
+
+            if viewer.robot_state is not None:
+                viewer.pause_playback()
+                viewer.canvas.cancel_transform_drag()
+                if snapshot.robot_trajectory:
+                    viewer.set_robot_trajectory(
+                        snapshot.robot_trajectory,
+                        times=snapshot.robot_trajectory_times,
+                        activate_first_frame=False,
+                    )
+                else:
+                    viewer.clear_robot_trajectory()
+                viewer.frame_slider.setValue(snapshot.frame_slider_value)
+                viewer.ghost_trajectory = [
+                    qpos.copy() for qpos in snapshot.ghost_trajectory
+                ]
+                viewer._rebuild_ghosts()
+
+                if viewer.state_timeline is not None:
+                    viewer.state_timeline.states.clear()
+                    for time, qpos in snapshot.timeline_states:
+                        viewer.state_timeline.set_state(time, qpos)
+                    if not snapshot.timeline_states and snapshot.committed_qpos is not None:
+                        viewer.state_timeline.set_state(
+                            snapshot.current_time, snapshot.committed_qpos
+                        )
+                    viewer.current_time = viewer.state_timeline.time_key(
+                        snapshot.current_time
+                    )
+                    viewer._set_timeslice_widgets(viewer.current_time)
+                    viewer._update_timeline_label()
+
+                if snapshot.committed_qpos is not None:
+                    viewer.committed_state.set_qpos(snapshot.committed_qpos)
+                if snapshot.preview_qpos is not None:
+                    viewer.preview_state.set_qpos(snapshot.preview_qpos)
+                viewer.preview_active = snapshot.preview_active
+                viewer.canvas.set_preview_visible(snapshot.preview_active)
+                viewer.show_ghosts.setChecked(snapshot.show_ghosts)
+                viewer._sync_joint_controls()
+                viewer._set_target_to_selected_pose()
+
+            control_frame = TargetFrame.from_dict(dict(snapshot.control_frame))
+            self._restore_control_frame(control_frame)
+            self.refresh_display(apply_stickman_frame=False)
+            if 0 <= snapshot.selected_row < self.controls.table.rowCount():
+                self.controls.table.setCurrentCell(snapshot.selected_row, 0)
+            else:
+                self.controls.table.clearSelection()
+        finally:
+            self._history_restoring = False
+
+    def _refresh_history_baseline(self):
+        if self._history_restoring:
+            return
+        self._last_history_snapshot = self.capture_history_snapshot()
+
+    def record_history_action(self, description):
+        if self._history_restoring:
+            return False
+        before = self._last_history_snapshot or self.capture_history_snapshot()
+        after = self.capture_history_snapshot()
+        self.undo_stack.append(GuiHistoryEntry(description, before))
+        if len(self.undo_stack) > MAX_HISTORY_DEPTH:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+        self._last_history_snapshot = after
+        self.statusBar().showMessage(f"{description}; Ctrl+Z can undo.", 3000)
+        return True
+
+    def undo_last_action(self):
+        if not self.undo_stack:
+            self.statusBar().showMessage("Nothing to undo.", 2000)
+            return
+        current = self.capture_history_snapshot()
+        entry = self.undo_stack.pop()
+        self.redo_stack.append(GuiHistoryEntry(entry.description, current))
+        self.restore_history_snapshot(entry.snapshot)
+        self._last_history_snapshot = entry.snapshot
+        self.statusBar().showMessage(f"Undid {entry.description}.", 3000)
+
+    def redo_last_action(self):
+        if not self.redo_stack:
+            self.statusBar().showMessage("Nothing to redo.", 2000)
+            return
+        current = self.capture_history_snapshot()
+        entry = self.redo_stack.pop()
+        self.undo_stack.append(GuiHistoryEntry(entry.description, current))
+        self.restore_history_snapshot(entry.snapshot)
+        self._last_history_snapshot = entry.snapshot
+        self.statusBar().showMessage(f"Redid {entry.description}.", 3000)
+
+    def on_viewer_history_action_finished(self, description):
+        self.record_history_action(description)
 
     def on_viewer_status_changed(self, viewer, text):
         if viewer is self.viewer_3d:
@@ -817,6 +1025,9 @@ class RobotGuiMainWindow(QMainWindow):
         self.update_editor_context()
         self.refresh_display(apply_stickman_frame=False)
         self.request_active_model_render()
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self._refresh_history_baseline()
 
     def on_trajectory_csv_loaded(self, csv_path):
         self.viewer_3d_mujoco.set_trajectory_csv(csv_path)
@@ -827,6 +1038,7 @@ class RobotGuiMainWindow(QMainWindow):
             f"Imported {count} editable target-frame keyframes from FK "
             f"at {import_dt:.2f} s intervals."
         )
+        self.record_history_action("Load trajectory")
 
     # ============================================================
     # GUI interaction callbacks
@@ -864,6 +1076,7 @@ class RobotGuiMainWindow(QMainWindow):
             )
         self.refresh_display()
         self.viewer_3d.set_current_time(time)
+        self._refresh_history_baseline()
 
     def on_viewer_timeslice_time_changed(self, time):
         """Keep the sidebar time editor in sync with the viewer-bottom scrubber."""
@@ -889,6 +1102,7 @@ class RobotGuiMainWindow(QMainWindow):
         )
         self.viewer_3d.status_label.setText(message)
         self.status_text.setText(message)
+        self.record_history_action("Accept slice")
 
     def on_delete_timeslice_requested(self):
         time = self.viewer_3d.get_current_time()
@@ -923,6 +1137,7 @@ class RobotGuiMainWindow(QMainWindow):
         message = f"Deleted slice at t={time:.2f} s ({detail})."
         self.viewer_3d.status_label.setText(message)
         self.status_text.setText(message)
+        self.record_history_action("Delete slice")
 
     def define_timeslice_from_committed_pose(self):
         """Snapshot every editable logical target from the committed MuJoCo pose."""
@@ -1076,6 +1291,12 @@ class RobotGuiMainWindow(QMainWindow):
         frame = self.controls.current_frame()
         self.active_index = self.trajectory.upsert_frame(frame)
         self.refresh_display()
+        description = (
+            getattr(self.viewer_3d, "_pending_history_action_description", None)
+            or "Accept pose"
+        )
+        self.viewer_3d._pending_history_action_description = None
+        self.record_history_action(description)
 
     def on_3d_target_frame_changed(self, frame_name):
         """Map common 3D body/site selections back to the 2D frame concept."""
@@ -1126,6 +1347,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.active_index = self.trajectory.add_frame(frame)
 
         self.refresh_display()
+        self.record_history_action("Add keyframe")
 
     def on_update_keyframe(self):
         """
@@ -1143,6 +1365,7 @@ class RobotGuiMainWindow(QMainWindow):
 
         self.active_index = row
         self.refresh_display()
+        self.record_history_action("Update keyframe")
 
     def on_delete_keyframe(self):
         """
@@ -1159,6 +1382,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.active_index = -1
 
         self.refresh_display()
+        self.record_history_action("Delete keyframe")
 
     def on_clear_trajectory(self):
         keyframe_count = len(self.trajectory.frames)
@@ -1189,6 +1413,7 @@ class RobotGuiMainWindow(QMainWindow):
         )
         self.viewer_3d.status_label.setText(message)
         self.status_text.setText(message)
+        self.record_history_action("Clear trajectory")
 
     def on_keyframe_selected(self, row):
         """
@@ -1203,6 +1428,7 @@ class RobotGuiMainWindow(QMainWindow):
 
         self.controls.set_from_frame(frame)
         self.refresh_display()
+        self._refresh_history_baseline()
 
     def on_frame_name_changed(self, frame_name):
         """
@@ -1221,6 +1447,7 @@ class RobotGuiMainWindow(QMainWindow):
             emit_pose_changed=False,
         ):
             self.refresh_display(apply_stickman_frame=False)
+            self._refresh_history_baseline()
             return
 
         x, z = self.viewer_2d_stickman.get_body_point(frame_name)
@@ -1232,6 +1459,7 @@ class RobotGuiMainWindow(QMainWindow):
         )
 
         self.refresh_display(apply_stickman_frame=False)
+        self._refresh_history_baseline()
 
     def set_current_frame_to_model_reference(
         self,
@@ -1270,6 +1498,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_3d.load_backend_states(result.result_states)
         self.viewer_3d_mujoco.set_trajectory_csv(result.csv_path)
         self.status_text.setText(result.status_text)
+        self.record_history_action("Generate trajectory")
 
     # ============================================================
     # Display update

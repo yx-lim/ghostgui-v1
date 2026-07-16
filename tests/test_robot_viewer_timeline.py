@@ -105,6 +105,72 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.robot_model.home_qpos,
         )
 
+    def test_undo_redo_shortcuts_restore_keyframe_actions(self):
+        self.window.show()
+        self.window.setFocus()
+        QApplication.processEvents()
+
+        self.window.on_add_keyframe()
+        self.assertEqual(len(self.window.trajectory.frames), 1)
+
+        QTest.keyClick(
+            self.window,
+            Qt.Key.Key_Z,
+            Qt.KeyboardModifier.ControlModifier,
+        )
+        self.assertEqual(len(self.window.trajectory.frames), 0)
+        self.assertEqual(
+            self.window.statusBar().currentMessage(),
+            "Undid Add keyframe.",
+        )
+
+        QTest.keyClick(
+            self.window,
+            Qt.Key.Key_Z,
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.ShiftModifier,
+        )
+        self.assertEqual(len(self.window.trajectory.frames), 1)
+        self.assertEqual(
+            self.window.statusBar().currentMessage(),
+            "Redid Add keyframe.",
+        )
+
+    def test_undo_redo_restores_viewer_owned_reset_pose(self):
+        changed = self.viewer.robot_model.home_qpos.copy()
+        changed[-1] += 0.05
+        self.viewer.set_robot_state_for_current_time(changed)
+        self.viewer.update_current_keyframe_from_robot_state()
+        self.window._refresh_history_baseline()
+
+        self.viewer.reset_robot_pose()
+
+        np.testing.assert_allclose(
+            self.viewer.committed_state.get_qpos(),
+            self.viewer.robot_model.home_qpos,
+        )
+
+        self.window.undo_last_action()
+        np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), changed)
+        self.assertEqual(
+            self.window.statusBar().currentMessage(),
+            "Undid Reset 3D pose.",
+        )
+        np.testing.assert_allclose(
+            self.viewer.state_timeline.get_state(self.viewer.get_current_time()),
+            changed,
+        )
+
+        self.window.redo_last_action()
+        np.testing.assert_allclose(
+            self.viewer.committed_state.get_qpos(),
+            self.viewer.robot_model.home_qpos,
+        )
+        self.assertEqual(
+            self.window.statusBar().currentMessage(),
+            "Redid Reset 3D pose.",
+        )
+
     def test_pelvis_drag_updates_preview_only_until_accept(self):
         self.viewer.select_target("body", "robot/pelvis", emit=False)
         self.viewer._set_target_to_selected_pose()

@@ -82,6 +82,7 @@ class RobotViewer3D(QWidget):
     timeslice_time_changed = Signal(float)
     accept_timeslice_requested = Signal()
     delete_timeslice_requested = Signal()
+    history_action_finished = Signal(str)
 
     def __init__(self, robot_model=None, error=None):
         super().__init__()
@@ -1087,6 +1088,7 @@ class RobotViewer3D(QWidget):
         self.status_label.setText(
             "Planned committed-to-preview path; no timeline state was changed."
         )
+        self.history_action_finished.emit("Plan preview")
 
     def accept_preview(self):
         if not self.preview_active:
@@ -1227,6 +1229,7 @@ class RobotViewer3D(QWidget):
         )
         if self.last_valid_target_position is not None:
             roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
+            self._pending_history_action_description = "Reset 3D pose"
             self.target_pose_drag_finished.emit(
                 *map(float, self.last_valid_target_position), roll, pitch, yaw
             )
@@ -1318,6 +1321,7 @@ class RobotViewer3D(QWidget):
             f"Loaded {expected}-value qpos from {path.name} at "
             f"t={self.current_time:.2f} s"
         )
+        self.history_action_finished.emit("Load qpos")
 
     def load_trajectory_csv(self, csv_path):
         """Load headerless time,qpos rows into playback and editable qpos states."""
@@ -1549,6 +1553,7 @@ class RobotViewer3D(QWidget):
         lo, hi = joint.limits or (-1.0, 1.0)
         target[joint.qpos_address] = max(lo, min(hi, start[joint.qpos_address] + 0.35))
         self.set_robot_trajectory(interpolate_qpos(start, target, 60))
+        self.history_action_finished.emit("Demo trajectory")
 
     def _rebuild_ghosts(self):
         if self.ghost_renderer:
