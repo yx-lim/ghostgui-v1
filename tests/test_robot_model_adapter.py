@@ -789,6 +789,10 @@ class RobotModelAdapterTests(unittest.TestCase):
         go2 = MuJoCoRobotAdapter("go2")
         self.assertEqual(go2.logical_frame_for_body("FL_hip"), "FL_foot")
         self.assertEqual(go2.logical_frame_for_body("base"), "base")
+        z1 = MuJoCoRobotAdapter("z1")
+        self.assertEqual(z1.trajectory_frames, ["base", "tool", "wrist"])
+        self.assertEqual(z1.logical_frame_for_body("link05"), "wrist")
+        self.assertEqual(z1.logical_frame_for_body("link06"), "tool")
 
     def test_ray_pick_returns_a_robot_body(self):
         adapter = MuJoCoRobotAdapter("go2")
@@ -812,9 +816,41 @@ class RobotModelAdapterTests(unittest.TestCase):
         self.assertIsNotNone(picked)
         self.assertEqual(adapter.logical_frame_for_body(picked), "FL_foot")
 
+    def test_z1_ray_pick_prefers_wrist_and_tool_over_large_parent_bounds(self):
+        adapter = MuJoCoRobotAdapter("z1")
+        state = adapter.create_state()
+        canvas = RobotCanvas3D()
+        canvas.set_robot_states(state, adapter.create_state())
+        try:
+            cases = {
+                "link05": "wrist",
+                "link06": "tool",
+            }
+            for body_name, logical_frame in cases.items():
+                with self.subTest(body=body_name):
+                    body_id = mujoco.mj_name2id(
+                        adapter.mj_model, mujoco.mjtObj.mjOBJ_BODY, body_name
+                    )
+                    geom_id = next(
+                        index for index in RobotCanvas3D.render_geom_ids(adapter.mj_model)
+                        if int(adapter.mj_model.geom_bodyid[index]) == body_id
+                    )
+                    center = state.mj_data.geom_xpos[geom_id]
+                    picked = canvas.pick_robot_body_from_ray(
+                        center + np.array([0.0, 2.0, 0.0]),
+                        np.array([0.0, -1.0, 0.0]),
+                    )
+                    self.assertEqual(picked, body_name)
+                    self.assertEqual(
+                        adapter.logical_frame_for_body(picked), logical_frame
+                    )
+        finally:
+            canvas.close()
+
     def test_double_click_body_selection_updates_frame_editor(self):
         g1_window = RobotGuiMainWindow("g1")
         go2_window = RobotGuiMainWindow("go2")
+        z1_window = RobotGuiMainWindow("z1")
         try:
             g1_window.viewer_3d._on_body_double_clicked(
                 "robot/left_wrist_yaw_link"
@@ -829,9 +865,27 @@ class RobotModelAdapterTests(unittest.TestCase):
             self.assertEqual(
                 go2_window.viewer_3d._selected_target(), ("site", "FR_foot")
             )
+            self.assertEqual(
+                [
+                    z1_window.controls.frame_box.itemText(index)
+                    for index in range(z1_window.controls.frame_box.count())
+                ],
+                ["base", "tool", "wrist"],
+            )
+            z1_window.viewer_3d._on_body_double_clicked("link05")
+            self.assertEqual(z1_window.controls.frame_box.currentText(), "wrist")
+            self.assertEqual(
+                z1_window.viewer_3d._selected_target(), ("body", "link05")
+            )
+            z1_window.viewer_3d._on_body_double_clicked("link06")
+            self.assertEqual(z1_window.controls.frame_box.currentText(), "tool")
+            self.assertEqual(
+                z1_window.viewer_3d._selected_target(), ("body", "link06")
+            )
         finally:
             g1_window.close()
             go2_window.close()
+            z1_window.close()
 
     def test_generated_skeleton_uses_ik_and_whole_body_follow(self):
         window = RobotGuiMainWindow("go2")

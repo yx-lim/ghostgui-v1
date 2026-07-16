@@ -1105,13 +1105,19 @@ class RobotCanvas3D(QOpenGLWidget):
                 distance = -b + root
             if distance < 0.0:
                 continue
-            if best is None or distance < best[0]:
-                best = (distance, body_id)
+            closest = origin + direction * max(0.0, -b)
+            ray_distance = float(np.linalg.norm(closest - center))
+            # Large imported mesh bounds can enclose nearby wrist/tool parts.
+            # Bucket the center-line distance so tiny symmetry differences still
+            # use front-most depth, while obvious center hits beat oversized bounds.
+            ray_distance_bucket = int(ray_distance / 0.005)
+            if best is None or (ray_distance_bucket, distance) < best[:2]:
+                best = (ray_distance_bucket, distance, body_id)
         if best is None:
             return None
         import mujoco
         return mujoco.mj_id2name(
-            model, mujoco.mjtObj.mjOBJ_BODY, best[1]
+            model, mujoco.mjtObj.mjOBJ_BODY, best[2]
         )
 
     def screen_to_edit_plane(self, sx, sy):
