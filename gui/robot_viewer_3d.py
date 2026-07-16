@@ -120,6 +120,7 @@ class RobotViewer3D(QWidget):
         self.robot_trajectory = []
         self.robot_trajectory_times = []
         self.ghost_trajectory = []
+        self.ghost_source = None
         self.joint_controls = {}
         self.ik_influence_controls = {}
         self.ik_joint_weights = {
@@ -177,8 +178,8 @@ class RobotViewer3D(QWidget):
         self.display_layout = QVBoxLayout(display_panel)
         self.display_layout.setContentsMargins(0, 0, 0, 0)
         self.display_layout.addWidget(self.model_colors_box)
-        self.show_ghosts = QCheckBox("Show trajectory ghosts")
-        self.show_ghosts.toggled.connect(self._update_ghost_options)
+        self.show_ghosts = QCheckBox("Show playback poses")
+        self.show_ghosts.toggled.connect(self._sync_playback_pose_ghosts)
         self.display_layout.addWidget(self.show_ghosts)
         self.display_context_panel = display_panel
         if self.robot_model:
@@ -300,8 +301,8 @@ class RobotViewer3D(QWidget):
         self.ghost_alpha.setSingleStep(0.05)
         self.ghost_alpha.setValue(0.16)
         self.ghost_alpha.valueChanged.connect(self._update_ghost_options)
-        trajectory_layout.addRow("Ghost stride", self.ghost_stride)
-        trajectory_layout.addRow("Ghost alpha", self.ghost_alpha)
+        trajectory_layout.addRow("Pose stride", self.ghost_stride)
+        trajectory_layout.addRow("Pose alpha", self.ghost_alpha)
         trajectory_context_layout.addWidget(trajectory_group)
 
         editor_tabs = QTabWidget()
@@ -375,17 +376,17 @@ class RobotViewer3D(QWidget):
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(4)
 
-        self.quick_accept_preview_button = QPushButton("Accept")
+        self.quick_plan_preview_button = QPushButton("Preview")
         self.quick_accept_timeslice_button = QPushButton("Slice")
         self.quick_generate_button = QPushButton("Generate")
         self.quick_play_button = QPushButton("Play")
         self.quick_reset_button = QPushButton("Reset")
         self.quick_clear_button = QPushButton("Clear")
-        self.quick_show_ghosts = QCheckBox("Ghosts")
+        self.quick_show_ghosts = QCheckBox("Playback")
         self.quick_show_ghosts.setChecked(self.show_ghosts.isChecked())
 
         for button in (
-            self.quick_accept_preview_button,
+            self.quick_plan_preview_button,
             self.quick_accept_timeslice_button,
             self.quick_generate_button,
             self.quick_play_button,
@@ -395,7 +396,7 @@ class RobotViewer3D(QWidget):
             button.setMinimumWidth(0)
             button.setMaximumWidth(82)
 
-        self.quick_accept_preview_button.clicked.connect(self.accept_preview)
+        self.quick_plan_preview_button.clicked.connect(self.plan_preview)
         self.quick_accept_timeslice_button.clicked.connect(self.accept_timeslice)
         self.quick_generate_button.clicked.connect(self.generate_requested.emit)
         self.quick_play_button.clicked.connect(self.toggle_playback)
@@ -404,7 +405,7 @@ class RobotViewer3D(QWidget):
         self.quick_show_ghosts.toggled.connect(self.show_ghosts.setChecked)
         self.show_ghosts.toggled.connect(self.quick_show_ghosts.setChecked)
 
-        layout.addWidget(self.quick_accept_preview_button)
+        layout.addWidget(self.quick_plan_preview_button)
         layout.addWidget(self.quick_accept_timeslice_button)
         layout.addWidget(self.quick_generate_button)
         layout.addWidget(self.quick_play_button)
@@ -505,11 +506,25 @@ class RobotViewer3D(QWidget):
         self.smoothing_widget = widget
         self.timeslice_action_row.insertWidget(0, widget)
 
-    def set_trajectory_lines_widget(self, widget):
-        if widget is None:
+    def set_trajectory_display_widgets(self, keyframes_widget, lines_widget):
+        widgets = [
+            widget for widget in (keyframes_widget, lines_widget)
+            if widget is not None
+        ]
+        if not widgets:
             return
-        if widget.parent() is not self.display_context_panel:
-            self.display_layout.insertWidget(1, widget)
+        for widget in widgets:
+            if widget.parent() is not self.display_context_panel:
+                widget.setParent(self.display_context_panel)
+        insert_index = 1
+        if keyframes_widget is not None:
+            self.display_layout.insertWidget(insert_index, keyframes_widget)
+            insert_index += 1
+        if lines_widget is not None:
+            self.display_layout.insertWidget(insert_index, lines_widget)
+
+    def set_trajectory_lines_widget(self, widget):
+        self.set_trajectory_display_widgets(None, widget)
 
     def _set_timeslice_widgets(self, time):
         raw_time = int(round(float(time) * 100.0))
@@ -712,14 +727,16 @@ class RobotViewer3D(QWidget):
         active_frame=None,
         show_trajectory_lines=True,
         trajectory_smoothing=0.0,
+        show_keyframes=True,
     ):
         # The live gizmo owns its quaternion while editing. Ordinary status
         # refreshes must not reset an in-progress ring rotation from controls.
         self.canvas.update_scene(
             trajectory,
             None,
-            show_trajectory_lines,
-            trajectory_smoothing,
+            show_trajectory_lines=show_trajectory_lines,
+            trajectory_smoothing=trajectory_smoothing,
+            show_keyframes=show_keyframes,
         )
         if active_frame is not None:
             binding = self.frame_bindings.get(active_frame.frame_name)
@@ -1116,12 +1133,14 @@ class RobotViewer3D(QWidget):
         goal = self.preview_state.get_qpos()
         validation, planned = self._build_validated_preview_path(start, goal)
         if not validation.ok:
+            self._clear_ghost_overlay(source="preview_path")
             self.status_label.setText(
                 f"Cannot plan preview: {validation.message}."
             )
             return
-        self.set_robot_trajectory(planned, activate_first_frame=False)
-        self.show_ghosts.setChecked(True)
+        self.ghost_trajectory = [qpos.copy() for qpos in planned]
+        self.ghost_source = "preview_path"
+        self._rebuild_ghosts()
         self.status_label.setText(
             "Planned committed-to-preview path; no timeline state was changed."
         )
@@ -1154,6 +1173,7 @@ class RobotViewer3D(QWidget):
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
         self.canvas.set_preview_visible(False)
+        self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
         self._set_target_to_selected_pose()
         self.status_label.setText(
@@ -1172,6 +1192,7 @@ class RobotViewer3D(QWidget):
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
         self.canvas.set_preview_visible(False)
+        self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
         self._set_target_to_selected_pose()
         self.status_label.setText("Preview discarded; committed state is unchanged.")
@@ -1216,6 +1237,7 @@ class RobotViewer3D(QWidget):
         self.preview_state.set_qpos(qpos)
         self.preview_active = False
         self.canvas.set_preview_visible(False)
+        self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
         self._set_target_to_selected_pose()
         self.canvas.update()
@@ -1257,6 +1279,7 @@ class RobotViewer3D(QWidget):
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
         self.canvas.set_preview_visible(False)
+        self._clear_ghost_overlay(source="preview_path")
         self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
         self._sync_joint_controls()
         self._set_target_to_selected_pose()
@@ -1476,14 +1499,10 @@ class RobotViewer3D(QWidget):
         return path
 
     def _refresh_timeline_trajectory(self):
-        if not self.state_timeline:
-            return
-        qposes = self.state_timeline.qpos_trajectory()
-        # Editor timeline changes update ghost poses only. They must not replace
-        # the explicit playback list: doing so made a reset keyframe appear to
-        # fire again whenever the short editor timeline looped.
-        self.ghost_trajectory = qposes
-        self._rebuild_ghosts()
+        # Timeline keyframes no longer publish ghost poses. Scrubbing and
+        # accepting states should update the committed robot, not silently swap
+        # the overlay from preview/playback into keyframe ghosts.
+        self._update_timeline_label()
 
     def _update_timeline_label(self):
         count = len(self.state_timeline.states) if self.state_timeline else 0
@@ -1523,14 +1542,14 @@ class RobotViewer3D(QWidget):
             valid_times = [float(index) for index in range(len(valid))]
         self.robot_trajectory = valid
         self.robot_trajectory_times = valid_times
-        self.ghost_trajectory = list(valid)
         signals_were_blocked = self.frame_slider.blockSignals(
             not activate_first_frame
         )
         self.frame_slider.setRange(0, max(0, len(valid) - 1))
         self.frame_slider.setValue(0)
         self.frame_slider.blockSignals(signals_were_blocked)
-        self._rebuild_ghosts()
+        self._clear_ghost_overlay(source="preview_path")
+        self._sync_playback_pose_ghosts()
         if valid and activate_first_frame:
             self.set_trajectory_frame(0)
             self.status_label.setText(f"Loaded {len(valid)} robot trajectory states.")
@@ -1540,6 +1559,7 @@ class RobotViewer3D(QWidget):
         self.robot_trajectory = []
         self.robot_trajectory_times = []
         self.ghost_trajectory = []
+        self.ghost_source = None
         self.frame_slider.setRange(0, 0)
         self.frame_slider.setValue(0)
         if self.ghost_renderer:
@@ -1603,8 +1623,39 @@ class RobotViewer3D(QWidget):
             )
         self._update_ghost_options()
 
+    def _clear_ghost_overlay(self, source=None):
+        if source is not None and self.ghost_source != source:
+            return
+        self.ghost_trajectory = []
+        self.ghost_source = None
+        if self.ghost_renderer:
+            self.ghost_renderer.clear()
+        self._update_ghost_options()
+
+    def _sync_playback_pose_ghosts(self):
+        if self.show_ghosts.isChecked() and self.robot_trajectory:
+            self.ghost_trajectory = [qpos.copy() for qpos in self.robot_trajectory]
+            self.ghost_source = "playback"
+            self._rebuild_ghosts()
+            return
+        if self.ghost_source == "playback":
+            self.ghost_trajectory = []
+            self.ghost_source = None
+            if self.ghost_renderer:
+                self.ghost_renderer.clear()
+        self._update_ghost_options()
+
     def _update_ghost_options(self):
-        self.canvas.set_ghost_options(self.show_ghosts.isChecked(), self.ghost_alpha.value())
+        visible = bool(
+            self.ghost_trajectory and (
+                self.ghost_source == "preview_path"
+                or (
+                    self.ghost_source == "playback"
+                    and self.show_ghosts.isChecked()
+                )
+            )
+        )
+        self.canvas.set_ghost_options(visible, self.ghost_alpha.value())
 
     def set_trajectory_frame(self, index):
         if not self.robot_trajectory:
@@ -1614,6 +1665,7 @@ class RobotViewer3D(QWidget):
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
         self.canvas.set_preview_visible(False)
+        self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
         self._set_target_to_selected_pose()
 

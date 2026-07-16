@@ -141,6 +141,7 @@ class TrajectoryControlPanel(QGroupBox):
     keyframe_selected = Signal(int)
     frame_name_changed = Signal(str)
     trajectory_lines_changed = Signal(bool)
+    keyframes_visibility_changed = Signal(bool)
     time_changed = Signal(float)
     model_changed = Signal(str)
     open_model_clicked = Signal()
@@ -312,6 +313,13 @@ class TrajectoryControlPanel(QGroupBox):
         # --------------------------------------------------------
         # Trajectory display options
         # --------------------------------------------------------
+        self.show_keyframes_box = QCheckBox("Show keyframes")
+        self.show_keyframes_box.setChecked(True)
+        self.show_keyframes_box.toggled.connect(
+            self.keyframes_visibility_changed.emit
+        )
+        self.view_layout.addWidget(self.show_keyframes_box)
+
         self.show_lines_box = QCheckBox("Show trajectory lines")
         self.show_lines_box.setChecked(True)
         self.show_lines_box.toggled.connect(self.trajectory_lines_changed.emit)
@@ -505,6 +513,9 @@ class TrajectoryControlPanel(QGroupBox):
 
     def show_trajectory_lines(self):
         return self.show_lines_box.isChecked()
+
+    def show_keyframes(self):
+        return self.show_keyframes_box.isChecked()
 
     def corner_smoothing(self):
         return max(0.0, min(1.0, self.corner_smoothing_slider.value() / 100.0))

@@ -535,6 +535,7 @@ class Stickman2DViewer(QGraphicsView):
         apply_active_frame=True,
         show_trajectory_lines=True,
         trajectory_smoothing=0.0,
+        show_keyframes=True,
     ):
         """
         Redraw viewer.
@@ -586,6 +587,7 @@ class Stickman2DViewer(QGraphicsView):
             trajectory,
             show_lines=show_trajectory_lines,
             trajectory_smoothing=trajectory_smoothing,
+            show_keyframes=show_keyframes,
         )
         self.draw_target_frame()
         self.draw_legend()
@@ -847,6 +849,7 @@ class Stickman2DViewer(QGraphicsView):
         trajectory,
         show_lines=True,
         trajectory_smoothing=0.0,
+        show_keyframes=True,
     ):
         """
         Draw stored keyframe target positions and sampled connecting lines.
@@ -857,6 +860,9 @@ class Stickman2DViewer(QGraphicsView):
 
         if show_lines:
             self.draw_sampled_trajectory_lines(trajectory, trajectory_smoothing)
+
+        if not show_keyframes:
+            return
 
         for frame in trajectory.frames:
             x, y = self.world_to_screen(frame.x, frame.z)

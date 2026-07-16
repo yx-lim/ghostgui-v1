@@ -52,6 +52,7 @@ class RobotCanvas3D(QOpenGLWidget):
 
         self.trajectory = None
         self.show_trajectory_lines = True
+        self.show_keyframes = True
         self.trajectory_smoothing = 0.0
 
         self.target_x = 0.0
@@ -150,9 +151,11 @@ class RobotCanvas3D(QOpenGLWidget):
         active_frame=None,
         show_trajectory_lines=True,
         trajectory_smoothing=0.0,
+        show_keyframes=True,
     ):
         self.trajectory = trajectory
         self.show_trajectory_lines = show_trajectory_lines
+        self.show_keyframes = show_keyframes
         self.trajectory_smoothing = max(0.0, min(1.0, float(trajectory_smoothing)))
 
         if active_frame is not None:
@@ -627,12 +630,13 @@ class RobotCanvas3D(QOpenGLWidget):
                     GL.glVertex3f(target.x, target.y, target.z)
                 GL.glEnd()
 
-        GL.glPointSize(7.0)
-        GL.glBegin(GL.GL_POINTS)
-        for frame in self.trajectory.frames:
-            GL.glColor3f(*gl_color_for_frame(frame.frame_name))
-            GL.glVertex3f(frame.x, frame.y, frame.z)
-        GL.glEnd()
+        if self.show_keyframes:
+            GL.glPointSize(7.0)
+            GL.glBegin(GL.GL_POINTS)
+            for frame in self.trajectory.frames:
+                GL.glColor3f(*gl_color_for_frame(frame.frame_name))
+                GL.glVertex3f(frame.x, frame.y, frame.z)
+            GL.glEnd()
 
     def draw_target_frame(self):
         x = self.target_x

@@ -66,6 +66,7 @@ class RobotCanvas(QGraphicsView):
         active_frame=None,
         show_trajectory_lines=True,
         trajectory_smoothing=0.0,
+        show_keyframes=True,
     ):
         self.scene.clear()
 
@@ -79,6 +80,7 @@ class RobotCanvas(QGraphicsView):
             trajectory,
             show_lines=show_trajectory_lines,
             trajectory_smoothing=trajectory_smoothing,
+            show_keyframes=show_keyframes,
         )
         self.draw_target_frame()
         self.draw_legend()
@@ -92,6 +94,7 @@ class RobotCanvas(QGraphicsView):
         trajectory,
         show_lines=True,
         trajectory_smoothing=0.0,
+        show_keyframes=True,
     ):
         """
         Draw stored trajectory keyframes and sampled connecting lines.
@@ -102,6 +105,9 @@ class RobotCanvas(QGraphicsView):
 
         if show_lines:
             self.draw_sampled_trajectory_lines(trajectory, trajectory_smoothing)
+
+        if not show_keyframes:
+            return
 
         for frame in trajectory.frames:
             x, y = self.world_to_screen(frame.x, frame.z)

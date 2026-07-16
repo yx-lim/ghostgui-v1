@@ -255,12 +255,84 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         preview = self.viewer.preview_state.get_qpos()
         self.viewer.plan_preview()
-        self.assertEqual(len(self.viewer.robot_trajectory), 40)
-        np.testing.assert_allclose(self.viewer.robot_trajectory[0], before)
-        np.testing.assert_allclose(self.viewer.robot_trajectory[-1], preview)
+        self.assertEqual(self.viewer.robot_trajectory, [])
+        self.assertEqual(len(self.viewer.ghost_trajectory), 40)
+        self.assertEqual(self.viewer.ghost_source, "preview_path")
+        np.testing.assert_allclose(self.viewer.ghost_trajectory[0], before)
+        np.testing.assert_allclose(self.viewer.ghost_trajectory[-1], preview)
         np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), before)
         np.testing.assert_allclose(self.viewer.get_current_keyframe(), before)
         self.assertTrue(self.viewer.preview_active)
+        self.assertTrue(self.viewer.canvas.show_ghosts)
+        self.assertFalse(self.viewer.show_ghosts.isChecked())
+
+    def test_accept_preview_clears_preview_path_ghost(self):
+        name = self.viewer.preview_state.get_joint_names()[-1]
+        self.viewer._joint_changed(
+            name, self.viewer.preview_state.get_joint_value(name) + 0.05
+        )
+        self.viewer.plan_preview()
+        self.assertEqual(self.viewer.ghost_source, "preview_path")
+
+        self.viewer.accept_preview()
+
+        self.assertEqual(self.viewer.ghost_trajectory, [])
+        self.assertIsNone(self.viewer.ghost_source)
+        self.assertFalse(self.viewer.canvas.show_ghosts)
+
+    def test_playback_load_clears_preview_path_ghost_when_pose_overlay_is_off(self):
+        name = self.viewer.preview_state.get_joint_names()[-1]
+        self.viewer._joint_changed(
+            name, self.viewer.preview_state.get_joint_value(name) + 0.05
+        )
+        self.viewer.plan_preview()
+        self.assertEqual(self.viewer.ghost_source, "preview_path")
+
+        first = self.viewer.robot_model.home_qpos.copy()
+        second = first.copy()
+        second[-1] += 0.05
+        self.viewer.set_robot_trajectory([first, second])
+
+        self.assertEqual(self.viewer.ghost_trajectory, [])
+        self.assertIsNone(self.viewer.ghost_source)
+        self.assertFalse(self.viewer.canvas.show_ghosts)
+
+    def test_playback_pose_ghosts_are_explicit(self):
+        first = self.viewer.robot_model.home_qpos.copy()
+        second = first.copy()
+        second[-1] += 0.05
+
+        self.viewer.set_robot_trajectory([first, second])
+
+        self.assertEqual(self.viewer.ghost_trajectory, [])
+        self.assertIsNone(self.viewer.ghost_source)
+        self.assertFalse(self.viewer.canvas.show_ghosts)
+
+        self.viewer.show_ghosts.setChecked(True)
+
+        self.assertEqual(len(self.viewer.ghost_trajectory), 2)
+        self.assertEqual(self.viewer.ghost_source, "playback")
+        np.testing.assert_allclose(self.viewer.ghost_trajectory[0], first)
+        np.testing.assert_allclose(self.viewer.ghost_trajectory[1], second)
+        self.assertTrue(self.viewer.canvas.show_ghosts)
+
+        self.viewer.show_ghosts.setChecked(False)
+
+        self.assertEqual(self.viewer.ghost_trajectory, [])
+        self.assertIsNone(self.viewer.ghost_source)
+        self.assertFalse(self.viewer.canvas.show_ghosts)
+
+    def test_timeline_keyframes_do_not_publish_ghost_overlays(self):
+        joint_name = self.viewer.preview_state.get_joint_names()[-1]
+        self.viewer._joint_changed(
+            joint_name,
+            self.viewer.preview_state.get_joint_value(joint_name) + 0.05,
+        )
+        self.viewer.accept_preview()
+
+        self.assertEqual(self.viewer.ghost_trajectory, [])
+        self.assertIsNone(self.viewer.ghost_source)
+        self.assertFalse(self.viewer.canvas.show_ghosts)
 
     def test_plan_preview_rejects_midpoint_collision_without_publishing(self):
         class MidpointCollisionChecker:
@@ -662,6 +734,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
     def test_viewer_quick_actions_mirror_common_controls(self):
         self.assertIs(self.viewer.quick_actions_panel.parent(), self.viewer.canvas_workspace)
+        self.assertEqual(self.viewer.quick_plan_preview_button.text(), "Preview")
+        self.assertEqual(self.viewer.quick_show_ghosts.text(), "Playback")
 
         generated = []
         self.viewer.generate_requested.connect(lambda: generated.append(True))
@@ -690,6 +764,25 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertFalse(self.viewer.play_timer.isActive())
         self.assertEqual(self.viewer.quick_play_button.text(), "Play")
         self.assertEqual(self.viewer.play_button.text(), "Play")
+
+        before = self.viewer.committed_state.get_qpos()
+        joint_name = self.viewer.preview_state.get_joint_names()[-1]
+        self.viewer._joint_changed(
+            joint_name,
+            self.viewer.preview_state.get_joint_value(joint_name) + 0.05,
+        )
+        preview = self.viewer.preview_state.get_qpos()
+        self.viewer.quick_plan_preview_button.click()
+        self.assertEqual(len(self.viewer.robot_trajectory), 2)
+        np.testing.assert_allclose(self.viewer.robot_trajectory[0], first)
+        np.testing.assert_allclose(self.viewer.robot_trajectory[-1], second)
+        self.assertEqual(len(self.viewer.ghost_trajectory), 40)
+        self.assertEqual(self.viewer.ghost_source, "preview_path")
+        np.testing.assert_allclose(self.viewer.ghost_trajectory[0], before)
+        np.testing.assert_allclose(self.viewer.ghost_trajectory[-1], preview)
+        np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), before)
+        self.assertTrue(self.viewer.preview_active)
+        self.assertTrue(self.viewer.canvas.show_ghosts)
 
     def test_render_progress_overlay_waits_for_active_3d_geometry_progress(self):
         self.window.begin_render_progress(
@@ -959,8 +1052,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
             display_layout.itemAt(index).widget()
             for index in range(display_layout.count())
         ]
-        self.assertEqual(display_widgets[:3], [
+        self.assertEqual(display_widgets[:4], [
             self.viewer.model_colors_box,
+            self.window.controls.show_keyframes_box,
             self.window.controls.show_lines_box,
             self.viewer.show_ghosts,
         ])
@@ -1014,25 +1108,43 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
         self.assertAlmostEqual(controls.corner_smoothing(), 0.5)
 
-    def test_refresh_display_passes_smoothing_to_trajectory_line_views(self):
+    def test_refresh_display_passes_trajectory_display_options_to_views(self):
         captured = {}
 
         def capture(name):
             def update_scene(*args, **kwargs):
-                captured[name] = kwargs["trajectory_smoothing"]
+                captured[name] = {
+                    "smoothing": kwargs["trajectory_smoothing"],
+                    "show_lines": kwargs["show_trajectory_lines"],
+                    "show_keyframes": kwargs["show_keyframes"],
+                }
             return update_scene
 
         self.window.viewer_2d.update_scene = capture("viewer_2d")
         self.window.viewer_3d.update_scene = capture("viewer_3d")
         self.window.viewer_2d_stickman.update_scene = capture("viewer_2d_stickman")
         self.window.controls.corner_smoothing_slider.set_value(75.0)
+        self.window.controls.show_keyframes_box.setChecked(False)
+        self.window.controls.show_lines_box.setChecked(False)
 
         self.window.refresh_display()
 
         self.assertEqual(captured, {
-            "viewer_2d": 0.75,
-            "viewer_3d": 0.75,
-            "viewer_2d_stickman": 0.75,
+            "viewer_2d": {
+                "smoothing": 0.75,
+                "show_lines": False,
+                "show_keyframes": False,
+            },
+            "viewer_3d": {
+                "smoothing": 0.75,
+                "show_lines": False,
+                "show_keyframes": False,
+            },
+            "viewer_2d_stickman": {
+                "smoothing": 0.75,
+                "show_lines": False,
+                "show_keyframes": False,
+            },
         })
 
     def test_accepted_3d_rotation_is_upserted_into_keyframe(self):

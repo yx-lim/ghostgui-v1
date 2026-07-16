@@ -77,6 +77,7 @@ class GuiHistorySnapshot:
     robot_trajectory: tuple
     robot_trajectory_times: tuple
     ghost_trajectory: tuple
+    ghost_source: str | None
     frame_slider_value: int
     show_ghosts: bool
 
@@ -594,8 +595,9 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.set_display_context_widget(
                 self.viewer_3d.display_context_widget()
             )
-            self.viewer_3d.set_trajectory_lines_widget(
-                self.controls.show_lines_box
+            self.viewer_3d.set_trajectory_display_widgets(
+                self.controls.show_keyframes_box,
+                self.controls.show_lines_box,
             )
             self.controls.set_preview_ik_context_widget(
                 self.viewer_3d.preview_ik_context_widget()
@@ -626,6 +628,9 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.frame_name_changed.connect(self.on_frame_name_changed)
         self.controls.trajectory_lines_changed.connect(
             self.on_trajectory_lines_changed
+        )
+        self.controls.keyframes_visibility_changed.connect(
+            self.on_trajectory_display_changed
         )
         self.controls.time_changed.connect(self.on_time_changed)
 
@@ -722,6 +727,7 @@ class RobotGuiMainWindow(QMainWindow):
             ),
             robot_trajectory_times=tuple(float(t) for t in viewer.robot_trajectory_times),
             ghost_trajectory=tuple(qpos.copy() for qpos in viewer.ghost_trajectory),
+            ghost_source=viewer.ghost_source,
             frame_slider_value=int(viewer.frame_slider.value()),
             show_ghosts=bool(viewer.show_ghosts.isChecked()),
         )
@@ -767,9 +773,18 @@ class RobotGuiMainWindow(QMainWindow):
                 else:
                     viewer.clear_robot_trajectory()
                 viewer.frame_slider.setValue(snapshot.frame_slider_value)
+                show_ghosts_blocked = viewer.show_ghosts.blockSignals(True)
+                quick_ghosts_blocked = viewer.quick_show_ghosts.blockSignals(True)
+                try:
+                    viewer.show_ghosts.setChecked(snapshot.show_ghosts)
+                    viewer.quick_show_ghosts.setChecked(snapshot.show_ghosts)
+                finally:
+                    viewer.show_ghosts.blockSignals(show_ghosts_blocked)
+                    viewer.quick_show_ghosts.blockSignals(quick_ghosts_blocked)
                 viewer.ghost_trajectory = [
                     qpos.copy() for qpos in snapshot.ghost_trajectory
                 ]
+                viewer.ghost_source = snapshot.ghost_source
                 viewer._rebuild_ghosts()
 
                 if viewer.state_timeline is not None:
@@ -792,7 +807,6 @@ class RobotGuiMainWindow(QMainWindow):
                     viewer.preview_state.set_qpos(snapshot.preview_qpos)
                 viewer.preview_active = snapshot.preview_active
                 viewer.canvas.set_preview_visible(snapshot.preview_active)
-                viewer.show_ghosts.setChecked(snapshot.show_ghosts)
                 viewer._sync_joint_controls()
                 viewer._set_target_to_selected_pose()
 
@@ -1342,6 +1356,9 @@ class RobotGuiMainWindow(QMainWindow):
         self.refresh_display(apply_stickman_frame=False)
 
     def on_trajectory_lines_changed(self, checked):
+        self.on_trajectory_display_changed(checked)
+
+    def on_trajectory_display_changed(self, checked):
         self.refresh_display()
 
     def on_add_keyframe(self):
@@ -1520,6 +1537,7 @@ class RobotGuiMainWindow(QMainWindow):
         """
 
         active_frame = self.controls.current_frame()
+        show_keyframes = self.controls.show_keyframes()
         show_trajectory_lines = self.controls.show_trajectory_lines()
         trajectory_smoothing = self.controls.corner_smoothing()
 
@@ -1528,12 +1546,14 @@ class RobotGuiMainWindow(QMainWindow):
             active_frame=active_frame,
             show_trajectory_lines=show_trajectory_lines,
             trajectory_smoothing=trajectory_smoothing,
+            show_keyframes=show_keyframes,
         )
         self.viewer_3d.update_scene(
             trajectory=self.trajectory,
             active_frame=active_frame,
             show_trajectory_lines=show_trajectory_lines,
             trajectory_smoothing=trajectory_smoothing,
+            show_keyframes=show_keyframes,
         )
         self.viewer_2d_stickman.update_scene(
             trajectory=self.trajectory,
@@ -1541,6 +1561,7 @@ class RobotGuiMainWindow(QMainWindow):
             apply_active_frame=apply_stickman_frame,
             show_trajectory_lines=show_trajectory_lines,
             trajectory_smoothing=trajectory_smoothing,
+            show_keyframes=show_keyframes,
         )
 
         self.controls.refresh_table(self.trajectory)
