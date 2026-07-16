@@ -9,6 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QMouseEvent, QWheelEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -21,7 +22,7 @@ from PySide6.QtWidgets import (
 
 from core.ik import Collision
 from application.backend_interface import PythonRobotConfiguration
-from gui.main_window import RobotGuiMainWindow
+from gui.main_window import INITIAL_RENDER_PROGRESS_DELAY_MS, RobotGuiMainWindow
 from gui.viewers.transform_gizmo import GizmoInteractionState
 from core.trajectory import quat_to_rpy, rpy_to_quat
 from scripts.view_g1_mujoco import RAW_QPOS_KEY, load_trajectory_csv
@@ -582,6 +583,61 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertFalse(self.viewer.play_timer.isActive())
         self.assertEqual(self.viewer.quick_play_button.text(), "Play")
         self.assertEqual(self.viewer.play_button.text(), "Play")
+
+    def test_render_progress_overlay_waits_for_active_3d_geometry_progress(self):
+        self.window.begin_render_progress(
+            "Rendering test model",
+            "Preparing geometry...",
+            viewer=self.viewer,
+        )
+
+        overlay = self.window.render_progress_overlay
+        self.assertFalse(overlay.isHidden())
+        self.assertIs(overlay.parentWidget(), self.window.viewer_3d_stack)
+        self.assertEqual(overlay.geometry(), self.window.viewer_3d_stack.rect())
+        self.assertLessEqual(
+            abs(overlay.card.geometry().center().x() - overlay.rect().center().x()),
+            1,
+        )
+        self.assertLessEqual(
+            abs(overlay.card.geometry().center().y() - overlay.rect().center().y()),
+            1,
+        )
+        self.assertFalse(overlay._allow_close)
+
+        self.window.on_viewer_geometry_progress(self.viewer, 2, 8)
+
+        self.assertFalse(overlay.isHidden())
+        self.assertEqual(overlay.progress_bar.value(), 25)
+        self.assertIn(
+            "2/8",
+            overlay.detail_label.text(),
+        )
+
+        self.window.on_viewer_geometry_progress(self.viewer, 8, 8)
+
+        self.assertTrue(overlay.isHidden())
+        self.assertTrue(overlay._allow_close)
+
+    def test_initial_render_progress_overlay_is_deferred_until_window_is_shown(self):
+        self.assertTrue(self.window.render_progress_overlay.isHidden())
+        self.assertIsNotNone(self.window.pending_initial_render_progress)
+
+        self.window.show()
+        for _ in range(3):
+            self.app.processEvents()
+
+        self.assertIsNotNone(self.window.pending_initial_render_progress)
+        self.assertTrue(self.window.render_progress_overlay.isHidden())
+
+        QTest.qWait(INITIAL_RENDER_PROGRESS_DELAY_MS + 100)
+        self.app.processEvents()
+
+        self.assertIsNone(self.window.pending_initial_render_progress)
+        overlay = self.window.render_progress_overlay
+        self.assertFalse(overlay.isHidden())
+        self.assertIs(overlay.parentWidget(), self.window.viewer_3d_stack)
+        self.assertEqual(overlay.geometry(), self.window.viewer_3d_stack.rect())
 
     def test_sidebars_are_fixed_shells_with_collapsible_sections(self):
         self.window.resize(1700, 800)

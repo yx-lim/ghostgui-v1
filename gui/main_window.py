@@ -15,8 +15,9 @@ Updated project flow:
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QMainWindow,
     QWidget,
     QHBoxLayout,
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QSplitter,
     QStackedWidget,
-    QProgressDialog,
+    QProgressBar,
     QFileDialog,
     QMessageBox,
 )
@@ -56,6 +57,132 @@ from application.model_importer import (
 
 LEFT_SIDEBAR_WIDTH = 250
 RIGHT_SIDEBAR_WIDTH = 270
+INITIAL_RENDER_PROGRESS_DELAY_MS = 500
+
+
+class RenderProgressOverlay(QWidget):
+    """Viewer-local overlay for robot model rendering progress."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("renderProgressOverlay")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._allow_close = False
+        if parent is not None:
+            parent.installEventFilter(self)
+
+        self.setStyleSheet(
+            """
+            QWidget#renderProgressOverlay {
+                background: rgba(17, 24, 39, 132);
+            }
+            QWidget#renderProgressCard {
+                background: #f3f5f8;
+                border: 1px solid #9aa5b1;
+                border-radius: 6px;
+            }
+            QLabel#renderTitle {
+                color: #1f2933;
+                font-size: 18px;
+                font-weight: 700;
+            }
+            QLabel#renderDetail {
+                color: #52606d;
+                font-size: 12px;
+            }
+            QProgressBar {
+                border: 1px solid #9aa5b1;
+                border-radius: 4px;
+                min-height: 16px;
+                text-align: center;
+                background: #e4e7eb;
+            }
+            QProgressBar::chunk {
+                background: #2f80ed;
+                border-radius: 3px;
+            }
+            """
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.card = QWidget(self)
+        self.card.setObjectName("renderProgressCard")
+        self.card.setFixedWidth(420)
+
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(30, 24, 30, 24)
+        card_layout.setSpacing(10)
+
+        self.title_label = QLabel("Rendering robot model")
+        self.title_label.setObjectName("renderTitle")
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title_label.setWordWrap(True)
+
+        self.detail_label = QLabel("Preparing 3D geometry...")
+        self.detail_label.setObjectName("renderDetail")
+        self.detail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.detail_label.setWordWrap(True)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimumWidth(300)
+        self.progress_bar.setMaximumWidth(360)
+
+        card_layout.addWidget(self.title_label)
+        card_layout.addWidget(self.detail_label)
+        card_layout.addWidget(
+            self.progress_bar,
+            alignment=Qt.AlignmentFlag.AlignHCenter,
+        )
+        self.card.setFixedHeight(self.card.sizeHint().height())
+        layout.addStretch(1)
+        layout.addWidget(self.card, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addStretch(1)
+        self.hide()
+
+    def eventFilter(self, watched, event):
+        if watched is self.parentWidget() and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+        ):
+            self.update_geometry()
+        return super().eventFilter(watched, event)
+
+    def update_geometry(self):
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        self.setGeometry(parent.rect())
+        if not self.isHidden():
+            self.raise_()
+
+    def set_message(self, title, detail, progress=None):
+        self.title_label.setText(title)
+        self.detail_label.setText(detail)
+        if progress is None:
+            self.progress_bar.setRange(0, 0)
+        else:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(max(0, min(100, int(progress))))
+
+    def show_rendering(self, title, detail, progress=None):
+        self._allow_close = False
+        self.set_message(title, detail, progress)
+        self.update_geometry()
+        self.show()
+        self.raise_()
+
+    def finish(self):
+        self._allow_close = True
+        self.hide()
+
+    def closeEvent(self, event):
+        if self._allow_close:
+            super().closeEvent(event)
+        else:
+            event.ignore()
 
 
 class ModelLoadThread(QThread):
@@ -167,7 +294,10 @@ class RobotGuiMainWindow(QMainWindow):
             )
         }
         self.model_loaders = {}
-        self.model_loading_dialog = None
+        self.render_progress_overlay = None
+        self.render_progress_viewer = None
+        self.render_progress_restore_widget = None
+        self.pending_initial_render_progress = None
         self.viewer_tabs = self.build_viewer_tabs()
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
         self.status_panel = self.build_status_panel()
@@ -205,8 +335,14 @@ class RobotGuiMainWindow(QMainWindow):
         self.main_splitter.setStretchFactor(2, 0)
         self.main_splitter.setSizes([200, 900, 260])
         self.setCentralWidget(self.main_splitter)
+        self.render_progress_overlay = RenderProgressOverlay(self.viewer_3d_stack)
 
         # Initial view
+        if self.robot_model_3d is not None:
+            self.pending_initial_render_progress = (
+                f"Rendering {self.robot_model_3d.model_name}",
+                "Preparing the 3D model for rendering...",
+            )
         self.update_editor_context()
         self.refresh_display()
 
@@ -276,6 +412,133 @@ class RobotGuiMainWindow(QMainWindow):
         tabs.setCurrentIndex(0)
         tabs.tabBar().hide()
         return tabs
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_render_progress_overlay_geometry()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(
+            INITIAL_RENDER_PROGRESS_DELAY_MS,
+            self.prepare_pending_initial_render_progress,
+        )
+
+    def prepare_pending_initial_render_progress(self):
+        if (
+            not self.isVisible()
+            or self.viewer_3d_stack.width() <= 1
+            or self.viewer_3d_stack.height() <= 1
+        ):
+            QTimer.singleShot(50, self.prepare_pending_initial_render_progress)
+            return
+        if QApplication.platformName().lower() != "offscreen":
+            self.raise_()
+            self.activateWindow()
+        QTimer.singleShot(0, self.show_pending_initial_render_progress)
+
+    def update_render_progress_overlay_geometry(self):
+        if self.render_progress_overlay is None:
+            return
+        self.render_progress_overlay.update_geometry()
+
+    def present_render_progress_overlay(self):
+        if self.render_progress_overlay is None:
+            return
+        self.render_progress_overlay.update_geometry()
+        self.render_progress_overlay.show()
+        self.render_progress_overlay.raise_()
+
+    def show_pending_initial_render_progress(self):
+        if self.pending_initial_render_progress is None:
+            self.request_active_model_render()
+            return
+        title, detail = self.pending_initial_render_progress
+        self.pending_initial_render_progress = None
+        self.begin_render_progress(title, detail, viewer=self.viewer_3d)
+        self.request_active_model_render()
+
+    def begin_render_progress(self, title, detail="", viewer=None, progress=None):
+        if self.render_progress_overlay is None:
+            return
+        self.render_progress_viewer = viewer
+        self.render_progress_overlay.show_rendering(title, detail, progress)
+        self.present_render_progress_overlay()
+        QTimer.singleShot(0, self.present_render_progress_overlay)
+
+    def update_render_progress(self, title, detail="", progress=None):
+        if self.render_progress_overlay is None:
+            return
+        self.render_progress_overlay.show_rendering(title, detail, progress)
+        self.present_render_progress_overlay()
+
+    def finish_render_progress(self):
+        if self.render_progress_overlay is not None:
+            self.render_progress_overlay.finish()
+        self.render_progress_viewer = None
+        if self.render_progress_restore_widget is not None:
+            restore_widget = self.render_progress_restore_widget
+            self.render_progress_restore_widget = None
+            if self.viewer_tabs.indexOf(restore_widget) >= 0:
+                self.viewer_tabs.setCurrentWidget(restore_widget)
+        else:
+            self.render_progress_restore_widget = None
+
+    def active_3d_geometry_ready(self):
+        viewer = self.viewer_3d
+        canvas = viewer.canvas
+        if viewer.robot_state is None:
+            return True
+        if not canvas.isValid():
+            return False
+        if canvas._geometry_queue:
+            return False
+        return canvas._geometry_build_count > 0
+
+    def request_active_model_render(self):
+        if (
+            self.render_progress_overlay is None
+            or self.render_progress_overlay.isHidden()
+        ):
+            return
+        self.render_progress_viewer = self.viewer_3d
+        if self.active_3d_geometry_ready():
+            QTimer.singleShot(0, self.finish_render_progress)
+            return
+        if not self.isVisible():
+            return
+        if self.viewer_tabs.currentWidget() is not self.viewer_3d_stack:
+            self.render_progress_restore_widget = self.viewer_tabs.currentWidget()
+            self.viewer_tabs.setCurrentWidget(self.viewer_3d_stack)
+        self.viewer_3d.canvas.update()
+
+    def on_viewer_geometry_progress(self, viewer, complete, total):
+        if viewer is not self.viewer_3d:
+            return
+        if (
+            self.render_progress_overlay is not None
+            and not self.render_progress_overlay.isHidden()
+            and self.render_progress_viewer not in (None, viewer)
+        ):
+            return
+        if total <= 0:
+            self.finish_render_progress()
+            return
+
+        progress = round((float(complete) / float(total)) * 100.0)
+        model_name = (
+            self.robot_model_3d.model_name
+            if self.robot_model_3d is not None
+            else "robot model"
+        )
+        self.update_render_progress(
+            f"Rendering {model_name}",
+            f"Building 3D geometry {complete}/{total}...",
+            progress=progress,
+        )
+        self.render_progress_viewer = viewer
+        if complete >= total:
+            self.finish_render_progress()
 
     def model_source_text(self, adapter):
         path = getattr(adapter, "model_path", None)
@@ -347,6 +610,11 @@ class RobotGuiMainWindow(QMainWindow):
         viewer_3d.trajectory_csv_loaded.connect(self.on_trajectory_csv_loaded)
         viewer_3d.generate_requested.connect(self.on_generate_trajectory)
         viewer_3d.clear_trajectory_requested.connect(self.on_clear_trajectory)
+        viewer_3d.canvas.geometry_progress.connect(
+            lambda complete, total, viewer=viewer_3d: (
+                self.on_viewer_geometry_progress(viewer, complete, total)
+            )
+        )
         viewer_3d.timeslice_time_changed.connect(
             self.on_viewer_timeslice_time_changed
         )
@@ -410,16 +678,12 @@ class RobotGuiMainWindow(QMainWindow):
             return
         if model_key in self.model_loaders:
             return
+        self.begin_render_progress(
+            f"Loading {model_info.display_name}",
+            "Loading robot model data...",
+        )
         self.controls.model_box.setEnabled(False)
         self.statusBar().showMessage(f"Loading {model_info.display_name}…")
-        self.model_loading_dialog = QProgressDialog(
-            f"Loading {model_info.display_name}…",
-            None, 0, 0, self,
-        )
-        self.model_loading_dialog.setWindowTitle("Loading robot model")
-        self.model_loading_dialog.setWindowModality(Qt.WindowModality.NonModal)
-        self.model_loading_dialog.setMinimumDuration(0)
-        self.model_loading_dialog.show()
         loader = ModelLoadThread(model_key, model_info, self)
         loader.loaded.connect(self.on_model_loaded)
         loader.failed.connect(self.on_model_load_failed)
@@ -447,6 +711,7 @@ class RobotGuiMainWindow(QMainWindow):
     def on_model_load_failed(self, model_key, error):
         self.model_loaders.pop(model_key, None)
         self.finish_model_loading_ui()
+        self.finish_render_progress()
         self.status_text.setText(f"Could not load {model_key}: {error}")
         index = self.controls.model_box.findData(self.model_key)
         self.controls.model_box.blockSignals(True)
@@ -488,20 +753,32 @@ class RobotGuiMainWindow(QMainWindow):
 
     def import_model_file(self, path):
         mesh_roots = [self.import_mesh_folder] if self.import_mesh_folder else []
+        self.begin_render_progress(
+            "Importing robot model",
+            f"Copying and preparing {Path(path).name}...",
+        )
+        QApplication.processEvents()
         try:
             try:
                 info = import_robot_model(
                     path, self.model_library_root, mesh_roots=mesh_roots
                 )
             except RuntimeError:
+                self.finish_render_progress()
                 mesh_folder = self._prompt_for_mesh_folder()
                 if mesh_folder is None:
                     raise
+                self.begin_render_progress(
+                    "Importing robot model",
+                    f"Copying and preparing {Path(path).name}...",
+                )
+                QApplication.processEvents()
                 info = import_robot_model(
                     path, self.model_library_root, mesh_roots=[mesh_folder]
                 )
             info = self.register_model_info(info)
         except Exception as exc:
+            self.finish_render_progress()
             message = f"Could not import model: {exc}"
             self.status_text.setText(message)
             QMessageBox.warning(self, "Import model failed", message)
@@ -514,10 +791,6 @@ class RobotGuiMainWindow(QMainWindow):
     def finish_model_loading_ui(self):
         self.controls.model_box.setEnabled(True)
         self.statusBar().clearMessage()
-        if self.model_loading_dialog is not None:
-            self.model_loading_dialog.close()
-            self.model_loading_dialog.deleteLater()
-            self.model_loading_dialog = None
 
     def activate_model_session(self, model_key, session):
         model_sessions.remember_current_session(
@@ -532,12 +805,18 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_3d_mujoco.set_model_adapter(session.adapter)
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
         self.model_source_label.setText(self.model_source_text(session.adapter))
+        self.begin_render_progress(
+            f"Rendering {session.adapter.model_name}",
+            "Preparing the 3D model geometry...",
+            viewer=self.viewer_3d,
+        )
         self.controls.set_frame_names(session.adapter.trajectory_frames)
         self.setWindowTitle(
             f"Reference Frame Trajectory GUI — {session.adapter.model_name}"
         )
         self.update_editor_context()
         self.refresh_display(apply_stickman_frame=False)
+        self.request_active_model_render()
 
     def on_trajectory_csv_loaded(self, csv_path):
         self.viewer_3d_mujoco.set_trajectory_csv(csv_path)
