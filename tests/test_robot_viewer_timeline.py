@@ -723,8 +723,42 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.controls.corner_smoothing_slider.parent(),
             self.viewer.timeslice_editor,
         )
+        self.assertIs(self.viewer.frame_slider.parent(), self.viewer.timeslice_editor)
+        self.assertIs(
+            self.viewer.timeslice_layout.itemAt(0).layout(),
+            self.viewer.timeslice_time_row,
+        )
+        self.assertIs(
+            self.viewer.timeslice_layout.itemAt(1).layout(),
+            self.viewer.timeslice_frame_row,
+        )
+        self.assertIs(
+            self.viewer.timeslice_layout.itemAt(2).layout(),
+            self.viewer.timeslice_action_row,
+        )
+        self.assertIs(
+            self.viewer.timeslice_frame_row.itemAt(1).widget(),
+            self.viewer.frame_slider,
+        )
+        self.assertIs(
+            self.viewer.timeslice_action_row.itemAt(0).widget(),
+            self.window.controls.corner_smoothing_slider,
+        )
+        self.assertIs(
+            self.viewer.timeslice_action_row.itemAt(2).widget(),
+            self.viewer.accept_timeslice_button,
+        )
+        self.assertIs(
+            self.viewer.timeslice_action_row.itemAt(3).widget(),
+            self.viewer.delete_timeslice_button,
+        )
         self.assertIs(
             self.viewer.quick_clear_button.parent(), self.viewer.quick_actions_panel
+        )
+        quick_layout = self.viewer.quick_actions_panel.layout()
+        self.assertLess(
+            quick_layout.indexOf(self.viewer.quick_reset_button),
+            quick_layout.indexOf(self.viewer.quick_clear_button),
         )
         for section in self.window.left_sidebar_content.sections:
             section.set_expanded(True)
