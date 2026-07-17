@@ -32,9 +32,11 @@ bash scripts/install_macos.sh
 bash scripts/run_macos.sh
 ```
 
-On Apple Silicon, MuJoCo requires a native `arm64` Python. A virtual environment
-does not change Python architecture; it inherits the interpreter used to create
-it. The macOS installer therefore prefers `/opt/homebrew/bin/python3` and stops
+The macOS installer supports both native Mac architectures: `arm64` for Apple
+Silicon and `x86_64` for Intel Macs. A virtual environment does not change
+Python architecture; it inherits the interpreter used to create it. The script
+therefore checks that Python, `.venv`, and `mjpython` match the native Mac
+architecture. On Apple Silicon, it prefers `/opt/homebrew/bin/python3` and stops
 with instructions if it detects an Intel/Rosetta `x86_64` Python or venv.
 
 The standalone MuJoCo viewer uses `mujoco.viewer.launch_passive()`. On macOS,

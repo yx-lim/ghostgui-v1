@@ -3,9 +3,16 @@ set -e
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+HOST_ARCH="$(uname -m)"
+NATIVE_ARCH="$HOST_ARCH"
+if [ "$(sysctl -in hw.optional.arm64 2>/dev/null || true)" = "1" ]; then
+    NATIVE_ARCH="arm64"
+fi
+
 PYTHON_BIN=""
 
-if [ "$(uname -m)" = "arm64" ]; then
+case "$NATIVE_ARCH" in
+arm64)
     if [ -x "/opt/homebrew/bin/python3" ]; then
         PYTHON_BIN="/opt/homebrew/bin/python3"
     elif [ -x "/opt/homebrew/bin/brew" ]; then
@@ -15,11 +22,17 @@ if [ "$(uname -m)" = "arm64" ]; then
     elif command -v python3 >/dev/null 2>&1; then
         PYTHON_BIN="$(command -v python3)"
     fi
-else
+    ;;
+x86_64)
     if command -v python3 >/dev/null 2>&1; then
         PYTHON_BIN="$(command -v python3)"
     fi
-fi
+    ;;
+*)
+    echo "Unsupported macOS architecture: $NATIVE_ARCH"
+    exit 1
+    ;;
+esac
 
 if [ -z "$PYTHON_BIN" ]; then
     echo "python3 was not found."
@@ -34,14 +47,19 @@ fi
 
 PYTHON_ARCH="$("$PYTHON_BIN" -c 'import platform; print(platform.machine())')"
 
-if [ "$(uname -m)" = "arm64" ] && [ "$PYTHON_ARCH" != "arm64" ]; then
-    echo "Apple Silicon detected, but $PYTHON_BIN is a $PYTHON_ARCH Python."
-    echo "MuJoCo requires a native arm64 Python on Apple Silicon."
-    echo
-    echo "Install an arm64 Python, then rerun this script. Recommended Homebrew path:"
-    echo "  /opt/homebrew/bin/brew install python"
-    echo
-    echo "If Homebrew is installed under /usr/local, it is probably the Intel/Rosetta build."
+if [ "$PYTHON_ARCH" != "$NATIVE_ARCH" ]; then
+    echo "This Mac needs a native $NATIVE_ARCH Python, but $PYTHON_BIN is $PYTHON_ARCH."
+    if [ "$NATIVE_ARCH" = "arm64" ]; then
+        echo
+        echo "On Apple Silicon, install an arm64 Python and rerun this script."
+        echo "Recommended Homebrew path:"
+        echo "  /opt/homebrew/bin/brew install python"
+        echo
+        echo "If Homebrew is installed under /usr/local, it is probably the Intel/Rosetta build."
+    else
+        echo
+        echo "On Intel Mac, install an x86_64 Python and rerun this script."
+    fi
     exit 1
 fi
 
@@ -49,6 +67,10 @@ if command -v brew >/dev/null 2>&1; then
     echo "Homebrew found."
 fi
 
+if [ "$HOST_ARCH" != "$NATIVE_ARCH" ]; then
+    echo "Native Mac architecture is $NATIVE_ARCH; current shell reports $HOST_ARCH."
+    echo "Continuing with native $NATIVE_ARCH Python."
+fi
 echo "Using Python: $PYTHON_BIN ($("$PYTHON_BIN" --version), $PYTHON_ARCH)"
 
 if [ ! -d ".venv" ]; then
@@ -61,8 +83,8 @@ fi
 source .venv/bin/activate
 
 VENV_ARCH="$(python -c 'import platform; print(platform.machine())')"
-if [ "$(uname -m)" = "arm64" ] && [ "$VENV_ARCH" != "arm64" ]; then
-    echo ".venv is using a $VENV_ARCH Python, but Apple Silicon requires arm64."
+if [ "$VENV_ARCH" != "$NATIVE_ARCH" ]; then
+    echo ".venv is using a $VENV_ARCH Python, but this Mac requires $NATIVE_ARCH."
     echo "Remove the existing .venv and rerun this script:"
     echo "  rm -rf .venv"
     echo "  bash scripts/install_macos.sh"
@@ -80,9 +102,9 @@ if ! command -v mjpython >/dev/null 2>&1; then
 fi
 
 MJPYTHON_ARCH="$(mjpython -c 'import platform; print(platform.machine())')"
-if [ "$(uname -m)" = "arm64" ] && [ "$MJPYTHON_ARCH" != "arm64" ]; then
-    echo "mjpython is $MJPYTHON_ARCH, but Apple Silicon requires arm64."
-    echo "Remove .venv and recreate it with a native arm64 Python."
+if [ "$MJPYTHON_ARCH" != "$NATIVE_ARCH" ]; then
+    echo "mjpython is $MJPYTHON_ARCH, but this Mac requires $NATIVE_ARCH."
+    echo "Remove .venv and recreate it with a native Python."
     exit 1
 fi
 
