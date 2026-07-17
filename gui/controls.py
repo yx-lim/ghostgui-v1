@@ -86,6 +86,20 @@ class LabeledSlider(QWidget):
     def set_value(self, value):
         self.slider.setValue(round(value * self.scale))
 
+    def set_range(self, min_value, max_value):
+        current_value = max(
+            min_value / self.scale,
+            min(self.value(), max_value / self.scale),
+        )
+        raw_value = round(current_value * self.scale)
+
+        self._syncing = True
+        self.slider.setRange(min_value, max_value)
+        self.slider.setValue(raw_value)
+        self.input.setRange(min_value / self.scale, max_value / self.scale)
+        self.input.setValue(current_value)
+        self._syncing = False
+
     def on_slider_changed(self, raw_value):
         if self._syncing:
             return
@@ -326,14 +340,17 @@ class TrajectoryControlPanel(QGroupBox):
         self.view_layout.addWidget(self.show_lines_box)
 
         self.corner_smoothing_slider = LabeledSlider(
-            "Smoothing [%]",
+            "Smoothing",
             min_value=0,
             max_value=100,
             initial_value=0,
-            scale=1,
+            scale=100,
         )
-        self.corner_smoothing_slider.input.setMaximumWidth(52)
-        self.corner_smoothing_slider.setMaximumWidth(212)
+        smoothing_label_width = self.corner_smoothing_slider.label.sizeHint().width()
+        self.corner_smoothing_slider.label.setMinimumWidth(smoothing_label_width + 8)
+        self.corner_smoothing_slider.input.setMaximumWidth(58)
+        self.corner_smoothing_slider.setMinimumWidth(232)
+        self.corner_smoothing_slider.setMaximumWidth(240)
 
         # --------------------------------------------------------
         # Keyframe buttons
@@ -518,7 +535,7 @@ class TrajectoryControlPanel(QGroupBox):
         return self.show_keyframes_box.isChecked()
 
     def corner_smoothing(self):
-        return max(0.0, min(1.0, self.corner_smoothing_slider.value() / 100.0))
+        return max(0.0, min(1.0, self.corner_smoothing_slider.value()))
 
     def set_from_frame(self, frame):
         """

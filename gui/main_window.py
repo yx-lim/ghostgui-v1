@@ -80,6 +80,7 @@ class GuiHistorySnapshot:
     ghost_source: str | None
     frame_slider_value: int
     show_ghosts: bool
+    timeline_duration: float
 
 
 @dataclass(frozen=True)
@@ -665,6 +666,9 @@ class RobotGuiMainWindow(QMainWindow):
         viewer_3d.timeslice_time_changed.connect(
             self.on_viewer_timeslice_time_changed
         )
+        viewer_3d.timeline_duration_changed.connect(
+            self.on_viewer_timeline_duration_changed
+        )
         viewer_3d.accept_timeslice_requested.connect(
             self.on_accept_timeslice_requested
         )
@@ -730,6 +734,7 @@ class RobotGuiMainWindow(QMainWindow):
             ghost_source=viewer.ghost_source,
             frame_slider_value=int(viewer.frame_slider.value()),
             show_ghosts=bool(viewer.show_ghosts.isChecked()),
+            timeline_duration=float(viewer.timeline_duration),
         )
 
     def _restore_control_frame(self, frame):
@@ -773,6 +778,7 @@ class RobotGuiMainWindow(QMainWindow):
                 else:
                     viewer.clear_robot_trajectory()
                 viewer.frame_slider.setValue(snapshot.frame_slider_value)
+                self.set_editor_timeline_duration(snapshot.timeline_duration)
                 show_ghosts_blocked = viewer.show_ghosts.blockSignals(True)
                 quick_ghosts_blocked = viewer.quick_show_ghosts.blockSignals(True)
                 try:
@@ -1026,6 +1032,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_2d_skeleton_stack.setCurrentWidget(self.viewer_2d_stickman)
         self.viewer_3d_mujoco.set_model_adapter(session.adapter)
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
+        self.set_editor_timeline_duration(self.viewer_3d.timeline_duration)
         self.model_source_label.setText(self.model_source_text(session.adapter))
         self.begin_render_progress(
             f"Rendering {session.adapter.model_name}",
@@ -1096,6 +1103,16 @@ class RobotGuiMainWindow(QMainWindow):
         """Keep the sidebar time editor in sync with the viewer-bottom scrubber."""
         self.controls.time_slider.set_value(time)
         self.on_time_changed(time)
+
+    def on_viewer_timeline_duration_changed(self, duration):
+        self.set_sidebar_timeline_duration(duration)
+
+    def set_sidebar_timeline_duration(self, duration):
+        self.controls.time_slider.set_range(0, int(round(float(duration) * 100.0)))
+
+    def set_editor_timeline_duration(self, duration):
+        self.viewer_3d.set_timeline_duration(duration, emit_signal=False)
+        self.set_sidebar_timeline_duration(duration)
 
     def on_accept_timeslice_requested(self):
         if self.viewer_3d.preview_active and not self.viewer_3d.accept_preview():

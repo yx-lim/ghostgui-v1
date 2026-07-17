@@ -80,6 +80,7 @@ class RobotViewer3D(QWidget):
     generate_requested = Signal()
     clear_trajectory_requested = Signal()
     timeslice_time_changed = Signal(float)
+    timeline_duration_changed = Signal(float)
     accept_timeslice_requested = Signal()
     delete_timeslice_requested = Signal()
     history_action_finished = Signal(str)
@@ -100,6 +101,7 @@ class RobotViewer3D(QWidget):
         self.robot_state = self.committed_state
         self.preview_active = False
         self.current_time = 0.0
+        self.timeline_duration = 5.0
         self.state_timeline = (
             RobotStateTimeline(robot_model, initial_qpos=self.robot_state.get_qpos())
             if robot_model else None
@@ -440,7 +442,7 @@ class RobotViewer3D(QWidget):
 
         self.timeslice_time_input = QDoubleSpinBox()
         _compact_spinbox(self.timeslice_time_input, width=72)
-        self.timeslice_time_input.setRange(0.0, 5.0)
+        self.timeslice_time_input.setRange(0.0, self.timeline_duration)
         self.timeslice_time_input.setDecimals(2)
         self.timeslice_time_input.setSingleStep(0.01)
         self.timeslice_time_input.setSuffix(" s")
@@ -452,7 +454,7 @@ class RobotViewer3D(QWidget):
         self.accept_timeslice_button.clicked.connect(self.accept_timeslice)
         self.delete_timeslice_button = QPushButton("Delete")
         self.delete_timeslice_button.clicked.connect(self.delete_timeslice)
-        self.timeslice_step_label = QLabel("Time Step")
+        self.timeslice_step_label = QLabel("Time Step/Slice")
         self.timeslice_step_input = QDoubleSpinBox()
         _compact_spinbox(self.timeslice_step_input, width=72)
         self.timeslice_step_input.setRange(0.01, 5.0)
@@ -460,6 +462,18 @@ class RobotViewer3D(QWidget):
         self.timeslice_step_input.setSingleStep(0.01)
         self.timeslice_step_input.setValue(0.10)
         self.timeslice_step_input.setSuffix(" s")
+
+        self.timeslice_duration_label = QLabel("Duration")
+        self.timeslice_duration_input = QDoubleSpinBox()
+        _compact_spinbox(self.timeslice_duration_input, width=72)
+        self.timeslice_duration_input.setRange(0.10, 120.0)
+        self.timeslice_duration_input.setDecimals(2)
+        self.timeslice_duration_input.setSingleStep(0.10)
+        self.timeslice_duration_input.setValue(self.timeline_duration)
+        self.timeslice_duration_input.setSuffix(" s")
+        self.timeslice_duration_input.valueChanged.connect(
+            self._on_timeslice_duration_changed
+        )
 
         self.timeslice_time_row = QHBoxLayout()
         self.timeslice_time_row.setContentsMargins(0, 0, 0, 0)
@@ -480,6 +494,8 @@ class RobotViewer3D(QWidget):
         self.timeslice_action_row.setSpacing(8)
         self.timeslice_action_row.addWidget(self.timeslice_step_label)
         self.timeslice_action_row.addWidget(self.timeslice_step_input)
+        self.timeslice_action_row.addWidget(self.timeslice_duration_label)
+        self.timeslice_action_row.addWidget(self.timeslice_duration_input)
         self.timeslice_action_row.addStretch(1)
         self.timeslice_action_row.addWidget(self.accept_timeslice_button)
         self.timeslice_action_row.addWidget(self.delete_timeslice_button)
@@ -502,7 +518,8 @@ class RobotViewer3D(QWidget):
             return
         if widget.parent() is not self.timeslice_editor:
             widget.setParent(self.timeslice_editor)
-        widget.setMaximumWidth(220)
+        widget.setMinimumWidth(max(widget.minimumWidth(), 232))
+        widget.setMaximumWidth(max(widget.maximumWidth(), 240))
         self.smoothing_widget = widget
         self.timeslice_action_row.insertWidget(0, widget)
 
@@ -557,6 +574,30 @@ class RobotViewer3D(QWidget):
 
     def timeslice_step(self):
         return float(self.timeslice_step_input.value())
+
+    def _on_timeslice_duration_changed(self, duration):
+        self.set_timeline_duration(duration)
+
+    def set_timeline_duration(self, duration, emit_signal=True):
+        duration = max(0.10, float(duration))
+        self.timeline_duration = duration
+        raw_max = int(round(duration * 100.0))
+
+        was_blocked = self.timeslice_duration_input.blockSignals(True)
+        self.timeslice_duration_input.setValue(duration)
+        self.timeslice_duration_input.blockSignals(was_blocked)
+
+        self.timeslice_slider.setMaximum(raw_max)
+        self.timeslice_time_input.setMaximum(duration)
+        self.timeslice_step_input.setMaximum(duration)
+        if self.current_time > duration:
+            if self.state_timeline:
+                self.current_time = self.state_timeline.time_key(duration)
+            else:
+                self.current_time = duration
+        self._set_timeslice_widgets(self.current_time)
+        if emit_signal:
+            self.timeline_duration_changed.emit(duration)
 
     def next_timeslice_time(self, time=None):
         base_time = self.current_time if time is None else float(time)
@@ -1542,6 +1583,8 @@ class RobotViewer3D(QWidget):
             valid_times = [float(index) for index in range(len(valid))]
         self.robot_trajectory = valid
         self.robot_trajectory_times = valid_times
+        if valid_times:
+            self.set_timeline_duration(max(self.timeline_duration, max(valid_times)))
         signals_were_blocked = self.frame_slider.blockSignals(
             not activate_first_frame
         )
