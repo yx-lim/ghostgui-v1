@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -482,15 +483,15 @@ class RobotViewerTimelineTests(unittest.TestCase):
     def test_timeslice_bar_uses_single_compact_time_display(self):
         self.assertEqual(self.viewer.timeslice_label.text(), "Time")
         self.assertEqual(self.viewer.timeslice_time_input.suffix(), " s")
-        self.assertEqual(self.viewer.timeslice_step_label.text(), "Time Step/Slice")
+        self.assertEqual(self.viewer.timeslice_step_label.text(), "Step")
         self.assertEqual(self.viewer.timeslice_step_input.suffix(), " s")
         self.assertAlmostEqual(self.viewer.timeslice_step_input.value(), 0.10)
         self.assertEqual(self.viewer.timeslice_duration_label.text(), "Duration")
         self.assertEqual(self.viewer.timeslice_duration_input.suffix(), " s")
         self.assertAlmostEqual(self.viewer.timeslice_duration_input.value(), 5.0)
         self.assertFalse(hasattr(self.viewer, "timeslice_time_label"))
-        self.assertEqual(self.viewer.accept_timeslice_button.text(), "Accept")
-        self.assertEqual(self.viewer.delete_timeslice_button.text(), "Delete")
+        self.assertEqual(self.viewer.accept_timeslice_button.text(), "Accept Slice")
+        self.assertEqual(self.viewer.delete_timeslice_button.text(), "Delete Slice")
 
     def test_timeline_duration_updates_bottom_and_sidebar_time_ranges(self):
         self.viewer.timeslice_duration_input.setValue(8.0)
@@ -900,17 +901,31 @@ class RobotViewerTimelineTests(unittest.TestCase):
         ]
         self.assertEqual(
             left_titles,
-            ["Robot", "Target", "Pose", "Trajectory", "Advanced IK", "View"],
+            ["Setup", "Target / Pose", "Time Slices", "View"],
         )
         self.assertEqual(
             right_titles,
-            ["Status"],
+            ["Selected Object", "IK / Constraints", "Status"],
         )
+        expected_visible = {
+            "Setup": False,
+            "Target / Pose": True,
+            "Time Slices": False,
+            "View": False,
+            "Selected Object": False,
+            "IK / Constraints": False,
+            "Status": True,
+        }
         for section in (
             self.window.left_sidebar_content.sections
             + self.window.right_sidebar_content.sections
         ):
-            self.assertFalse(section.content.isVisible())
+            self.assertEqual(
+                section.content.isVisible(),
+                expected_visible[section.title],
+            )
+        self.assertEqual(self.window.menuBar().actions(), [])
+        self.assertFalse(hasattr(self.window, "workflow_toolbar"))
         self.assertTrue(self.window.viewer_tabs.tabBar().isHidden())
         self.assertEqual(self.window.viewer_tabs.tabText(0), "3D Pose")
         self.assertIs(
@@ -929,6 +944,15 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertTrue(
             self.window.model_source_label.text().startswith("Model source:")
         )
+        self.assertFalse(self.window.status_details_button.isChecked())
+        self.assertFalse(self.window.status_details_panel.isVisible())
+        self.assertIsNone(self.window.backend_label.parent())
+        self.assertIsNone(self.window.viewer_time_label.parent())
+        self.assertIsNone(self.window.model_source_label.parent())
+        self.assertIs(
+            self.window.status_text.parent(),
+            self.window.status_details_panel,
+        )
         robot_labels = [
             label.text()
             for label in self.viewer.robot_context_widget().findChildren(QLabel)
@@ -936,12 +960,72 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertFalse(
             any(text.startswith("Model:") for text in robot_labels)
         )
+        self.assertIs(self.window.controls.robot_label.parent(), self.window.controls.robot_panel)
+        self.assertIs(self.window.controls.model_box.parent(), self.window.controls.robot_panel)
+        self.assertTrue(self.window.controls.phase_label.isHidden())
+        self.assertTrue(self.window.controls.phase_box.isHidden())
+        self.assertTrue(self.window.controls.table.isColumnHidden(1))
+        setup_widgets = set(self.window.controls.robot_panel.findChildren(QWidget))
+        for setup_widget in (
+            self.window.controls.import_action_label,
+            self.window.controls.import_action_box,
+            self.window.controls.export_action_label,
+            self.window.controls.export_action_box,
+        ):
+            self.assertIn(setup_widget, setup_widgets)
+        self.assertTrue(self.window.controls.open_model_button.isHidden())
+        self.assertTrue(self.window.controls.choose_mesh_folder_button.isHidden())
+        self.assertTrue(self.viewer.trajectory_csv_group.isHidden())
+        self.assertTrue(self.viewer.qpos_csv_group.isHidden())
+        self.assertTrue(self.viewer.trajectory_import_dt.isHidden())
+        self.assertEqual(
+            [
+                self.window.controls.import_action_box.itemText(index)
+                for index in range(self.window.controls.import_action_box.count())
+            ],
+            ["Model", "Qpos", "Trajectory"],
+        )
+        self.assertEqual(
+            [
+                self.window.controls.export_action_box.itemText(index)
+                for index in range(self.window.controls.export_action_box.count())
+            ],
+            ["Model", "Qpos", "Trajectory"],
+        )
+        self.window.controls.import_action_box.setCurrentIndex(1)
+        event = QWheelEvent(
+            QPointF(100, 15),
+            QPointF(100, 15),
+            QPoint(0, 0),
+            QPoint(0, 120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.NoScrollPhase,
+            False,
+        )
+        self.window.controls.import_action_box.wheelEvent(event)
+        self.assertEqual(self.window.controls.import_action_box.currentIndex(), 1)
+        self.assertEqual(self.viewer.trajectory_csv_group.title(), "Trajectory CSV")
+        self.assertEqual(self.viewer.qpos_csv_group.title(), "Qpos CSV")
+        self.assertEqual(self.viewer.load_trajectory_button.text(), "Load")
+        self.assertEqual(self.viewer.save_trajectory_button.text(), "Save")
+        self.assertEqual(self.viewer.load_qpos_button.text(), "Load")
+        self.assertEqual(self.viewer.save_qpos_button.text(), "Save")
         trajectory_widgets = set(
             self.window.controls.trajectory_panel.findChildren(QWidget)
         )
+        for timeslice_widget in (
+            self.window.controls.corner_smoothing_slider,
+            self.viewer.timeslice_step_label,
+            self.viewer.timeslice_step_input,
+            self.viewer.timeslice_duration_label,
+            self.viewer.timeslice_duration_input,
+            self.viewer.ghost_stride,
+            self.viewer.ghost_alpha,
+        ):
+            self.assertIn(timeslice_widget, trajectory_widgets)
         for removed_widget in (
             self.window.controls.time_slider,
-            self.window.controls.corner_smoothing_slider,
             self.window.controls.add_button,
             self.window.controls.update_button,
             self.window.controls.delete_button,
@@ -952,19 +1036,40 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.assertNotIn(removed_widget, trajectory_widgets)
         self.assertIs(
             self.window.controls.corner_smoothing_slider.parent(),
-            self.viewer.timeslice_editor,
+            self.viewer.timeslice_context_panel,
         )
-        self.assertIs(self.viewer.frame_slider.parent(), self.viewer.timeslice_editor)
         self.assertIs(
-            self.viewer.timeslice_layout.itemAt(0).layout(),
+            self.window.right_sidebar_content.sections[0].content,
+            self.window.controls.selection_detail_panel,
+        )
+        self.assertIs(
+            self.window.right_sidebar_content.sections[1].content,
+            self.window.controls.preview_ik_panel,
+        )
+        self.assertIs(
+            self.window.controls.display_context_widget().parent(),
+            self.window.controls.display_context_stack,
+        )
+        self.assertIs(self.viewer.frame_slider.parent(), self.viewer.timeslice_timeline_group)
+        self.assertIs(
+            self.viewer.timeslice_layout.itemAt(0).widget(),
+            self.viewer.timeslice_timeline_group,
+        )
+        self.assertEqual(self.viewer.timeslice_timeline_group.title(), "Timeline")
+        self.assertIs(
+            self.viewer.timeslice_timeline_layout.itemAt(0).layout(),
+            self.viewer.timeslice_scrubber_layout,
+        )
+        self.assertIs(
+            self.viewer.timeslice_scrubber_layout.itemAt(0).layout(),
             self.viewer.timeslice_time_row,
         )
         self.assertIs(
-            self.viewer.timeslice_layout.itemAt(1).layout(),
+            self.viewer.timeslice_scrubber_layout.itemAt(1).layout(),
             self.viewer.timeslice_frame_row,
         )
         self.assertIs(
-            self.viewer.timeslice_layout.itemAt(2).layout(),
+            self.viewer.timeslice_timeline_layout.itemAt(1).layout(),
             self.viewer.timeslice_action_row,
         )
         self.assertIs(
@@ -972,31 +1077,35 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.frame_slider,
         )
         self.assertIs(
-            self.viewer.timeslice_action_row.itemAt(0).widget(),
-            self.window.controls.corner_smoothing_slider,
+            self.window.controls.corner_smoothing_slider.parent(),
+            self.viewer.timeslice_context_panel,
         )
         self.assertIs(
-            self.viewer.timeslice_action_row.itemAt(1).widget(),
+            self.viewer.timeslice_context_layout.labelForField(
+                self.viewer.timeslice_step_input
+            ),
             self.viewer.timeslice_step_label,
         )
         self.assertIs(
-            self.viewer.timeslice_action_row.itemAt(2).widget(),
-            self.viewer.timeslice_step_input,
-        )
-        self.assertIs(
-            self.viewer.timeslice_action_row.itemAt(3).widget(),
+            self.viewer.timeslice_context_layout.labelForField(
+                self.viewer.timeslice_duration_input
+            ),
             self.viewer.timeslice_duration_label,
         )
         self.assertIs(
-            self.viewer.timeslice_action_row.itemAt(4).widget(),
-            self.viewer.timeslice_duration_input,
+            self.viewer.timeslice_step_input.parent(),
+            self.viewer.timeslice_context_panel,
         )
         self.assertIs(
-            self.viewer.timeslice_action_row.itemAt(6).widget(),
+            self.viewer.timeslice_duration_input.parent(),
+            self.viewer.timeslice_context_panel,
+        )
+        self.assertIs(
+            self.viewer.timeslice_action_row.itemAt(0).widget(),
             self.viewer.accept_timeslice_button,
         )
         self.assertIs(
-            self.viewer.timeslice_action_row.itemAt(7).widget(),
+            self.viewer.timeslice_action_row.itemAt(1).widget(),
             self.viewer.delete_timeslice_button,
         )
         self.assertIs(
@@ -1023,13 +1132,50 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(
             self.window.viewer_status_label.text(),
-            "Status: Viewer status moved",
+            "Viewer status moved",
+        )
+        self.assertEqual(self.window.status_frame_label.text(), "-")
+        self.assertEqual(self.window.status_ik_label.text(), "-")
+        self.assertEqual(self.window.status_move_label.text(), "-")
+        self.assertEqual(
+            self.window.status_text.toPlainText(),
+            "Viewer status moved",
+        )
+        verbose_status = (
+            "axis X; MuJoCo IK converged in 4 iterations; "
+            "state is collision-free; accepted=100%; IK error=0.0032; "
+            "tasks=3; frame=left_hand; model=G1; preview not committed"
+        )
+        self.viewer.status_label.setText(verbose_status)
+        self.app.processEvents()
+        self.assertEqual(
+            self.window.viewer_status_label.text(),
+            "Preview",
+        )
+        self.assertEqual(self.window.status_frame_label.text(), "left hand")
+        self.assertEqual(self.window.status_ik_label.text(), "0.0032 m")
+        self.assertEqual(self.window.status_move_label.text(), "100%")
+        self.assertIn(
+            "MuJoCo IK converged in 4 iterations\nstate is collision-free",
+            self.window.status_text.toPlainText(),
         )
         self.assertTrue(self.window.viewer_time_label.text().startswith("Time:"))
-        self.assertTrue(self.window.viewer_root_pose_label.text().startswith("Root:"))
+        self.assertFalse(self.window.viewer_root_pose_label.text().startswith("Root:"))
+        singular_status = verbose_status.replace(
+            "model=G1",
+            "model=G1; near singularity sigma_min=1.00e-10, cond=9.90e+09",
+        )
+        self.viewer.status_label.setText(singular_status)
+        self.app.processEvents()
+        self.assertEqual(self.window.viewer_status_label.text(), "Preview")
+        self.assertIn("near singularity", self.window.status_text.toPlainText())
+        self.assertFalse(self.window.status_details_panel.isVisible())
+        self.window.status_details_button.setChecked(True)
+        self.app.processEvents()
+        self.assertTrue(self.window.status_details_panel.isVisible())
         preview_section = next(
-            section for section in self.window.left_sidebar_content.sections
-            if section.title == "Advanced IK"
+            section for section in self.window.right_sidebar_content.sections
+            if section.title == "IK / Constraints"
         )
         preview_section.set_expanded(True)
         ik_tabs = self.viewer.preview_ik_context_widget().findChild(QTabWidget)
@@ -1065,7 +1211,11 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertIs(
             self.window.controls.trajectory_context_widget(),
-            self.viewer.trajectory_context_widget(),
+            self.window.controls.trajectory_context_stack.empty_widget,
+        )
+        self.assertIs(
+            self.window.controls.timeslice_context_widget(),
+            self.viewer.timeslice_context_widget(),
         )
         self.assertIs(
             self.window.controls.display_context_widget(),
@@ -1349,6 +1499,34 @@ class RobotViewerTimelineTests(unittest.TestCase):
             3 * len(self.window.editable_logical_frame_names()),
         )
         self.assertEqual(self.viewer.timeslice_slider.defined_times, {0.0, 0.05, 0.10})
+
+    def test_setup_trajectory_import_prompts_for_time_step(self):
+        base = self.viewer.robot_model.home_qpos.copy()
+        rows = []
+        for index in range(11):
+            qpos = base.copy()
+            qpos[-1] += index * 0.01
+            rows.append(np.concatenate(([index * 0.01], qpos)))
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "dense_trajectory.csv"
+            np.savetxt(source, np.vstack(rows), delimiter=",")
+            with (
+                patch(
+                    "gui.robot_viewer_3d.QFileDialog.getOpenFileName",
+                    return_value=(str(source), ""),
+                ),
+                patch(
+                    "gui.main_window.QInputDialog.getDouble",
+                    return_value=(0.05, True),
+                ) as prompt,
+            ):
+                self.window.on_setup_import_requested("trajectory")
+
+        prompt.assert_called_once()
+        self.assertAlmostEqual(self.viewer.trajectory_import_dt.value(), 0.05)
+        editable_times = sorted({frame.time for frame in self.window.trajectory.frames})
+        np.testing.assert_allclose(editable_times, [0.0, 0.05, 0.10])
 
     def test_loaded_trajectory_csv_can_be_cleared_from_keyframe_controls(self):
         first = self.viewer.robot_model.home_qpos.copy()

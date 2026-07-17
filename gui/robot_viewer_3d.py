@@ -121,6 +121,7 @@ class RobotViewer3D(QWidget):
         )
         self.robot_trajectory = []
         self.robot_trajectory_times = []
+        self._prompt_trajectory_import_dt_on_load = False
         self.ghost_trajectory = []
         self.ghost_source = None
         self.joint_controls = {}
@@ -194,10 +195,18 @@ class RobotViewer3D(QWidget):
         self.trajectory_context_panel = QWidget()
         trajectory_context_layout = QVBoxLayout(self.trajectory_context_panel)
         trajectory_context_layout.setContentsMargins(6, 6, 6, 6)
-        self.load_qpos_button = QPushButton("Load qpos")
-        self.load_trajectory_button = QPushButton("Load traj CSV")
-        self.save_qpos_button = QPushButton("Save qpos")
-        self.save_trajectory_button = QPushButton("Save traj CSV")
+        self.load_qpos_button = QPushButton("Load")
+        self.load_trajectory_button = QPushButton("Load")
+        self.save_qpos_button = QPushButton("Save")
+        self.save_trajectory_button = QPushButton("Save")
+        for button in (
+            self.load_qpos_button,
+            self.load_trajectory_button,
+            self.save_qpos_button,
+            self.save_trajectory_button,
+        ):
+            button.setMinimumWidth(0)
+            button.setMaximumWidth(104)
         self.trajectory_import_dt = QDoubleSpinBox()
         self.trajectory_import_dt.setDecimals(2)
         self.trajectory_import_dt.setRange(0.01, 10.0)
@@ -205,20 +214,27 @@ class RobotViewer3D(QWidget):
         self.trajectory_import_dt.setValue(0.10)
         self.trajectory_import_dt.setSuffix(" s")
         self.trajectory_import_dt.setMaximumWidth(76)
+        self.trajectory_import_dt.setVisible(False)
         self.load_qpos_button.clicked.connect(self.choose_qpos_csv)
         self.load_trajectory_button.clicked.connect(self.choose_trajectory_csv)
         self.save_qpos_button.clicked.connect(self.choose_qpos_save_path)
         self.save_trajectory_button.clicked.connect(
             self.choose_trajectory_save_path
         )
-        trajectory_context_layout.addWidget(self.load_qpos_button)
-        trajectory_context_layout.addWidget(self.load_trajectory_button)
-        import_dt_layout = QFormLayout()
-        import_dt_layout.setContentsMargins(0, 0, 0, 0)
-        import_dt_layout.addRow("Import dt", self.trajectory_import_dt)
-        trajectory_context_layout.addLayout(import_dt_layout)
-        trajectory_context_layout.addWidget(self.save_qpos_button)
-        trajectory_context_layout.addWidget(self.save_trajectory_button)
+        self.trajectory_csv_group = QGroupBox("Trajectory CSV")
+        trajectory_csv_layout = QHBoxLayout(self.trajectory_csv_group)
+        trajectory_csv_layout.setContentsMargins(6, 6, 6, 6)
+        trajectory_csv_layout.setSpacing(4)
+        trajectory_csv_layout.addWidget(self.load_trajectory_button)
+        trajectory_csv_layout.addWidget(self.save_trajectory_button)
+        self.trajectory_csv_group.setVisible(False)
+        self.qpos_csv_group = QGroupBox("Qpos CSV")
+        qpos_csv_layout = QHBoxLayout(self.qpos_csv_group)
+        qpos_csv_layout.setContentsMargins(6, 6, 6, 6)
+        qpos_csv_layout.setSpacing(4)
+        qpos_csv_layout.addWidget(self.load_qpos_button)
+        qpos_csv_layout.addWidget(self.save_qpos_button)
+        self.qpos_csv_group.setVisible(False)
 
         self.selection_context_panel = QWidget()
         target_layout = QFormLayout(self.selection_context_panel)
@@ -281,10 +297,12 @@ class RobotViewer3D(QWidget):
         preview_layout.addLayout(alpha_row)
         preview_ik_layout.addWidget(preview_group)
 
-        trajectory_group = QWidget()
-        trajectory_layout = QFormLayout(trajectory_group)
-        trajectory_layout.setContentsMargins(0, 8, 0, 0)
-        trajectory_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        self.timeslice_context_panel = QWidget()
+        self.timeslice_context_layout = QFormLayout(self.timeslice_context_panel)
+        self.timeslice_context_layout.setContentsMargins(6, 6, 6, 6)
+        self.timeslice_context_layout.setRowWrapPolicy(
+            QFormLayout.RowWrapPolicy.WrapLongRows
+        )
         self.generate_button = QPushButton("Demo trajectory")
         self.generate_button.clicked.connect(self.generate_demo_trajectory)
         self.play_button = QPushButton("Play")
@@ -303,9 +321,8 @@ class RobotViewer3D(QWidget):
         self.ghost_alpha.setSingleStep(0.05)
         self.ghost_alpha.setValue(0.16)
         self.ghost_alpha.valueChanged.connect(self._update_ghost_options)
-        trajectory_layout.addRow("Pose stride", self.ghost_stride)
-        trajectory_layout.addRow("Pose alpha", self.ghost_alpha)
-        trajectory_context_layout.addWidget(trajectory_group)
+        self.timeslice_context_layout.addRow("Pose stride", self.ghost_stride)
+        self.timeslice_context_layout.addRow("Pose alpha", self.ghost_alpha)
 
         editor_tabs = QTabWidget()
         editor_tabs.setMinimumWidth(0)
@@ -345,7 +362,7 @@ class RobotViewer3D(QWidget):
         self.save_qpos_button.setEnabled(enabled)
         self.save_trajectory_button.setEnabled(enabled)
         self.selection_context_panel.setEnabled(enabled)
-        trajectory_group.setEnabled(enabled)
+        self.timeslice_context_panel.setEnabled(enabled)
         preview_group.setEnabled(enabled)
         self.quick_actions_panel.setEnabled(enabled)
         self.timeslice_editor.setEnabled(enabled)
@@ -450,11 +467,11 @@ class RobotViewer3D(QWidget):
             self._emit_timeslice_input_time
         )
 
-        self.accept_timeslice_button = QPushButton("Accept")
+        self.accept_timeslice_button = QPushButton("Accept Slice")
         self.accept_timeslice_button.clicked.connect(self.accept_timeslice)
-        self.delete_timeslice_button = QPushButton("Delete")
+        self.delete_timeslice_button = QPushButton("Delete Slice")
         self.delete_timeslice_button.clicked.connect(self.delete_timeslice)
-        self.timeslice_step_label = QLabel("Time Step/Slice")
+        self.timeslice_step_label = QLabel("Step")
         self.timeslice_step_input = QDoubleSpinBox()
         _compact_spinbox(self.timeslice_step_input, width=72)
         self.timeslice_step_input.setRange(0.01, 5.0)
@@ -489,20 +506,33 @@ class RobotViewer3D(QWidget):
         self.timeslice_frame_row.addWidget(self.timeslice_frame_label)
         self.timeslice_frame_row.addWidget(self.frame_slider, stretch=1)
 
-        self.timeslice_action_row = QHBoxLayout()
+        self.timeslice_context_layout.addRow(
+            self.timeslice_step_label, self.timeslice_step_input
+        )
+        self.timeslice_context_layout.addRow(
+            self.timeslice_duration_label, self.timeslice_duration_input
+        )
+
+        self.timeslice_timeline_group = QGroupBox("Timeline")
+        self.timeslice_timeline_layout = QHBoxLayout(self.timeslice_timeline_group)
+        self.timeslice_timeline_layout.setContentsMargins(6, 6, 6, 6)
+        self.timeslice_timeline_layout.setSpacing(8)
+        self.timeslice_scrubber_layout = QVBoxLayout()
+        self.timeslice_scrubber_layout.setContentsMargins(0, 0, 0, 0)
+        self.timeslice_scrubber_layout.setSpacing(3)
+        self.timeslice_scrubber_layout.addLayout(self.timeslice_time_row)
+        self.timeslice_scrubber_layout.addLayout(self.timeslice_frame_row)
+        self.timeslice_action_row = QVBoxLayout()
         self.timeslice_action_row.setContentsMargins(0, 0, 0, 0)
-        self.timeslice_action_row.setSpacing(8)
-        self.timeslice_action_row.addWidget(self.timeslice_step_label)
-        self.timeslice_action_row.addWidget(self.timeslice_step_input)
-        self.timeslice_action_row.addWidget(self.timeslice_duration_label)
-        self.timeslice_action_row.addWidget(self.timeslice_duration_input)
-        self.timeslice_action_row.addStretch(1)
+        self.timeslice_action_row.setSpacing(4)
         self.timeslice_action_row.addWidget(self.accept_timeslice_button)
         self.timeslice_action_row.addWidget(self.delete_timeslice_button)
+        self.timeslice_timeline_layout.addLayout(
+            self.timeslice_scrubber_layout, stretch=1
+        )
+        self.timeslice_timeline_layout.addLayout(self.timeslice_action_row)
 
-        self.timeslice_layout.addLayout(self.timeslice_time_row)
-        self.timeslice_layout.addLayout(self.timeslice_frame_row)
-        self.timeslice_layout.addLayout(self.timeslice_action_row)
+        self.timeslice_layout.addWidget(self.timeslice_timeline_group)
         return self.timeslice_editor
 
     def set_defined_timeslices(self, times):
@@ -512,16 +542,16 @@ class RobotViewer3D(QWidget):
         if widget is None:
             return
         if (
-            widget.parent() is self.timeslice_editor
+            widget.parent() is self.timeslice_context_panel
             and getattr(self, "smoothing_widget", None) is widget
         ):
             return
-        if widget.parent() is not self.timeslice_editor:
-            widget.setParent(self.timeslice_editor)
+        if widget.parent() is not self.timeslice_context_panel:
+            widget.setParent(self.timeslice_context_panel)
         widget.setMinimumWidth(max(widget.minimumWidth(), 232))
         widget.setMaximumWidth(max(widget.maximumWidth(), 240))
         self.smoothing_widget = widget
-        self.timeslice_action_row.insertWidget(0, widget)
+        self.timeslice_context_layout.insertRow(0, widget)
 
     def set_trajectory_display_widgets(self, keyframes_widget, lines_widget):
         widgets = [
@@ -624,7 +654,17 @@ class RobotViewer3D(QWidget):
         return self.selection_context_panel
 
     def trajectory_context_widget(self):
-        return self.trajectory_context_panel
+        return None
+
+    def consume_trajectory_import_dt_prompt_request(self):
+        requested = bool(
+            getattr(self, "_prompt_trajectory_import_dt_on_load", False)
+        )
+        self._prompt_trajectory_import_dt_on_load = False
+        return requested
+
+    def timeslice_context_widget(self):
+        return self.timeslice_context_panel
 
     def display_context_widget(self):
         return self.display_context_panel
@@ -1348,7 +1388,7 @@ class RobotViewer3D(QWidget):
             except (OSError, ValueError) as exc:
                 self.status_label.setText(f"Could not load qpos CSV: {exc}")
 
-    def choose_trajectory_csv(self):
+    def choose_trajectory_csv(self, prompt_import_dt=False):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Load robot trajectory",
@@ -1357,8 +1397,10 @@ class RobotViewer3D(QWidget):
         )
         if path:
             try:
+                self._prompt_trajectory_import_dt_on_load = bool(prompt_import_dt)
                 self.load_trajectory_csv(path)
             except (OSError, ValueError) as exc:
+                self._prompt_trajectory_import_dt_on_load = False
                 self.status_label.setText(
                     f"Could not load trajectory CSV: {exc}"
                 )

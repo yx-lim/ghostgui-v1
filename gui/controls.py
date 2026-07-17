@@ -122,6 +122,11 @@ class LabeledSlider(QWidget):
         self.value_changed.emit(self.value())
 
 
+class NoWheelComboBox(QComboBox):
+    def wheelEvent(self, event):
+        event.ignore()
+
+
 class TrajectoryControlPanel(QGroupBox):
     """
     Left-side panel for creating trajectory keyframes.
@@ -160,6 +165,8 @@ class TrajectoryControlPanel(QGroupBox):
     model_changed = Signal(str)
     open_model_clicked = Signal()
     choose_mesh_folder_clicked = Signal()
+    setup_import_requested = Signal(str)
+    setup_export_requested = Signal(str)
 
     def __init__(self, model_registry=None, model_key="g1", frame_names=None):
         super().__init__("Reference Frame Trajectory Editor")
@@ -179,13 +186,20 @@ class TrajectoryControlPanel(QGroupBox):
 
         self.robot_panel, robot_layout = self._make_section_panel()
         self.target_panel, self.target_layout = self._make_section_panel()
-        self.transform_panel, transform_layout = self._make_section_panel()
+        self.transform_panel = self.target_panel
+        transform_layout = self.target_layout
         self.preview_ik_panel, self.preview_ik_layout = self._make_section_panel()
+        self.selection_detail_panel, self.selection_detail_layout = (
+            self._make_section_panel()
+        )
         self.trajectory_panel, self.trajectory_layout = self._make_section_panel()
         self.view_panel, self.view_layout = self._make_section_panel()
 
         if self.model_registry:
-            robot_layout.addWidget(QLabel("Robot model"))
+            robot_row = QHBoxLayout()
+            robot_row.setContentsMargins(0, 0, 0, 0)
+            robot_row.setSpacing(6)
+            self.robot_label = QLabel("Robot")
             self.model_box = QComboBox()
             for key, info in self.model_registry.items():
                 self.model_box.addItem(info.display_name, key)
@@ -195,15 +209,52 @@ class TrajectoryControlPanel(QGroupBox):
             self.model_box.currentIndexChanged.connect(
                 lambda index: self.model_changed.emit(self.model_box.itemData(index))
             )
-            robot_layout.addWidget(self.model_box)
-            self.open_model_button = QPushButton("Upload Model")
+            robot_row.addWidget(self.robot_label)
+            robot_row.addWidget(self.model_box, stretch=1)
+            robot_layout.addLayout(robot_row)
+
+            import_row = QHBoxLayout()
+            import_row.setContentsMargins(0, 0, 0, 0)
+            import_row.setSpacing(6)
+            self.import_action_label = QLabel("Import")
+            self.import_action_box = NoWheelComboBox()
+            self.import_action_box.setPlaceholderText("Select...")
+            self.import_action_box.addItem("Model", "model")
+            self.import_action_box.addItem("Qpos", "qpos")
+            self.import_action_box.addItem("Trajectory", "trajectory")
+            self.import_action_box.setCurrentIndex(-1)
+            self.import_action_box.activated.connect(
+                self._emit_setup_import_action
+            )
+            import_row.addWidget(self.import_action_label)
+            import_row.addWidget(self.import_action_box, stretch=1)
+            robot_layout.addLayout(import_row)
+
+            export_row = QHBoxLayout()
+            export_row.setContentsMargins(0, 0, 0, 0)
+            export_row.setSpacing(6)
+            self.export_action_label = QLabel("Export")
+            self.export_action_box = NoWheelComboBox()
+            self.export_action_box.setPlaceholderText("Select...")
+            self.export_action_box.addItem("Model", "model")
+            self.export_action_box.addItem("Qpos", "qpos")
+            self.export_action_box.addItem("Trajectory", "trajectory")
+            self.export_action_box.setCurrentIndex(-1)
+            self.export_action_box.activated.connect(
+                self._emit_setup_export_action
+            )
+            export_row.addWidget(self.export_action_label)
+            export_row.addWidget(self.export_action_box, stretch=1)
+            robot_layout.addLayout(export_row)
+
+            self.open_model_button = QPushButton("Import Model")
+            self.open_model_button.setVisible(False)
             self.open_model_button.clicked.connect(self.open_model_clicked.emit)
-            robot_layout.addWidget(self.open_model_button)
-            self.choose_mesh_folder_button = QPushButton("Mesh Folder (.stl)")
+            self.choose_mesh_folder_button = QPushButton("Meshes")
+            self.choose_mesh_folder_button.setVisible(False)
             self.choose_mesh_folder_button.clicked.connect(
                 self.choose_mesh_folder_clicked.emit
             )
-            robot_layout.addWidget(self.choose_mesh_folder_button)
 
         # --------------------------------------------------------
         # Select which robot frame this target refers to
@@ -222,11 +273,13 @@ class TrajectoryControlPanel(QGroupBox):
         self.frame_box.setCurrentText(preferred)
         self.frame_box.currentTextChanged.connect(self.frame_name_changed.emit)
         self.target_layout.addWidget(self.frame_box)
+        self.target_layout.addWidget(QLabel("Transform"))
 
         # --------------------------------------------------------
         # Motion phase
         # --------------------------------------------------------
-        self.trajectory_layout.addWidget(QLabel("Motion phase"))
+        self.phase_label = QLabel("Motion phase")
+        self.phase_label.setVisible(False)
 
         self.phase_box = QComboBox()
         self.phase_box.setSizeAdjustPolicy(
@@ -239,7 +292,7 @@ class TrajectoryControlPanel(QGroupBox):
             "flight",
             "landing",
         ])
-        self.trajectory_layout.addWidget(self.phase_box)
+        self.phase_box.setVisible(False)
 
         # --------------------------------------------------------
         # Sliders for target reference-frame pose
@@ -387,6 +440,7 @@ class TrajectoryControlPanel(QGroupBox):
             "pitch",
             "yaw",
         ])
+        self.table.setColumnHidden(1, True)
         self.table.cellClicked.connect(self.on_table_cell_clicked)
 
         self.trajectory_layout.addWidget(QLabel("Trajectory keyframes"))
@@ -395,13 +449,15 @@ class TrajectoryControlPanel(QGroupBox):
         self.robot_context_stack = self._make_context_stack()
         self.target_context_stack = self._make_context_stack()
         self.trajectory_context_stack = self._make_context_stack()
+        self.timeslice_context_stack = self._make_context_stack()
         self.preview_ik_context_stack = self._make_context_stack()
-        self.robot_view_context_stack = self._make_context_stack()
+        self.display_context_stack = self._make_context_stack()
         robot_layout.addWidget(self.robot_context_stack)
-        self.target_layout.addWidget(self.target_context_stack)
-        self.trajectory_layout.addWidget(self.trajectory_context_stack)
+        self.selection_detail_layout.addWidget(self.target_context_stack)
+        robot_layout.addWidget(self.trajectory_context_stack)
+        self.trajectory_layout.addWidget(self.timeslice_context_stack)
         self.preview_ik_layout.addWidget(self.preview_ik_context_stack)
-        robot_layout.addWidget(self.robot_view_context_stack)
+        self.view_layout.addWidget(self.display_context_stack)
 
     def _make_section_panel(self):
         panel = QWidget()
@@ -428,6 +484,18 @@ class TrajectoryControlPanel(QGroupBox):
         stack.setCurrentWidget(widget)
         stack.setVisible(widget is not stack.empty_widget)
 
+    def _emit_setup_import_action(self, index):
+        action = self.import_action_box.itemData(index)
+        self.import_action_box.setCurrentIndex(-1)
+        if action:
+            self.setup_import_requested.emit(action)
+
+    def _emit_setup_export_action(self, index):
+        action = self.export_action_box.itemData(index)
+        self.export_action_box.setCurrentIndex(-1)
+        if action:
+            self.setup_export_requested.emit(action)
+
     def set_selection_context_widget(self, widget):
         self._set_context_widget(self.target_context_stack, widget)
 
@@ -437,8 +505,11 @@ class TrajectoryControlPanel(QGroupBox):
     def set_trajectory_context_widget(self, widget):
         self._set_context_widget(self.trajectory_context_stack, widget)
 
+    def set_timeslice_context_widget(self, widget):
+        self._set_context_widget(self.timeslice_context_stack, widget)
+
     def set_display_context_widget(self, widget):
-        self._set_context_widget(self.robot_view_context_stack, widget)
+        self._set_context_widget(self.display_context_stack, widget)
 
     def set_preview_ik_context_widget(self, widget):
         self._set_context_widget(self.preview_ik_context_stack, widget)
@@ -452,23 +523,27 @@ class TrajectoryControlPanel(QGroupBox):
     def trajectory_context_widget(self):
         return self.trajectory_context_stack.currentWidget()
 
+    def timeslice_context_widget(self):
+        return self.timeslice_context_stack.currentWidget()
+
     def display_context_widget(self):
-        return self.robot_view_context_stack.currentWidget()
+        return self.display_context_stack.currentWidget()
 
     def preview_ik_context_widget(self):
         return self.preview_ik_context_stack.currentWidget()
 
     def workflow_sections(self):
         return [
-            ("Robot", self.robot_panel, True),
-            ("Target", self.target_panel, True),
-            ("Pose", self.transform_panel, True),
-            ("Trajectory", self.trajectory_panel, True),
-            ("Advanced IK", self.preview_ik_panel, False),
+            ("Setup", self.robot_panel, False),
+            ("Target / Pose", self.target_panel, True),
+            ("Time Slices", self.trajectory_panel, False),
         ]
 
     def inspector_sections(self):
-        return []
+        return [
+            ("Selected Object", self.selection_detail_panel, False),
+            ("IK / Constraints", self.preview_ik_panel, False),
+        ]
 
     def set_frame_names(self, frame_names, preferred=None):
         """Replace target choices without emitting an intermediate selection."""

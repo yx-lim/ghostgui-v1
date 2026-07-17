@@ -97,7 +97,7 @@ class AppSidebar(QWidget):
 
     def add_section(self, title, widget, expanded=True):
         widget.setMaximumWidth(self.SECTION_MAX_WIDTH - 16)
-        section = CollapsibleSection(title, widget, expanded=False)
+        section = CollapsibleSection(title, widget, expanded=expanded)
         section.setMaximumWidth(self.SECTION_MAX_WIDTH)
         self.body_layout.addWidget(section)
         self.sections.append(section)

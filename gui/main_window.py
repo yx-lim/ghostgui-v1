@@ -14,6 +14,7 @@ Updated project flow:
 
 from dataclasses import dataclass, replace
 from pathlib import Path
+import shutil
 
 from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -30,7 +31,9 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QProgressBar,
     QFileDialog,
+    QInputDialog,
     QMessageBox,
+    QToolButton,
 )
 
 from core.trajectory import (
@@ -335,7 +338,9 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
         self.status_panel = self.build_status_panel()
         self.left_sidebar_content = AppLeftSidebar(self.controls, self.viewer_tabs)
-        self.right_sidebar_content = AppRightSidebar(self.status_panel)
+        self.right_sidebar_content = AppRightSidebar(
+            self.status_panel, self.controls.inspector_sections()
+        )
         self.left_sidebar = self.left_sidebar_content
         self.right_sidebar = self.right_sidebar_content
         self.left_sidebar.setMinimumWidth(LEFT_SIDEBAR_WIDTH)
@@ -404,12 +409,18 @@ class RobotGuiMainWindow(QMainWindow):
         panel.setMaximumWidth(244)
         layout = QVBoxLayout()
         layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setSpacing(6)
 
         self.backend_label = QLabel()
         self.backend_label.setWordWrap(True)
         self.viewer_status_label = QLabel()
         self.viewer_status_label.setWordWrap(True)
+        self.status_frame_label = QLabel("-")
+        self.status_frame_label.setWordWrap(True)
+        self.status_ik_label = QLabel("-")
+        self.status_ik_label.setWordWrap(True)
+        self.status_move_label = QLabel("-")
+        self.status_move_label.setWordWrap(True)
         self.viewer_time_label = QLabel()
         self.viewer_time_label.setWordWrap(True)
         self.viewer_root_pose_label = QLabel()
@@ -420,15 +431,50 @@ class RobotGuiMainWindow(QMainWindow):
         self.status_text.setReadOnly(True)
         self.status_text.setMinimumWidth(0)
         self.status_text.setMaximumWidth(236)
-        self.status_text.setMinimumHeight(240)
+        self.status_text.setMinimumHeight(120)
         self.status_text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
 
-        layout.addWidget(self.backend_label)
-        layout.addWidget(self.viewer_status_label)
-        layout.addWidget(self.viewer_time_label)
-        layout.addWidget(self.viewer_root_pose_label)
-        layout.addWidget(self.model_source_label)
-        layout.addWidget(self.status_text)
+        def add_summary_row(name, value_widget):
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            label = QLabel(name)
+            label.setMinimumWidth(42)
+            row.addWidget(label)
+            row.addWidget(value_widget, stretch=1)
+            layout.addLayout(row)
+
+        add_summary_row("State", self.viewer_status_label)
+        add_summary_row("Frame", self.status_frame_label)
+        add_summary_row("IK", self.status_ik_label)
+        add_summary_row("Move", self.status_move_label)
+        add_summary_row("Root", self.viewer_root_pose_label)
+
+        self.status_details_button = QToolButton()
+        self.status_details_button.setText("Details")
+        self.status_details_button.setCheckable(True)
+        self.status_details_button.setChecked(False)
+        self.status_details_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.status_details_button.setArrowType(Qt.ArrowType.RightArrow)
+
+        self.status_details_panel = QWidget()
+        details_layout = QVBoxLayout(self.status_details_panel)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.setSpacing(4)
+        details_layout.addWidget(self.status_text)
+        self.status_details_panel.setVisible(False)
+
+        def set_details_visible(visible):
+            self.status_details_panel.setVisible(visible)
+            self.status_details_button.setArrowType(
+                Qt.ArrowType.DownArrow if visible else Qt.ArrowType.RightArrow
+            )
+
+        self.status_details_button.toggled.connect(set_details_visible)
+        layout.addWidget(self.status_details_button)
+        layout.addWidget(self.status_details_panel)
 
         panel.setLayout(layout)
         return panel
@@ -593,6 +639,9 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.set_trajectory_context_widget(
                 self.viewer_3d.trajectory_context_widget()
             )
+            self.controls.set_timeslice_context_widget(
+                self.viewer_3d.timeslice_context_widget()
+            )
             self.controls.set_display_context_widget(
                 self.viewer_3d.display_context_widget()
             )
@@ -608,6 +657,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.set_robot_context_widget(None)
             self.controls.set_selection_context_widget(None)
             self.controls.set_trajectory_context_widget(None)
+            self.controls.set_timeslice_context_widget(None)
             self.controls.set_display_context_widget(None)
             self.controls.set_preview_ik_context_widget(None)
 
@@ -619,6 +669,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.model_changed.connect(self.on_model_changed)
         self.controls.open_model_clicked.connect(self.on_open_model_file)
         self.controls.choose_mesh_folder_clicked.connect(self.on_choose_mesh_folder)
+        self.controls.setup_import_requested.connect(self.on_setup_import_requested)
+        self.controls.setup_export_requested.connect(self.on_setup_export_requested)
         self.controls.pose_changed.connect(self.on_pose_changed)
         self.controls.add_keyframe_clicked.connect(self.on_add_keyframe)
         self.controls.update_keyframe_clicked.connect(self.on_update_keyframe)
@@ -871,7 +923,66 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_viewer_status_changed(self, viewer, text):
         if viewer is self.viewer_3d:
-            self.viewer_status_label.setText(f"Status: {text}")
+            status = self.format_viewer_status(text)
+            self.viewer_status_label.setText(status["state"])
+            self.status_frame_label.setText(status["frame"])
+            self.status_ik_label.setText(status["ik"])
+            self.status_move_label.setText(status["move"])
+            self.status_text.setText(status["detail"])
+
+    def format_viewer_status(self, text):
+        detail = self.format_status_detail(text)
+        parts = [part.strip() for part in str(text).split(";") if part.strip()]
+        if not self.is_verbose_ik_status(parts):
+            return {
+                "state": str(text).splitlines()[0],
+                "frame": "-",
+                "ik": "-",
+                "move": "-",
+                "detail": detail,
+            }
+
+        frame = self.status_field(parts, "frame") or "selected frame"
+        frame = frame.replace("_", " ")
+        accepted = self.status_field(parts, "accepted")
+        ik_error = self.status_field(parts, "IK error")
+        lower_text = str(text).lower()
+        state = "Preview"
+
+        if "collision blocked" in lower_text:
+            state = "Blocked: collision"
+        elif "ik blocked" in lower_text:
+            state = "Blocked: IK"
+
+        return {
+            "state": state,
+            "frame": frame,
+            "ik": f"{ik_error} m" if ik_error else "-",
+            "move": accepted or "-",
+            "detail": detail,
+        }
+
+    def is_verbose_ik_status(self, parts):
+        fields = {"accepted", "IK error", "frame"}
+        found = {
+            part.split("=", 1)[0].strip()
+            for part in parts
+            if "=" in part
+        }
+        return fields.issubset(found)
+
+    def status_field(self, parts, name):
+        prefix = f"{name}="
+        for part in parts:
+            if part.startswith(prefix):
+                return part[len(prefix):].strip()
+        return None
+
+    def format_status_detail(self, text):
+        parts = [part.strip() for part in str(text).split(";") if part.strip()]
+        if len(parts) <= 1:
+            return str(text)
+        return "\n".join(parts)
 
     def on_viewer_time_changed(self, viewer, text):
         if viewer is self.viewer_3d:
@@ -879,7 +990,7 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_viewer_root_pose_changed(self, viewer, text):
         if viewer is self.viewer_3d:
-            self.viewer_root_pose_label.setText(f"Root: {text}")
+            self.viewer_root_pose_label.setText(text)
 
     def sync_viewer_status_panel(self):
         self.on_viewer_status_changed(
@@ -956,6 +1067,59 @@ class RobotGuiMainWindow(QMainWindow):
         if not path:
             return
         self.import_model_file(path)
+
+    def on_setup_import_requested(self, action):
+        if action == "model":
+            self.on_open_model_file()
+        elif action == "qpos":
+            self.viewer_3d.choose_qpos_csv()
+        elif action == "trajectory":
+            self.viewer_3d.choose_trajectory_csv(prompt_import_dt=True)
+
+    def on_setup_export_requested(self, action):
+        if action == "model":
+            self.on_export_model_file()
+        elif action == "qpos":
+            self.viewer_3d.choose_qpos_save_path()
+        elif action == "trajectory":
+            self.viewer_3d.choose_trajectory_save_path()
+
+    def on_export_model_file(self):
+        source_path = getattr(self.robot_model_3d, "model_path", None)
+        if source_path is None:
+            QMessageBox.warning(
+                self,
+                "Export model failed",
+                "No active model source is available.",
+            )
+            return
+        source_path = Path(source_path)
+        if not source_path.exists():
+            QMessageBox.warning(
+                self,
+                "Export model failed",
+                f"Model source file not found: {source_path}",
+            )
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export robot model",
+            str(Path.home() / source_path.name),
+            "Robot model files (*.urdf *.xml);;All files (*)",
+        )
+        if not path:
+            return
+        destination = Path(path).expanduser().resolve()
+        try:
+            shutil.copy2(source_path, destination)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Export model failed",
+                f"Could not export model: {exc}",
+            )
+            return
+        self.status_text.setText(f"Exported model to {destination}")
 
     def on_choose_mesh_folder(self):
         path = QFileDialog.getExistingDirectory(
@@ -1052,6 +1216,8 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_trajectory_csv_loaded(self, csv_path):
         self.viewer_3d_mujoco.set_trajectory_csv(csv_path)
+        if self.viewer_3d.consume_trajectory_import_dt_prompt_request():
+            self.prompt_trajectory_import_dt()
         count = self.import_loaded_robot_trajectory_as_keyframes()
         import_dt = self.viewer_3d.trajectory_import_dt.value()
         self.status_text.setText(
@@ -1060,6 +1226,20 @@ class RobotGuiMainWindow(QMainWindow):
             f"at {import_dt:.2f} s intervals."
         )
         self.record_history_action("Load trajectory")
+
+    def prompt_trajectory_import_dt(self):
+        current = self.viewer_3d.trajectory_import_dt.value()
+        value, accepted = QInputDialog.getDouble(
+            self,
+            "Import trajectory time step",
+            "Editable keyframe interval [s]",
+            current,
+            0.01,
+            10.0,
+            2,
+        )
+        if accepted:
+            self.viewer_3d.trajectory_import_dt.setValue(value)
 
     # ============================================================
     # GUI interaction callbacks
@@ -1590,23 +1770,3 @@ class RobotGuiMainWindow(QMainWindow):
             f"Backend: {self.backend_interface.backend_name()}"
         )
         self.sync_viewer_status_panel()
-
-        summary = []
-        summary.append(f"Number of keyframes: {len(self.trajectory.frames)}")
-        summary.append("")
-        summary.append("Current edited target frame:")
-        summary.append(f"time: {active_frame.time:.2f} s")
-        summary.append(f"phase: {active_frame.phase}")
-        summary.append(f"frame: {active_frame.frame_name}")
-        summary.append(
-            f"position: x={active_frame.x:.2f}, "
-            f"y={active_frame.y:.2f}, "
-            f"z={active_frame.z:.2f}"
-        )
-        summary.append(
-            f"orientation: roll={active_frame.roll:.2f}, "
-            f"pitch={active_frame.pitch:.2f}, "
-            f"yaw={active_frame.yaw:.2f}"
-        )
-
-        self.status_text.setText("\n".join(summary))
