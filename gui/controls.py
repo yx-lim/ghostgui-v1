@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.trajectory import TargetFrame
+from .theme import THEME_MODES
 
 
 class LabeledSlider(QWidget):
@@ -167,6 +168,7 @@ class TrajectoryControlPanel(QGroupBox):
     choose_mesh_folder_clicked = Signal()
     setup_import_requested = Signal(str)
     setup_export_requested = Signal(str)
+    theme_mode_changed = Signal(str)
 
     def __init__(self, model_registry=None, model_key="g1", frame_names=None):
         super().__init__("Reference Frame Trajectory Editor")
@@ -212,6 +214,19 @@ class TrajectoryControlPanel(QGroupBox):
             robot_row.addWidget(self.robot_label)
             robot_row.addWidget(self.model_box, stretch=1)
             robot_layout.addLayout(robot_row)
+
+            theme_row = QHBoxLayout()
+            theme_row.setContentsMargins(0, 0, 0, 0)
+            theme_row.setSpacing(6)
+            self.theme_label = QLabel("Theme")
+            self.theme_box = NoWheelComboBox()
+            self.theme_box.setPlaceholderText("Select...")
+            for label, value in THEME_MODES:
+                self.theme_box.addItem(label, value)
+            self.theme_box.activated.connect(self._emit_theme_mode)
+            theme_row.addWidget(self.theme_label)
+            theme_row.addWidget(self.theme_box, stretch=1)
+            robot_layout.addLayout(theme_row)
 
             import_row = QHBoxLayout()
             import_row.setContentsMargins(0, 0, 0, 0)
@@ -400,7 +415,7 @@ class TrajectoryControlPanel(QGroupBox):
             scale=100,
         )
         smoothing_label_width = self.corner_smoothing_slider.label.sizeHint().width()
-        self.corner_smoothing_slider.label.setMinimumWidth(smoothing_label_width + 8)
+        self.corner_smoothing_slider.label.setMinimumWidth(smoothing_label_width + 4)
         self.corner_smoothing_slider.input.setMaximumWidth(58)
         self.corner_smoothing_slider.setMinimumWidth(232)
         self.corner_smoothing_slider.setMaximumWidth(240)
@@ -496,6 +511,20 @@ class TrajectoryControlPanel(QGroupBox):
         self.export_action_box.setCurrentIndex(-1)
         if action:
             self.setup_export_requested.emit(action)
+
+    def _emit_theme_mode(self, index):
+        mode = self.theme_box.itemData(index)
+        if mode:
+            self.theme_mode_changed.emit(mode)
+
+    def set_theme_mode(self, mode):
+        index = self.theme_box.findData(mode)
+        if index < 0:
+            index = self.theme_box.findData("system")
+        if index >= 0:
+            was_blocked = self.theme_box.blockSignals(True)
+            self.theme_box.setCurrentIndex(index)
+            self.theme_box.blockSignals(was_blocked)
 
     def set_selection_context_widget(self, widget):
         self._set_context_widget(self.target_context_stack, widget)

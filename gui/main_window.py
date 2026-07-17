@@ -44,6 +44,7 @@ from core.trajectory import (
 )
 from application import model_sessions, timeslice_service, trajectory_generation
 from .controls import TrajectoryControlPanel
+from .theme import ThemeManager
 from gui.viewers.reference_frame_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
 from gui.viewers.skeleton_2d import Stickman2DViewer
@@ -102,39 +103,6 @@ class RenderProgressOverlay(QWidget):
         self._allow_close = False
         if parent is not None:
             parent.installEventFilter(self)
-
-        self.setStyleSheet(
-            """
-            QWidget#renderProgressOverlay {
-                background: rgba(17, 24, 39, 132);
-            }
-            QWidget#renderProgressCard {
-                background: #f3f5f8;
-                border: 1px solid #9aa5b1;
-                border-radius: 6px;
-            }
-            QLabel#renderTitle {
-                color: #1f2933;
-                font-size: 18px;
-                font-weight: 700;
-            }
-            QLabel#renderDetail {
-                color: #52606d;
-                font-size: 12px;
-            }
-            QProgressBar {
-                border: 1px solid #9aa5b1;
-                border-radius: 4px;
-                min-height: 16px;
-                text-align: center;
-                background: #e4e7eb;
-            }
-            QProgressBar::chunk {
-                background: #2f80ed;
-                border-radius: 3px;
-            }
-            """
-        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -240,6 +208,8 @@ class RobotGuiMainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("Reference Frame Trajectory GUI")
+        self.theme_manager = ThemeManager()
+        self.theme_manager.apply()
 
         # --------------------------------------------------------
         # Core data
@@ -307,6 +277,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls = TrajectoryControlPanel(
             self.model_registry, model_key=model_key, frame_names=frame_names
         )
+        self.controls.set_theme_mode(self.theme_manager.mode())
         self.viewer_2d = RobotCanvas()
         self.viewer_3d = RobotViewer3D(
             robot_model=self.robot_model_3d,
@@ -667,6 +638,7 @@ class RobotGuiMainWindow(QMainWindow):
 
     def connect_signals(self):
         self.controls.model_changed.connect(self.on_model_changed)
+        self.controls.theme_mode_changed.connect(self.on_theme_mode_changed)
         self.controls.open_model_clicked.connect(self.on_open_model_file)
         self.controls.choose_mesh_folder_clicked.connect(self.on_choose_mesh_folder)
         self.controls.setup_import_requested.connect(self.on_setup_import_requested)
@@ -746,6 +718,10 @@ class RobotGuiMainWindow(QMainWindow):
             )
         )
         viewer_2d_skeleton.target_dragged.connect(self.on_target_dragged)
+
+    def on_theme_mode_changed(self, mode):
+        active_mode = self.theme_manager.set_mode(mode)
+        self.controls.set_theme_mode(active_mode)
 
     def capture_history_snapshot(self):
         viewer = self.viewer_3d

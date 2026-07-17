@@ -9,7 +9,7 @@ import numpy as np
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
-from PySide6.QtGui import QMouseEvent, QWheelEvent
+from PySide6.QtGui import QMouseEvent, QPalette, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from core.ik import Collision
 from application.backend_interface import PythonRobotConfiguration
 from gui.main_window import INITIAL_RENDER_PROGRESS_DELAY_MS, RobotGuiMainWindow
+from gui.theme import THEME_DARK, THEME_LIGHT, THEME_MODES
 from gui.viewers.transform_gizmo import GizmoInteractionState
 from core.trajectory import quat_to_rpy, rpy_to_quat
 from scripts.view_g1_mujoco import RAW_QPOS_KEY, load_trajectory_csv
@@ -968,6 +969,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertTrue(self.window.controls.table.isColumnHidden(1))
         setup_widgets = set(self.window.controls.robot_panel.findChildren(QWidget))
         for setup_widget in (
+            self.window.controls.theme_label,
+            self.window.controls.theme_box,
             self.window.controls.import_action_label,
             self.window.controls.import_action_box,
             self.window.controls.export_action_label,
@@ -992,6 +995,17 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 for index in range(self.window.controls.export_action_box.count())
             ],
             ["Model", "Qpos", "Trajectory"],
+        )
+        self.assertEqual(
+            [
+                self.window.controls.theme_box.itemText(index)
+                for index in range(self.window.controls.theme_box.count())
+            ],
+            [label for label, _value in THEME_MODES],
+        )
+        self.assertEqual(
+            self.window.controls.theme_box.currentData(),
+            self.window.theme_manager.mode(),
         )
         self.window.controls.import_action_box.setCurrentIndex(1)
         event = QWheelEvent(
@@ -1295,6 +1309,52 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.viewer.model_colors_box.setChecked(True)
         np.testing.assert_allclose(
             self.window.robot_model_3d.mj_model.mat_rgba, before
+        )
+
+    def test_theme_mode_updates_ui_chrome_without_recoloring_viewer_scene(self):
+        app = QApplication.instance()
+        original_mode = self.window.theme_manager.mode()
+        before_materials = self.window.robot_model_3d.mj_model.mat_rgba.copy()
+        before_canvas_stylesheet = self.viewer.canvas.styleSheet()
+        before_selection_color = self.viewer.canvas._selected_body_rgba(
+            (0.22, 0.33, 0.44, 1.0)
+        )
+        before_gizmo_hover = self.viewer.canvas._gizmo_color(
+            "x", "TRANSLATE", (0.9, 0.1, 0.1)
+        )
+
+        try:
+            self.window.on_theme_mode_changed(THEME_DARK)
+            self.assertEqual(self.window.theme_manager.mode(), THEME_DARK)
+            self.assertEqual(self.window.controls.theme_box.currentData(), THEME_DARK)
+            self.assertLess(
+                app.palette().color(QPalette.ColorRole.Window).lightness(),
+                128,
+            )
+            self.assertIn("QWidget#viewerQuickActions", app.styleSheet())
+            self.assertIn("QToolButton#sectionHeader:hover", app.styleSheet())
+
+            self.window.on_theme_mode_changed(THEME_LIGHT)
+            self.assertEqual(self.window.theme_manager.mode(), THEME_LIGHT)
+            self.assertEqual(self.window.controls.theme_box.currentData(), THEME_LIGHT)
+            self.assertGreaterEqual(
+                app.palette().color(QPalette.ColorRole.Window).lightness(),
+                128,
+            )
+        finally:
+            self.window.on_theme_mode_changed(original_mode)
+
+        np.testing.assert_allclose(
+            self.window.robot_model_3d.mj_model.mat_rgba, before_materials
+        )
+        self.assertEqual(self.viewer.canvas.styleSheet(), before_canvas_stylesheet)
+        self.assertEqual(
+            self.viewer.canvas._selected_body_rgba((0.22, 0.33, 0.44, 1.0)),
+            before_selection_color,
+        )
+        self.assertEqual(
+            self.viewer.canvas._gizmo_color("x", "TRANSLATE", (0.9, 0.1, 0.1)),
+            before_gizmo_hover,
         )
 
     def test_controls_store_full_rpy_in_keyframe_and_table(self):

@@ -396,13 +396,6 @@ class RobotViewer3D(QWidget):
     def _build_quick_actions_panel(self):
         self.quick_actions_panel = QWidget()
         self.quick_actions_panel.setObjectName("viewerQuickActions")
-        self.quick_actions_panel.setStyleSheet(
-            "#viewerQuickActions {"
-            " background: rgba(245, 247, 250, 220);"
-            " border: 1px solid rgba(90, 105, 125, 120);"
-            " border-radius: 6px;"
-            "}"
-        )
         layout = QHBoxLayout(self.quick_actions_panel)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(4)

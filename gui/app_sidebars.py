@@ -40,26 +40,6 @@ class CollapsibleSection(QWidget):
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Preferred,
         )
-        self.setStyleSheet(
-            """
-            QWidget#CollapsibleSection {
-                border: 1px solid #454545;
-                border-radius: 6px;
-                background: #252525;
-            }
-            QToolButton#sectionHeader {
-                border: none;
-                border-bottom: 1px solid #454545;
-                padding: 7px 9px;
-                font-weight: 600;
-                text-align: left;
-                background: #e0e0e0;
-            }
-            QToolButton#sectionHeader:hover {
-                background: #383838;
-            }
-            """
-        )
         self.set_expanded(bool(expanded))
 
     def set_expanded(self, expanded):
