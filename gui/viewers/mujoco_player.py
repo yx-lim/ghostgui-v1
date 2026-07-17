@@ -11,6 +11,7 @@ Reason:
 
 from pathlib import Path
 import csv
+import shutil
 import sys
 
 from application.paths import CSV_DIR
@@ -240,10 +241,36 @@ class Mujoco3DViewerPanel(QWidget):
         if self.trajectory_csv_path.exists():
             arguments.extend(["--csv", str(self.trajectory_csv_path)])
 
-        self.process.start(
-            sys.executable,
-            arguments,
+        executable = self._viewer_python_executable()
+        if executable is None:
+            return
+
+        self.process.start(executable, arguments)
+
+    def _viewer_python_executable(self):
+        if sys.platform != "darwin":
+            return sys.executable
+
+        executable_dir = Path(sys.executable).resolve().parent
+        candidates = [
+            executable_dir / "mjpython",
+            shutil.which("mjpython"),
+        ]
+
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            path = Path(candidate)
+            if path.exists():
+                return str(path)
+
+        self.log_box.append(
+            "mjpython was not found. On macOS, MuJoCo launch_passive() must be "
+            "started with mjpython. Re-run bash scripts/install_macos.sh from a "
+            "native Python environment."
         )
+        self.process = None
+        return None
 
     def close_viewer(self):
         if self.process is None:
