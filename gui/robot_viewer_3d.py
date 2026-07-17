@@ -263,7 +263,7 @@ class RobotViewer3D(QWidget):
         self.collision_substeps.valueChanged.connect(
             self._set_collision_substeps
         )
-        target_layout.addRow("Target", self.target_box)
+        target_layout.addRow("Advanced target", self.target_box)
         target_layout.addRow("Collision substeps", self.collision_substeps)
         self.root_pose_label = StatusValueLabel()
         self.root_pose_label.setWordWrap(True)
@@ -292,7 +292,8 @@ class RobotViewer3D(QWidget):
         preview_layout.addWidget(self.accept_preview_button)
         preview_layout.addWidget(self.cancel_preview_button)
         alpha_row = QHBoxLayout()
-        alpha_row.addWidget(QLabel("Alpha"))
+        self.preview_alpha_label = QLabel("Preview opacity")
+        alpha_row.addWidget(self.preview_alpha_label)
         alpha_row.addWidget(self.preview_alpha)
         preview_layout.addLayout(alpha_row)
         preview_ik_layout.addWidget(preview_group)
@@ -321,12 +322,19 @@ class RobotViewer3D(QWidget):
         self.ghost_alpha.setSingleStep(0.05)
         self.ghost_alpha.setValue(0.16)
         self.ghost_alpha.valueChanged.connect(self._update_ghost_options)
-        self.timeslice_context_layout.addRow("Pose stride", self.ghost_stride)
-        self.timeslice_context_layout.addRow("Pose alpha", self.ghost_alpha)
+        self.ghost_stride_label = QLabel("Playback spacing")
+        self.ghost_alpha_label = QLabel("Playback opacity")
+        self.timeslice_context_layout.addRow(
+            self.ghost_stride_label, self.ghost_stride
+        )
+        self.timeslice_context_layout.addRow(
+            self.ghost_alpha_label, self.ghost_alpha
+        )
 
         editor_tabs = QTabWidget()
         editor_tabs.setMinimumWidth(0)
-        editor_tabs.setMaximumWidth(220)
+        editor_tabs.setMaximumWidth(244)
+        self.ik_editor_tabs = editor_tabs
         joint_group = QWidget()
         joint_layout = QVBoxLayout(joint_group)
         joint_layout.setContentsMargins(6, 6, 6, 6)
@@ -346,10 +354,14 @@ class RobotViewer3D(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setMinimumWidth(0)
-        scroll.setMaximumWidth(212)
+        scroll.setMaximumWidth(244)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(joint_group)
         editor_tabs.addTab(scroll, "Joint angles")
-        editor_tabs.addTab(self._build_ik_settings_widget(), "IK controls")
+        editor_tabs.addTab(self._build_ik_tasks_widget(), "Tasks")
+        editor_tabs.addTab(self._build_joint_weights_widget(), "Weights")
+        editor_tabs.addTab(self._build_solver_widget(), "Solver")
+        editor_tabs.setCurrentIndex(1)
         preview_ik_layout.addWidget(editor_tabs)
         root.addWidget(self._build_canvas_workspace(), stretch=1)
         root.addWidget(self._build_timeslice_editor())
@@ -471,7 +483,7 @@ class RobotViewer3D(QWidget):
         self.accept_timeslice_button.clicked.connect(self.accept_timeslice)
         self.delete_timeslice_button = QPushButton("Delete Slice")
         self.delete_timeslice_button.clicked.connect(self.delete_timeslice)
-        self.timeslice_step_label = QLabel("Step")
+        self.timeslice_step_label = QLabel("Slice step size")
         self.timeslice_step_input = QDoubleSpinBox()
         _compact_spinbox(self.timeslice_step_input, width=72)
         self.timeslice_step_input.setRange(0.01, 5.0)
@@ -480,7 +492,7 @@ class RobotViewer3D(QWidget):
         self.timeslice_step_input.setValue(0.10)
         self.timeslice_step_input.setSuffix(" s")
 
-        self.timeslice_duration_label = QLabel("Duration")
+        self.timeslice_duration_label = QLabel("Max time")
         self.timeslice_duration_input = QDoubleSpinBox()
         _compact_spinbox(self.timeslice_duration_input, width=72)
         self.timeslice_duration_input.setRange(0.10, 120.0)
@@ -672,7 +684,16 @@ class RobotViewer3D(QWidget):
     def preview_ik_context_widget(self):
         return self.preview_ik_context_panel
 
-    def _build_ik_settings_widget(self):
+    def _make_ik_scroll_area(self, content):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumWidth(0)
+        scroll.setMaximumWidth(244)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        return scroll
+
+    def _build_solver_widget(self):
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -717,8 +738,16 @@ class RobotViewer3D(QWidget):
         solver_layout.addRow("Position tolerance", self.ik_position_tolerance)
         solver_layout.addRow("Orientation tolerance", self.ik_orientation_tolerance)
         layout.addWidget(solver_group)
+        layout.addStretch()
+        return self._make_ik_scroll_area(content)
 
-        task_group = QGroupBox("Weighted Tasks")
+    def _build_ik_tasks_widget(self):
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        task_group = QGroupBox("IK Tasks")
         task_group.setMinimumWidth(0)
         task_layout = QFormLayout(task_group)
         task_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
@@ -760,8 +789,16 @@ class RobotViewer3D(QWidget):
             self.ik_task_controls[key] = (checkbox, spin)
             task_layout.addRow(labels[key], row)
         layout.addWidget(task_group)
+        layout.addStretch()
+        return self._make_ik_scroll_area(content)
 
-        influence_group = QGroupBox("Joint Influence")
+    def _build_joint_weights_widget(self):
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        influence_group = QGroupBox("Joint Weights")
         influence_group.setMinimumWidth(0)
         influence_layout = QVBoxLayout(influence_group)
         self.ik_preset_box = QComboBox()
@@ -784,13 +821,7 @@ class RobotViewer3D(QWidget):
         influence_layout.addStretch()
         layout.addWidget(influence_group)
         layout.addStretch()
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(0)
-        scroll.setMaximumWidth(212)
-        scroll.setWidget(content)
-        return scroll
+        return self._make_ik_scroll_area(content)
 
     def _on_geometry_progress(self, complete, total):
         if total <= 0:

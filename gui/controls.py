@@ -451,6 +451,7 @@ class TrajectoryControlPanel(QGroupBox):
         self.trajectory_context_stack = self._make_context_stack()
         self.timeslice_context_stack = self._make_context_stack()
         self.preview_ik_context_stack = self._make_context_stack()
+        self.preview_ik_context_stack.setMaximumWidth(244)
         self.display_context_stack = self._make_context_stack()
         robot_layout.addWidget(self.robot_context_stack)
         self.selection_detail_layout.addWidget(self.target_context_stack)

@@ -13,6 +13,7 @@ from PySide6.QtGui import QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
+    QGroupBox,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -483,10 +484,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
     def test_timeslice_bar_uses_single_compact_time_display(self):
         self.assertEqual(self.viewer.timeslice_label.text(), "Time")
         self.assertEqual(self.viewer.timeslice_time_input.suffix(), " s")
-        self.assertEqual(self.viewer.timeslice_step_label.text(), "Step")
+        self.assertEqual(self.viewer.timeslice_step_label.text(), "Slice step size")
         self.assertEqual(self.viewer.timeslice_step_input.suffix(), " s")
         self.assertAlmostEqual(self.viewer.timeslice_step_input.value(), 0.10)
-        self.assertEqual(self.viewer.timeslice_duration_label.text(), "Duration")
+        self.assertEqual(self.viewer.timeslice_duration_label.text(), "Max time")
         self.assertEqual(self.viewer.timeslice_duration_input.suffix(), " s")
         self.assertAlmostEqual(self.viewer.timeslice_duration_input.value(), 5.0)
         self.assertFalse(hasattr(self.viewer, "timeslice_time_label"))
@@ -1020,7 +1021,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.timeslice_step_input,
             self.viewer.timeslice_duration_label,
             self.viewer.timeslice_duration_input,
+            self.viewer.ghost_stride_label,
             self.viewer.ghost_stride,
+            self.viewer.ghost_alpha_label,
             self.viewer.ghost_alpha,
         ):
             self.assertIn(timeslice_widget, trajectory_widgets)
@@ -1092,6 +1095,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
             ),
             self.viewer.timeslice_duration_label,
         )
+        self.assertEqual(self.viewer.ghost_stride_label.text(), "Playback spacing")
+        self.assertEqual(self.viewer.ghost_alpha_label.text(), "Playback opacity")
         self.assertIs(
             self.viewer.timeslice_step_input.parent(),
             self.viewer.timeslice_context_panel,
@@ -1173,25 +1178,63 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.window.status_details_button.setChecked(True)
         self.app.processEvents()
         self.assertTrue(self.window.status_details_panel.isVisible())
+        self.assertEqual(
+            self.viewer.selection_context_panel.layout()
+            .labelForField(self.viewer.target_box)
+            .text(),
+            "Advanced target",
+        )
         preview_section = next(
             section for section in self.window.right_sidebar_content.sections
             if section.title == "IK / Constraints"
         )
         preview_section.set_expanded(True)
+        self.assertEqual(self.viewer.preview_alpha_label.text(), "Preview opacity")
         ik_tabs = self.viewer.preview_ik_context_widget().findChild(QTabWidget)
-        ik_tabs.setCurrentIndex(1)
-        self.app.processEvents()
-        visible_scroll_areas = [
-            area for area in self.viewer.preview_ik_context_widget().findChildren(
-                QScrollArea
-            )
-            if area.isVisible()
+        self.assertEqual(
+            [ik_tabs.tabText(index) for index in range(ik_tabs.count())],
+            ["Joint angles", "Tasks", "Weights", "Solver"],
+        )
+        self.assertEqual(ik_tabs.currentIndex(), 1)
+        self.assertEqual(ik_tabs.maximumWidth(), 244)
+        self.assertEqual(
+            self.window.controls.preview_ik_context_stack.maximumWidth(),
+            244,
+        )
+        expected_group_titles = {
+            1: "IK Tasks",
+            2: "Joint Weights",
+            3: "Solver",
+        }
+        for tab_index in range(ik_tabs.count()):
+            ik_tabs.setCurrentIndex(tab_index)
+            self.app.processEvents()
+            visible_scroll_areas = [
+                area for area in self.viewer.preview_ik_context_widget().findChildren(
+                    QScrollArea
+                )
+                if area.isVisible()
+            ]
+            self.assertTrue(visible_scroll_areas)
+            for area in visible_scroll_areas:
+                self.assertEqual(area.horizontalScrollBar().maximum(), 0)
+                self.assertFalse(area.horizontalScrollBar().isVisible())
+                self.assertLessEqual(area.widget().width(), area.viewport().width())
+                self.assertEqual(area.maximumWidth(), 244)
+            expected_title = expected_group_titles.get(tab_index)
+            if expected_title is not None:
+                visible_group_titles = [
+                    group.title()
+                    for group in ik_tabs.currentWidget().findChildren(QGroupBox)
+                    if group.isVisible()
+                ]
+                self.assertIn(expected_title, visible_group_titles)
+        weight_tab = ik_tabs.widget(2)
+        weight_group_titles = [
+            group.title()
+            for group in weight_tab.findChildren(QGroupBox)
         ]
-        self.assertTrue(visible_scroll_areas)
-        for area in visible_scroll_areas:
-            self.assertEqual(area.horizontalScrollBar().maximum(), 0)
-            self.assertFalse(area.horizontalScrollBar().isVisible())
-            self.assertLessEqual(area.widget().width(), area.viewport().width())
+        self.assertIn("Joint Weights", weight_group_titles)
         preview_section.set_expanded(False)
         all_titles = left_titles + right_titles
         for removed_title in (
