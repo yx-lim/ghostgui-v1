@@ -34,6 +34,10 @@ bash scripts/install_macos.sh
 bash scripts/run_macos.sh
 ```
 
+On Apple Silicon, use a native `arm64` Python. The macOS install script prefers
+the Homebrew Python at `/opt/homebrew/bin/python3` and rejects Intel/Rosetta
+Python environments because MuJoCo does not support them on Apple Silicon.
+
 ### Windows PowerShell
 
 ```powershell
