@@ -203,6 +203,8 @@ class TrajectoryControlPanel(QGroupBox):
             robot_row.setSpacing(6)
             self.robot_label = QLabel("Robot")
             self.model_box = QComboBox()
+            self.model_box.setObjectName("robotModelCombo")
+            self.model_box.setToolTip("Choose the robot model and frame set to edit.")
             for key, info in self.model_registry.items():
                 self.model_box.addItem(info.display_name, key)
             selected = self.model_box.findData(self.model_key)
@@ -233,6 +235,8 @@ class TrajectoryControlPanel(QGroupBox):
             import_row.setSpacing(6)
             self.import_action_label = QLabel("Import")
             self.import_action_box = NoWheelComboBox()
+            self.import_action_box.setObjectName("importActionCombo")
+            self.import_action_box.setToolTip("Import a robot model, qpos pose, or trajectory.")
             self.import_action_box.setPlaceholderText("Select...")
             self.import_action_box.addItem("Model", "model")
             self.import_action_box.addItem("Qpos", "qpos")
@@ -250,8 +254,11 @@ class TrajectoryControlPanel(QGroupBox):
             export_row.setSpacing(6)
             self.export_action_label = QLabel("Export")
             self.export_action_box = NoWheelComboBox()
+            self.export_action_box.setObjectName("exportActionCombo")
+            self.export_action_box.setToolTip(
+                "Export the committed qpos pose or timed trajectory."
+            )
             self.export_action_box.setPlaceholderText("Select...")
-            self.export_action_box.addItem("Model", "model")
             self.export_action_box.addItem("Qpos", "qpos")
             self.export_action_box.addItem("Trajectory", "trajectory")
             self.export_action_box.setCurrentIndex(-1)
@@ -277,6 +284,8 @@ class TrajectoryControlPanel(QGroupBox):
         self.target_layout.addWidget(QLabel("Target robot frame"))
 
         self.frame_box = QComboBox()
+        self.frame_box.setObjectName("targetFrameCombo")
+        self.frame_box.setToolTip("Choose the body, site, or logical frame to edit.")
         self.frame_box.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
@@ -319,6 +328,8 @@ class TrajectoryControlPanel(QGroupBox):
             initial_value=0,
             scale=100,
         )
+        self.time_slider.setObjectName("timeControl")
+        self.time_slider.setToolTip("Choose the active time for editing and slicing.")
 
         self.x_slider = LabeledSlider(
             "X [m]",
@@ -429,6 +440,10 @@ class TrajectoryControlPanel(QGroupBox):
         self.clear_button = QPushButton("Clear Trajectory")
 
         self.generate_button = QPushButton("Generate / Simulate")
+        self.generate_button.setObjectName("generateTrajectoryButton")
+        self.generate_button.setToolTip(
+            "Generate a sampled robot trajectory from saved slices/keyframes."
+        )
 
         self.add_button.clicked.connect(self.add_keyframe_clicked.emit)
         self.update_button.clicked.connect(self.update_keyframe_clicked.emit)

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QTabWidget,
+    QToolButton,
     QWidget,
 )
 
@@ -933,6 +934,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 expected_visible[section.title],
             )
         self.assertEqual(self.window.menuBar().actions(), [])
+        help_button = self.window.findChild(QToolButton, "helpButton")
+        self.assertIsNotNone(help_button)
+        self.assertEqual(help_button.text(), "?")
         self.assertFalse(hasattr(self.window, "workflow_toolbar"))
         self.assertTrue(self.window.viewer_tabs.tabBar().isHidden())
         self.assertEqual(self.window.viewer_tabs.tabText(0), "3D Pose")
@@ -949,6 +953,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             view_buttons,
             ["3D Pose", "2D Side View", "2D Skeleton", "Simulation"],
         )
+
         self.assertTrue(
             self.window.model_source_label.text().startswith("Model source:")
         )
@@ -1000,7 +1005,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 self.window.controls.export_action_box.itemText(index)
                 for index in range(self.window.controls.export_action_box.count())
             ],
-            ["Model", "Qpos", "Trajectory"],
+            ["Qpos", "Trajectory"],
         )
         self.assertEqual(
             [
@@ -1292,6 +1297,87 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(id(self.window.viewer_3d), viewer_identity)
         self.assertEqual(id(self.window.robot_model_3d.mj_model), model_identity)
         np.testing.assert_allclose(self.viewer.robot_state.get_qpos(), qpos)
+
+    def test_help_center_opens_without_written_guide_button(self):
+        help_button = self.window.findChild(QToolButton, "helpButton")
+        self.assertIsNotNone(help_button)
+
+        help_button.click()
+        self.app.processEvents()
+
+        self.assertIsNotNone(self.window.help_dialog)
+        self.assertTrue(self.window.help_dialog.isVisible())
+        self.assertIn(
+            "First Motion Walkthrough",
+            self.window.help_dialog.browser.toPlainText(),
+        )
+        section_titles = [
+            self.window.help_dialog.section_list.item(index).text()
+            for index in range(self.window.help_dialog.section_list.count())
+        ]
+        self.assertIn("Keyboard / Mouse Shortcuts", section_titles)
+        self.window.help_dialog.section_list.setCurrentRow(
+            section_titles.index("Keyboard / Mouse Shortcuts")
+        )
+        self.assertIn("T switches", self.window.help_dialog.browser.toPlainText())
+        self.assertIn("Ctrl+Shift+Z", self.window.help_dialog.browser.toPlainText())
+        self.assertIsNone(
+            self.window.help_dialog.findChild(QPushButton, "writtenGuideButton")
+        )
+
+    def test_help_center_starts_guided_tutorial_overlay(self):
+        self.window.resize(1700, 800)
+        self.window.show()
+        self.app.processEvents()
+
+        help_button = self.window.findChild(QToolButton, "helpButton")
+        help_button.click()
+        self.app.processEvents()
+
+        start_button = self.window.help_dialog.findChild(
+            QPushButton, "startTutorialButton"
+        )
+        self.assertIsNotNone(start_button)
+        start_button.click()
+        self.app.processEvents()
+
+        manager = self.window.tutorial_manager
+        self.assertTrue(manager.active)
+        self.assertFalse(self.window.help_dialog.isVisible())
+        self.assertTrue(manager.overlay.isVisible())
+        self.assertTrue(manager.card.isVisible())
+        self.assertIn("First Motion", manager.card.title_label.text())
+
+        next_button = manager.card.findChild(QPushButton, "tutorialNextButton")
+        back_button = manager.card.findChild(QPushButton, "tutorialBackButton")
+        skip_button = manager.card.findChild(QPushButton, "tutorialSkipButton")
+        self.assertIsNotNone(next_button)
+        self.assertIsNotNone(back_button)
+        self.assertIsNotNone(skip_button)
+        self.assertFalse(back_button.isEnabled())
+
+        next_button.click()
+        self.app.processEvents()
+
+        self.assertEqual(manager.steps[manager.current_index].id, "choose_model")
+        self.assertFalse(manager.overlay.target_rect.isNull())
+        self.assertIn("Choose A Robot", manager.card.title_label.text())
+        setup_section = next(
+            section for section in self.window.left_sidebar_content.sections
+            if section.title == "Setup"
+        )
+        self.assertTrue(setup_section.content.isVisible())
+        self.assertTrue(back_button.isEnabled())
+
+        back_button.click()
+        self.app.processEvents()
+        self.assertEqual(manager.current_index, 0)
+
+        skip_button.click()
+        self.app.processEvents()
+        self.assertFalse(manager.active)
+        self.assertFalse(manager.overlay.isVisible())
+        self.assertFalse(manager.card.isVisible())
 
     def test_model_colors_toggle_defaults_on_without_mutating_materials(self):
         before = self.window.robot_model_3d.mj_model.mat_rgba.copy()
