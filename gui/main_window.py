@@ -14,7 +14,6 @@ Updated project flow:
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-import shutil
 
 from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -51,6 +50,8 @@ from gui.viewers.mujoco_player import Mujoco3DViewerPanel
 from application.backend_interface import BackendInterface
 from core.models import MujocoReferenceFrames
 from .app_sidebars import AppLeftSidebar, AppRightSidebar
+from .help import HelpCenterDialog
+from .tutorial import TutorialManager
 from core.models import MuJoCoRobotAdapter, ROBOT_MODELS
 from application.model_importer import (
     default_model_library_root,
@@ -375,6 +376,10 @@ class RobotGuiMainWindow(QMainWindow):
         self.main_splitter.setSizes([200, 900, 260])
         self.setCentralWidget(self.main_splitter)
         self.render_progress_overlay = RenderProgressOverlay(self.viewer_3d_stack)
+        self.help_dialog = None
+        self.help_button = self.build_help_button()
+        self.tutorial_manager = TutorialManager(self)
+        self.position_help_button()
 
         # Initial view
         if self.robot_model_3d is not None:
@@ -497,13 +502,66 @@ class RobotGuiMainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_render_progress_overlay_geometry()
+        self.position_help_button()
 
     def showEvent(self, event):
         super().showEvent(event)
+        self.position_help_button()
         QTimer.singleShot(
             INITIAL_RENDER_PROGRESS_DELAY_MS,
             self.prepare_pending_initial_render_progress,
         )
+
+    def build_help_button(self):
+        button = QToolButton(self)
+        button.setObjectName("helpButton")
+        button.setText("?")
+        button.setToolTip("Open GhostGUI help center")
+        button.setFixedSize(30, 30)
+        button.clicked.connect(self.show_help_center)
+        button.setStyleSheet(
+            """
+            QToolButton#helpButton {
+                color: #1f2933;
+                background: rgba(245, 247, 250, 230);
+                border: 1px solid rgba(90, 105, 125, 150);
+                border-radius: 15px;
+                font-weight: 700;
+                font-size: 16px;
+            }
+            QToolButton#helpButton:hover {
+                background: #ffffff;
+                border-color: #2f80ed;
+            }
+            """
+        )
+        button.raise_()
+        return button
+
+    def position_help_button(self):
+        button = getattr(self, "help_button", None)
+        if button is None:
+            return
+        margin = 10
+        x = max(margin, self.width() - button.width() - margin)
+        y = margin
+        button.move(x, y)
+        button.raise_()
+
+    def show_help_center(self):
+        if self.help_dialog is None:
+            self.help_dialog = HelpCenterDialog(self)
+            self.help_dialog.start_tutorial_requested.connect(
+                self.start_first_motion_tutorial
+            )
+        self.help_dialog.show()
+        self.help_dialog.raise_()
+        self.help_dialog.activateWindow()
+
+    def start_first_motion_tutorial(self):
+        if self.help_dialog is not None:
+            self.help_dialog.hide()
+        self.tutorial_manager.start_first_motion()
 
     def prepare_pending_initial_render_progress(self):
         if (
@@ -1077,49 +1135,10 @@ class RobotGuiMainWindow(QMainWindow):
             self.viewer_3d.choose_trajectory_csv(prompt_import_dt=True)
 
     def on_setup_export_requested(self, action):
-        if action == "model":
-            self.on_export_model_file()
-        elif action == "qpos":
+        if action == "qpos":
             self.viewer_3d.choose_qpos_save_path()
         elif action == "trajectory":
             self.viewer_3d.choose_trajectory_save_path()
-
-    def on_export_model_file(self):
-        source_path = getattr(self.robot_model_3d, "model_path", None)
-        if source_path is None:
-            QMessageBox.warning(
-                self,
-                "Export model failed",
-                "No active model source is available.",
-            )
-            return
-        source_path = Path(source_path)
-        if not source_path.exists():
-            QMessageBox.warning(
-                self,
-                "Export model failed",
-                f"Model source file not found: {source_path}",
-            )
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export robot model",
-            str(Path.home() / source_path.name),
-            "Robot model files (*.urdf *.xml);;All files (*)",
-        )
-        if not path:
-            return
-        destination = Path(path).expanduser().resolve()
-        try:
-            shutil.copy2(source_path, destination)
-        except OSError as exc:
-            QMessageBox.warning(
-                self,
-                "Export model failed",
-                f"Could not export model: {exc}",
-            )
-            return
-        self.status_text.setText(f"Exported model to {destination}")
 
     def on_choose_mesh_folder(self):
         path = QFileDialog.getExistingDirectory(

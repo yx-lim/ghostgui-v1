@@ -504,24 +504,6 @@ class RobotModelAdapterTests(unittest.TestCase):
             finally:
                 window.close()
 
-    def test_export_model_file_copies_active_model_source(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            output = Path(tmp) / "exported_model.xml"
-            window = RobotGuiMainWindow("g1")
-            try:
-                with patch(
-                    "gui.main_window.QFileDialog.getSaveFileName",
-                    return_value=(str(output), ""),
-                ):
-                    window.on_export_model_file()
-                self.assertTrue(output.exists())
-                self.assertEqual(
-                    output.read_text(),
-                    Path(window.robot_model_3d.model_path).read_text(),
-                )
-            finally:
-                window.close()
-
     def test_canvas_is_opaque_and_preview_alpha_is_clamped(self):
         canvas = RobotCanvas3D()
         try:

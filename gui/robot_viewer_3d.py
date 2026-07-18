@@ -416,6 +416,27 @@ class RobotViewer3D(QWidget):
         self.quick_show_ghosts = QCheckBox("Playback")
         self.quick_show_ghosts.setChecked(self.show_ghosts.isChecked())
 
+        self.quick_plan_preview_button.setObjectName("planPreviewButton")
+        self.quick_plan_preview_button.setToolTip(
+            "Plan/check the path from the committed pose to the orange preview."
+        )
+        self.quick_accept_timeslice_button.setObjectName("sliceButton")
+        self.quick_accept_timeslice_button.setToolTip(
+            "Accept the current preview, save it at this time, and advance the timeline."
+        )
+        self.quick_generate_button.setObjectName("quickGenerateButton")
+        self.quick_generate_button.setToolTip(
+            "Generate a sampled trajectory from saved timeline states."
+        )
+        self.quick_play_button.setObjectName("quickPlayButton")
+        self.quick_play_button.setToolTip("Play or pause the active trajectory.")
+        self.quick_reset_button.setObjectName("quickResetButton")
+        self.quick_reset_button.setToolTip("Reset the active time to the model home pose.")
+        self.quick_clear_button.setObjectName("quickClearButton")
+        self.quick_clear_button.setToolTip("Clear the editable trajectory.")
+        self.quick_show_ghosts.setObjectName("playbackVisibilityToggle")
+        self.quick_show_ghosts.setToolTip("Show or hide trajectory playback ghosts.")
+
         for button in (
             self.quick_plan_preview_button,
             self.quick_accept_timeslice_button,

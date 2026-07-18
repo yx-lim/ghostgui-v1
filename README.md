@@ -68,6 +68,9 @@ python3 scripts/run_gui.py --model go2
 ```
 
 See `docs/install.md` for additional troubleshooting notes.
+See `docs/user_guide.md` for the workflow guide, control map, export notes, and
+the Preview-vs-Slice explanation. The same guide is available from the in-app
+`?` help button.
 
 G1 loads its MJCF and original STL visual meshes directly. Go2, H2, and Z1 load
 from URDF registrations with their bundled visual assets. Go2 resolves the
