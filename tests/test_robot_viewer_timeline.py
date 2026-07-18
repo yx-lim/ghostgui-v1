@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from core.ik import Collision
 from application.backend_interface import PythonRobotConfiguration
 from gui.main_window import INITIAL_RENDER_PROGRESS_DELAY_MS, RobotGuiMainWindow
-from gui.theme import THEME_DARK, THEME_LIGHT, THEME_MODES
+from gui.theme import THEME_DARK, THEME_LIGHT, THEME_MODES, THEME_SYSTEM
 from gui.viewers.transform_gizmo import GizmoInteractionState
 from core.trajectory import quat_to_rpy, rpy_to_quat
 from scripts.view_g1_mujoco import RAW_QPOS_KEY, load_trajectory_csv
@@ -1314,6 +1314,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
     def test_theme_mode_updates_ui_chrome_without_recoloring_viewer_scene(self):
         app = QApplication.instance()
         original_mode = self.window.theme_manager.mode()
+        original_system_mode = self.window.theme_manager.system_mode
         before_materials = self.window.robot_model_3d.mj_model.mat_rgba.copy()
         before_canvas_stylesheet = self.viewer.canvas.styleSheet()
         before_selection_color = self.viewer.canvas._selected_body_rgba(
@@ -1341,7 +1342,32 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 app.palette().color(QPalette.ColorRole.Window).lightness(),
                 128,
             )
+
+            self.window.theme_manager.system_mode = lambda: THEME_LIGHT
+            self.window.on_theme_mode_changed(THEME_SYSTEM)
+            self.assertEqual(self.window.theme_manager.mode(), THEME_SYSTEM)
+            self.assertGreaterEqual(
+                app.palette().color(QPalette.ColorRole.Window).lightness(),
+                128,
+            )
+            self.window.theme_manager.system_mode = lambda: THEME_DARK
+            self.window.on_system_color_scheme_changed()
+            self.assertEqual(self.window.controls.theme_box.currentData(), THEME_SYSTEM)
+            self.assertLess(
+                app.palette().color(QPalette.ColorRole.Window).lightness(),
+                128,
+            )
+
+            self.window.on_theme_mode_changed(THEME_LIGHT)
+            self.window.theme_manager.system_mode = lambda: THEME_DARK
+            self.window.on_system_color_scheme_changed()
+            self.assertEqual(self.window.theme_manager.mode(), THEME_LIGHT)
+            self.assertGreaterEqual(
+                app.palette().color(QPalette.ColorRole.Window).lightness(),
+                128,
+            )
         finally:
+            self.window.theme_manager.system_mode = original_system_mode
             self.window.on_theme_mode_changed(original_mode)
 
         np.testing.assert_allclose(

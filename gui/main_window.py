@@ -44,7 +44,7 @@ from core.trajectory import (
 )
 from application import model_sessions, timeslice_service, trajectory_generation
 from .controls import TrajectoryControlPanel
-from .theme import ThemeManager
+from .theme import THEME_SYSTEM, ThemeManager
 from gui.viewers.reference_frame_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
 from gui.viewers.skeleton_2d import Stickman2DViewer
@@ -210,6 +210,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.setWindowTitle("Reference Frame Trajectory GUI")
         self.theme_manager = ThemeManager()
         self.theme_manager.apply()
+        self.install_system_theme_listener()
 
         # --------------------------------------------------------
         # Core data
@@ -722,6 +723,26 @@ class RobotGuiMainWindow(QMainWindow):
     def on_theme_mode_changed(self, mode):
         active_mode = self.theme_manager.set_mode(mode)
         self.controls.set_theme_mode(active_mode)
+
+    def install_system_theme_listener(self):
+        app = QApplication.instance()
+        if app is None:
+            return
+        color_scheme_changed = getattr(
+            app.styleHints(), "colorSchemeChanged", None
+        )
+        if color_scheme_changed is None:
+            return
+        try:
+            color_scheme_changed.connect(self.on_system_color_scheme_changed)
+        except (RuntimeError, TypeError):
+            return
+
+    def on_system_color_scheme_changed(self, *_args):
+        if self.theme_manager.mode() != THEME_SYSTEM:
+            return
+        self.theme_manager.apply()
+        self.controls.set_theme_mode(THEME_SYSTEM)
 
     def capture_history_snapshot(self):
         viewer = self.viewer_3d
