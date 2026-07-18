@@ -12,10 +12,12 @@ from PySide6.QtWidgets import QApplication
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
+THEME_CLASSIC = "classic"
 THEME_MODES = (
     ("System", THEME_SYSTEM),
     ("Light", THEME_LIGHT),
     ("Dark", THEME_DARK),
+    ("Classic", THEME_CLASSIC),
 )
 
 
@@ -45,6 +47,11 @@ class Theme:
     overlay_bg: str
     overlay_border: str
     scrim: str
+    section_background: str | None = None
+    section_header: str | None = None
+    section_header_hover: str | None = None
+    section_header_text: str | None = None
+    section_header_hover_text: str | None = None
 
 
 LIGHT_THEME = Theme(
@@ -101,6 +108,38 @@ DARK_THEME = Theme(
     scrim="rgba(0, 0, 0, 150)",
 )
 
+CLASSIC_THEME = Theme(
+    name=THEME_CLASSIC,
+    window="#efefef",
+    panel="#efefef",
+    panel_raised="#f3f5f8",
+    input_bg="#ffffff",
+    text="#1f2933",
+    text_muted="#52606d",
+    border="#454545",
+    divider="#b8c2cc",
+    button="#e0e0e0",
+    button_hover="#d2d2d2",
+    button_pressed="#c7d9f2",
+    accent="#2f80ed",
+    accent_hover="#1f6fd0",
+    accent_soft="#d8eaff",
+    selection_text="#ffffff",
+    disabled_bg="#e5e5e5",
+    disabled_text="#7a7a7a",
+    danger="#c92a2a",
+    warning="#a05a00",
+    success="#247a3d",
+    overlay_bg="rgba(245, 247, 250, 220)",
+    overlay_border="rgba(90, 105, 125, 120)",
+    scrim="rgba(17, 24, 39, 132)",
+    section_background="#252525",
+    section_header="#e0e0e0",
+    section_header_hover="#383838",
+    section_header_text="#1f2933",
+    section_header_hover_text="#e8edf3",
+)
+
 
 def normalized_theme_mode(mode):
     mode = str(mode or THEME_SYSTEM).lower()
@@ -131,6 +170,8 @@ class ThemeManager:
         mode = self._mode
         if mode == THEME_SYSTEM:
             mode = self.system_mode()
+        if mode == THEME_CLASSIC:
+            return CLASSIC_THEME
         return DARK_THEME if mode == THEME_DARK else LIGHT_THEME
 
     def system_mode(self):
@@ -200,6 +241,13 @@ class ThemeManager:
 
 
 def stylesheet_for(theme):
+    section_background = theme.section_background or theme.panel
+    section_header = theme.section_header or theme.panel_raised
+    section_header_hover = theme.section_header_hover or theme.button_hover
+    section_header_text = theme.section_header_text or theme.text
+    section_header_hover_text = (
+        theme.section_header_hover_text or section_header_text
+    )
     return f"""
     QMainWindow, QDialog {{
         background: {theme.window};
@@ -215,7 +263,7 @@ def stylesheet_for(theme):
     QWidget#CollapsibleSection {{
         border: 1px solid {theme.border};
         border-radius: 6px;
-        background: {theme.panel};
+        background: {section_background};
     }}
     QWidget#sectionContent {{
         background: {theme.panel};
@@ -226,11 +274,12 @@ def stylesheet_for(theme):
         padding: 7px 9px;
         font-weight: 600;
         text-align: left;
-        color: {theme.text};
-        background: {theme.panel_raised};
+        color: {section_header_text};
+        background: {section_header};
     }}
     QToolButton#sectionHeader:hover {{
-        background: {theme.button_hover};
+        color: {section_header_hover_text};
+        background: {section_header_hover};
     }}
     QLabel, QCheckBox, QRadioButton, QGroupBox {{
         color: {theme.text};

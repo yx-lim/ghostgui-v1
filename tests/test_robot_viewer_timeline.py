@@ -25,7 +25,13 @@ from PySide6.QtWidgets import (
 from core.ik import Collision
 from application.backend_interface import PythonRobotConfiguration
 from gui.main_window import INITIAL_RENDER_PROGRESS_DELAY_MS, RobotGuiMainWindow
-from gui.theme import THEME_DARK, THEME_LIGHT, THEME_MODES, THEME_SYSTEM
+from gui.theme import (
+    THEME_CLASSIC,
+    THEME_DARK,
+    THEME_LIGHT,
+    THEME_MODES,
+    THEME_SYSTEM,
+)
 from gui.viewers.transform_gizmo import GizmoInteractionState
 from core.trajectory import quat_to_rpy, rpy_to_quat
 from scripts.view_g1_mujoco import RAW_QPOS_KEY, load_trajectory_csv
@@ -1343,6 +1349,16 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 128,
             )
 
+            self.window.on_theme_mode_changed(THEME_CLASSIC)
+            self.assertEqual(self.window.theme_manager.mode(), THEME_CLASSIC)
+            self.assertEqual(
+                self.window.controls.theme_box.currentData(), THEME_CLASSIC
+            )
+            self.assertIn("background: #252525", app.styleSheet())
+            self.assertIn("background: #e0e0e0", app.styleSheet())
+            self.assertIn("background: #383838", app.styleSheet())
+            self.assertIn("rgba(245, 247, 250, 220)", app.styleSheet())
+
             self.window.theme_manager.system_mode = lambda: THEME_LIGHT
             self.window.on_theme_mode_changed(THEME_SYSTEM)
             self.assertEqual(self.window.theme_manager.mode(), THEME_SYSTEM)
@@ -1366,6 +1382,15 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 app.palette().color(QPalette.ColorRole.Window).lightness(),
                 128,
             )
+
+            self.window.on_theme_mode_changed(THEME_CLASSIC)
+            self.window.theme_manager.system_mode = lambda: THEME_DARK
+            self.window.on_system_color_scheme_changed()
+            self.assertEqual(self.window.theme_manager.mode(), THEME_CLASSIC)
+            self.assertEqual(
+                self.window.controls.theme_box.currentData(), THEME_CLASSIC
+            )
+            self.assertIn("background: #252525", app.styleSheet())
         finally:
             self.window.theme_manager.system_mode = original_system_mode
             self.window.on_theme_mode_changed(original_mode)
