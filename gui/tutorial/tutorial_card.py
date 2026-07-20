@@ -22,43 +22,6 @@ class TutorialCard(QWidget):
         self.setObjectName("tutorialCard")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedWidth(360)
-        self.setStyleSheet(
-            """
-            QWidget#tutorialCard {
-                background-color: #ffffff;
-                border: 1px solid #7b8794;
-                border-radius: 7px;
-            }
-            QLabel#tutorialStepLabel {
-                color: #3e4c59;
-                font-size: 11px;
-            }
-            QLabel#tutorialTitle {
-                color: #102a43;
-                font-size: 16px;
-                font-weight: 700;
-            }
-            QLabel#tutorialBody {
-                color: #1f2933;
-                font-size: 12px;
-                line-height: 145%;
-            }
-            QPushButton {
-                color: #102a43;
-                background-color: #f0f4f8;
-                border: 1px solid #9fb3c8;
-                border-radius: 4px;
-                padding: 4px 10px;
-            }
-            QPushButton:hover {
-                background-color: #d9e2ec;
-            }
-            QPushButton:disabled {
-                color: #9aa5b1;
-                background-color: #f5f7fa;
-            }
-            """
-        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)

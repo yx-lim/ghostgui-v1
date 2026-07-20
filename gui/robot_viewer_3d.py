@@ -332,10 +332,12 @@ class RobotViewer3D(QWidget):
         )
 
         editor_tabs = QTabWidget()
+        editor_tabs.setObjectName("ikEditorTabs")
         editor_tabs.setMinimumWidth(0)
         editor_tabs.setMaximumWidth(244)
         self.ik_editor_tabs = editor_tabs
         joint_group = QWidget()
+        joint_group.setObjectName("ikEditorTabContent")
         joint_layout = QVBoxLayout(joint_group)
         joint_layout.setContentsMargins(6, 6, 6, 6)
         if self.robot_state:
@@ -352,6 +354,8 @@ class RobotViewer3D(QWidget):
             joint_layout.addWidget(QLabel("Joint controls unavailable."))
         joint_layout.addStretch()
         scroll = QScrollArea()
+        scroll.setObjectName("ikEditorScroll")
+        scroll.viewport().setObjectName("ikEditorViewport")
         scroll.setWidgetResizable(True)
         scroll.setMinimumWidth(0)
         scroll.setMaximumWidth(244)
@@ -396,13 +400,6 @@ class RobotViewer3D(QWidget):
     def _build_quick_actions_panel(self):
         self.quick_actions_panel = QWidget()
         self.quick_actions_panel.setObjectName("viewerQuickActions")
-        self.quick_actions_panel.setStyleSheet(
-            "#viewerQuickActions {"
-            " background: rgba(245, 247, 250, 220);"
-            " border: 1px solid rgba(90, 105, 125, 120);"
-            " border-radius: 6px;"
-            "}"
-        )
         layout = QHBoxLayout(self.quick_actions_panel)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(4)
@@ -707,6 +704,9 @@ class RobotViewer3D(QWidget):
 
     def _make_ik_scroll_area(self, content):
         scroll = QScrollArea()
+        scroll.setObjectName("ikEditorScroll")
+        scroll.viewport().setObjectName("ikEditorViewport")
+        content.setObjectName(content.objectName() or "ikEditorTabContent")
         scroll.setWidgetResizable(True)
         scroll.setMinimumWidth(0)
         scroll.setMaximumWidth(244)

@@ -40,26 +40,6 @@ class CollapsibleSection(QWidget):
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Preferred,
         )
-        self.setStyleSheet(
-            """
-            QWidget#CollapsibleSection {
-                border: 1px solid #454545;
-                border-radius: 6px;
-                background: #252525;
-            }
-            QToolButton#sectionHeader {
-                border: none;
-                border-bottom: 1px solid #454545;
-                padding: 7px 9px;
-                font-weight: 600;
-                text-align: left;
-                background: #e0e0e0;
-            }
-            QToolButton#sectionHeader:hover {
-                background: #383838;
-            }
-            """
-        )
         self.set_expanded(bool(expanded))
 
     def set_expanded(self, expanded):
@@ -78,15 +58,19 @@ class AppSidebar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("AppSidebar")
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
         self.scroll = QScrollArea()
+        self.scroll.setObjectName("appSidebarScroll")
+        self.scroll.viewport().setObjectName("appSidebarViewport")
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self.body = QWidget()
+        self.body.setObjectName("appSidebarBody")
         self.body_layout = QVBoxLayout(self.body)
         self.body_layout.setContentsMargins(4, 4, 4, 4)
         self.body_layout.setSpacing(4)

@@ -1202,6 +1202,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertEqual(ik_tabs.currentIndex(), 1)
         self.assertEqual(ik_tabs.maximumWidth(), 244)
+        self.assertEqual(ik_tabs.objectName(), "ikEditorTabs")
         self.assertEqual(
             self.window.controls.preview_ik_context_stack.maximumWidth(),
             244,
@@ -1222,6 +1223,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
             ]
             self.assertTrue(visible_scroll_areas)
             for area in visible_scroll_areas:
+                self.assertEqual(area.objectName(), "ikEditorScroll")
+                self.assertEqual(area.viewport().objectName(), "ikEditorViewport")
+                self.assertEqual(area.widget().objectName(), "ikEditorTabContent")
                 self.assertEqual(area.horizontalScrollBar().maximum(), 0)
                 self.assertFalse(area.horizontalScrollBar().isVisible())
                 self.assertLessEqual(area.widget().width(), area.viewport().width())
@@ -1415,6 +1419,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 self.assertEqual(slider.label.text(), label)
                 self.assertNotIn(":", slider.label.text())
                 self.assertLessEqual(slider.label.maximumWidth(), 86)
+                self.assertGreaterEqual(slider.input.maximumWidth(), 76)
 
     def test_corner_smoothing_slider_uses_fraction_scale(self):
         controls = self.window.controls

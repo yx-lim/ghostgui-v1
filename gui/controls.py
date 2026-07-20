@@ -66,7 +66,7 @@ class LabeledSlider(QWidget):
         self.input.setSingleStep(1 / self.scale)
         self.input.setValue(initial_value / self.scale)
         self.input.setMinimumWidth(52)
-        self.input.setMaximumWidth(64)
+        self.input.setMaximumWidth(76)
 
         self.slider.valueChanged.connect(self.on_slider_changed)
         self.input.valueChanged.connect(self.on_input_changed)

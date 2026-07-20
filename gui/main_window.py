@@ -51,6 +51,7 @@ from application.backend_interface import BackendInterface
 from core.models import MujocoReferenceFrames
 from .app_sidebars import AppLeftSidebar, AppRightSidebar
 from .help import HelpCenterDialog
+from .theme import ensure_application_theme
 from .tutorial import TutorialManager
 from core.models import MuJoCoRobotAdapter, ROBOT_MODELS
 from application.model_importer import (
@@ -103,39 +104,6 @@ class RenderProgressOverlay(QWidget):
         self._allow_close = False
         if parent is not None:
             parent.installEventFilter(self)
-
-        self.setStyleSheet(
-            """
-            QWidget#renderProgressOverlay {
-                background: rgba(17, 24, 39, 132);
-            }
-            QWidget#renderProgressCard {
-                background: #f3f5f8;
-                border: 1px solid #9aa5b1;
-                border-radius: 6px;
-            }
-            QLabel#renderTitle {
-                color: #1f2933;
-                font-size: 18px;
-                font-weight: 700;
-            }
-            QLabel#renderDetail {
-                color: #52606d;
-                font-size: 12px;
-            }
-            QProgressBar {
-                border: 1px solid #9aa5b1;
-                border-radius: 4px;
-                min-height: 16px;
-                text-align: center;
-                background: #e4e7eb;
-            }
-            QProgressBar::chunk {
-                background: #2f80ed;
-                border-radius: 3px;
-            }
-            """
-        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -239,6 +207,9 @@ class ModelLoadThread(QThread):
 class RobotGuiMainWindow(QMainWindow):
     def __init__(self, model_key="g1"):
         super().__init__()
+        app = QApplication.instance()
+        if app is not None:
+            ensure_application_theme(app)
 
         self.setWindowTitle("Reference Frame Trajectory GUI")
 
@@ -519,22 +490,6 @@ class RobotGuiMainWindow(QMainWindow):
         button.setToolTip("Open GhostGUI help center")
         button.setFixedSize(30, 30)
         button.clicked.connect(self.show_help_center)
-        button.setStyleSheet(
-            """
-            QToolButton#helpButton {
-                color: #1f2933;
-                background: rgba(245, 247, 250, 230);
-                border: 1px solid rgba(90, 105, 125, 150);
-                border-radius: 15px;
-                font-weight: 700;
-                font-size: 16px;
-            }
-            QToolButton#helpButton:hover {
-                background: #ffffff;
-                border-color: #2f80ed;
-            }
-            """
-        )
         button.raise_()
         return button
 

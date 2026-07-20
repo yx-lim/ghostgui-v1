@@ -12,7 +12,7 @@ def compact_combo(combo, minimum_chars=10):
     combo.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
 
 
-def compact_spinbox(spinbox, width=68):
+def compact_spinbox(spinbox, width=78):
     spinbox.setMinimumWidth(0)
     spinbox.setMaximumWidth(width)
     spinbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
