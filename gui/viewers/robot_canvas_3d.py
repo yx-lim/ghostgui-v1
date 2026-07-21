@@ -35,6 +35,7 @@ class RobotCanvas3D(QOpenGLWidget):
     gizmo_mode_changed = Signal(str)
     geometry_progress = Signal(int, int)
     body_double_clicked = Signal(str)
+    camera_changed = Signal()
 
     def __init__(self):
         super().__init__()
@@ -1006,6 +1007,7 @@ class RobotCanvas3D(QOpenGLWidget):
             self.transform_drag_finished.emit()
             return
         if camera_was_interacting:
+            self.camera_changed.emit()
             return
         super().mouseReleaseEvent(event)
 
@@ -1047,6 +1049,7 @@ class RobotCanvas3D(QOpenGLWidget):
         steps = event.angleDelta().y() / 120.0
         self._zoom_camera(steps * 0.35)
         self.update()
+        self.camera_changed.emit()
 
     # ============================================================
     # Projection helpers

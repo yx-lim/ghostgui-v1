@@ -609,6 +609,43 @@ class RobotStateTimeline:
     def qpos_trajectory(self):
         return [self.states[time].copy() for time in self.times()]
 
+    def save_npz(self, path):
+        """Save exact time-keyed qpos states for a GhostGUI project."""
+        path = Path(path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        times = np.asarray(self.times(), dtype=float)
+        if len(times):
+            qpos = np.stack([self.states[time] for time in times]).astype(float)
+        else:
+            qpos = np.empty((0, self.robot_model.mj_model.nq), dtype=float)
+        np.savez(path, schema_version=np.asarray([1]), times=times, qpos=qpos)
+
+    def load_npz(self, path):
+        """Load exact time-keyed qpos states from a GhostGUI project."""
+        path = Path(path).expanduser()
+        with np.load(path, allow_pickle=False) as data:
+            times = np.asarray(data["times"], dtype=float)
+            qpos = np.asarray(data["qpos"], dtype=float)
+
+        expected_width = int(self.robot_model.mj_model.nq)
+        if times.ndim != 1:
+            raise ValueError("timeline times must be a 1D array")
+        if qpos.ndim != 2 or qpos.shape[1] != expected_width:
+            raise ValueError(
+                f"timeline qpos must have shape (N, {expected_width})"
+            )
+        if qpos.shape[0] != times.shape[0]:
+            raise ValueError("timeline times and qpos rows must have equal length")
+        if len(times) and np.any(np.diff(times) < 0):
+            raise ValueError("timeline times must be nondecreasing")
+
+        self.states.clear()
+        if not len(times):
+            self.reset()
+            return
+        for time, state in zip(times, qpos):
+            self.set_state(float(time), state)
+
 
 class TrajectoryGhostRenderer:
     """Caches sampled qpos and FK transforms; no visual copies grow per frame."""

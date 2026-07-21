@@ -15,6 +15,8 @@ Updated project flow:
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import numpy as np
+
 from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -32,6 +34,8 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QInputDialog,
     QMessageBox,
+    QComboBox,
+    QPushButton,
     QToolButton,
 )
 
@@ -42,6 +46,14 @@ from core.trajectory import (
     rpy_to_quat,
 )
 from application import model_sessions, timeslice_service, trajectory_generation
+from application.project_manager import (
+    GhostGUIProject,
+    available_default_project_root_from_name,
+    forget_recent_project,
+    load_project_browser_previews,
+    load_recent_projects,
+    remember_recent_project,
+)
 from .controls import TrajectoryControlPanel
 from gui.viewers.reference_frame_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
@@ -51,6 +63,7 @@ from application.backend_interface import BackendInterface
 from core.models import MujocoReferenceFrames
 from .app_sidebars import AppLeftSidebar, AppRightSidebar
 from .help import HelpCenterDialog
+from .project_browser import ProjectBrowserDialog
 from .theme import ensure_application_theme
 from .tutorial import TutorialManager
 from core.models import MuJoCoRobotAdapter, ROBOT_MODELS
@@ -64,6 +77,7 @@ from application.model_importer import (
 LEFT_SIDEBAR_WIDTH = 250
 RIGHT_SIDEBAR_WIDTH = 270
 INITIAL_RENDER_PROGRESS_DELAY_MS = 500
+PROJECT_AUTOSAVE_INTERVAL_MS = 30000
 MAX_HISTORY_DEPTH = 100
 
 
@@ -298,6 +312,12 @@ class RobotGuiMainWindow(QMainWindow):
             )
         }
         self.model_loaders = {}
+        self.current_project = None
+        self._pending_project_restore = None
+        self._pending_project_restore_autosave = False
+        self._pending_project_restore_source = "direct"
+        self.project_dirty = False
+        self._suppress_project_dirty = False
         self.render_progress_overlay = None
         self.render_progress_viewer = None
         self.render_progress_restore_widget = None
@@ -308,8 +328,14 @@ class RobotGuiMainWindow(QMainWindow):
         self._last_history_snapshot = None
         self.viewer_tabs = self.build_viewer_tabs()
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
+        self.project_panel = self.build_project_panel()
+        self.refresh_recent_projects()
         self.status_panel = self.build_status_panel()
-        self.left_sidebar_content = AppLeftSidebar(self.controls, self.viewer_tabs)
+        self.left_sidebar_content = AppLeftSidebar(
+            self.controls,
+            self.viewer_tabs,
+            project_panel=self.project_panel,
+        )
         self.right_sidebar_content = AppRightSidebar(
             self.status_panel, self.controls.inspector_sections()
         )
@@ -322,8 +348,15 @@ class RobotGuiMainWindow(QMainWindow):
 
         self.connect_signals()
         self.install_history_shortcuts()
+        self.autosave_timer = QTimer(self)
+        self.autosave_timer.setInterval(PROJECT_AUTOSAVE_INTERVAL_MS)
+        self.autosave_timer.timeout.connect(self.on_autosave_timer)
+        self.autosave_timer.start()
         self.controls.corner_smoothing_slider.value_changed.connect(
             lambda _value: self.refresh_display()
+        )
+        self.controls.corner_smoothing_slider.value_changed.connect(
+            lambda _value: self.mark_project_dirty("Smoothing")
         )
         self.set_current_frame_to_model_reference(
             self.controls.frame_box.currentText(),
@@ -374,6 +407,58 @@ class RobotGuiMainWindow(QMainWindow):
         info = replace(info, key=key)
         self.model_registry[info.key] = info
         return info
+
+    # ============================================================
+    # Build project controls
+    # ============================================================
+
+    def build_project_panel(self):
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        self.project_name_label = QLabel("No project open")
+        self.project_name_label.setObjectName("projectNameLabel")
+        self.project_name_label.setWordWrap(True)
+        layout.addWidget(self.project_name_label)
+
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.setSpacing(4)
+
+        self.new_project_button = QPushButton("New")
+        self.new_project_button.setObjectName("newProjectButton")
+        self.new_project_button.setToolTip("Create a GhostGUI project folder.")
+        self.new_project_button.clicked.connect(self.on_new_project)
+
+        self.open_project_button = QPushButton("Open")
+        self.open_project_button.setObjectName("openProjectButton")
+        self.open_project_button.setToolTip("Show GhostGUI project previews.")
+        self.open_project_button.clicked.connect(self.on_open_project)
+
+        self.save_project_button = QPushButton("Save")
+        self.save_project_button.setObjectName("saveProjectButton")
+        self.save_project_button.setToolTip("Save the current GhostGUI project.")
+        self.save_project_button.clicked.connect(self.on_save_project)
+
+        for button in (
+            self.new_project_button,
+            self.open_project_button,
+            self.save_project_button,
+        ):
+            button.setMinimumWidth(0)
+            button_row.addWidget(button)
+
+        layout.addLayout(button_row)
+
+        self.recent_projects_box = QComboBox()
+        self.recent_projects_box.setObjectName("recentProjectsCombo")
+        self.recent_projects_box.setMinimumWidth(0)
+        self.recent_projects_box.setToolTip("Open a recently used GhostGUI project.")
+        self.recent_projects_box.activated.connect(self.on_recent_project_selected)
+        layout.addWidget(self.recent_projects_box)
+        return panel
 
     # ============================================================
     # Build right status/debug panel
@@ -466,6 +551,7 @@ class RobotGuiMainWindow(QMainWindow):
         tabs.addTab(self.viewer_2d_skeleton_stack, "2D Skeleton")
         tabs.addTab(self.viewer_3d_mujoco, "Simulation")
         tabs.currentChanged.connect(self.update_editor_context)
+        tabs.currentChanged.connect(lambda _index: self.mark_project_dirty("Active view"))
         tabs.setCurrentIndex(0)
         tabs.tabBar().hide()
         return tabs
@@ -482,6 +568,696 @@ class RobotGuiMainWindow(QMainWindow):
             INITIAL_RENDER_PROGRESS_DELAY_MS,
             self.prepare_pending_initial_render_progress,
         )
+
+    def closeEvent(self, event):
+        if not self.confirm_project_transition("close GhostGUI"):
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+    def on_autosave_timer(self):
+        try:
+            self.autosave_current_project(show_status=False, reason="timer")
+        except (OSError, ValueError) as exc:
+            self.status_text.append(f"Project autosave failed: {exc}")
+
+    def current_model_display_name(self):
+        if self.robot_model_3d is not None:
+            return self.robot_model_3d.model_name
+        model_info = self.model_registry.get(self.model_key)
+        return getattr(model_info, "display_name", self.model_key)
+
+    def project_transition_reason(self, action):
+        clean = "".join(
+            character.lower() if character.isalnum() else "_"
+            for character in str(action)
+        )
+        clean = "_".join(part for part in clean.split("_") if part)
+        return f"before_{clean or 'transition'}"
+
+    def update_project_chrome(self):
+        title = "Reference Frame Trajectory GUI"
+        if self.current_project is not None:
+            title = f"{title} - {self.current_project.project_name}"
+        elif self.robot_model_3d is not None:
+            title = f"{title} - {self.robot_model_3d.model_name}"
+        if self.project_dirty:
+            title = f"{title} *"
+        self.setWindowTitle(title)
+
+    def set_project_dirty(self, dirty=True):
+        self.project_dirty = bool(dirty and self.current_project is not None)
+        self.update_project_panel()
+
+    def mark_project_dirty(self, reason=None):
+        if self._suppress_project_dirty or self.current_project is None:
+            return
+        if not self.project_dirty:
+            self.set_project_dirty(True)
+
+    def handle_project_transition_choice(self, choice, action):
+        if not self.project_dirty or self.current_project is None:
+            return True
+
+        reason = self.project_transition_reason(action)
+        project = self.current_project
+        if choice == "save":
+            return self.save_current_project(reason=reason)
+        if choice == "autosave":
+            if not self.autosave_current_project(
+                show_status=False,
+                capture_snapshot=True,
+                reason=reason,
+            ):
+                return False
+            self.set_project_dirty(False)
+            return True
+        if choice == "discard":
+            project.clear_autosave()
+            project.append_session_event(
+                "project_dirty_discarded",
+                self.project_session_details(
+                    {
+                        "action": action,
+                        "reason": reason,
+                    }
+                ),
+            )
+            self.set_project_dirty(False)
+            return True
+        if choice == "cancel":
+            project.append_session_event(
+                "project_transition_cancelled",
+                self.project_session_details(
+                    {
+                        "action": action,
+                        "reason": reason,
+                    }
+                ),
+            )
+        return False
+
+    def confirm_project_transition(self, action):
+        if not self.project_dirty or self.current_project is None:
+            return True
+
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Unsaved Project Changes")
+        dialog.setText(f"Save changes before you {action}?")
+        dialog.setInformativeText(
+            "Save updates the project files. Autosave stores recovery state "
+            "for this project. Discard leaves the last saved project unchanged."
+        )
+        save_button = dialog.addButton(
+            "Save",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        autosave_button = dialog.addButton(
+            "Autosave",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        discard_button = dialog.addButton(
+            "Discard",
+            QMessageBox.ButtonRole.DestructiveRole,
+        )
+        cancel_button = dialog.addButton(QMessageBox.StandardButton.Cancel)
+        dialog.setDefaultButton(save_button)
+        dialog.setEscapeButton(cancel_button)
+        dialog.exec()
+
+        clicked = dialog.clickedButton()
+        if clicked is save_button:
+            choice = "save"
+        elif clicked is autosave_button:
+            choice = "autosave"
+        elif clicked is discard_button:
+            choice = "discard"
+        else:
+            choice = "cancel"
+        return self.handle_project_transition_choice(choice, action)
+
+    def project_session_details(self, extra=None):
+        viewer = self.viewer_3d
+        active_view = ""
+        if 0 <= self.viewer_tabs.currentIndex() < self.viewer_tabs.count():
+            active_view = self.viewer_tabs.tabText(self.viewer_tabs.currentIndex())
+        details = {
+            "model_key": self.model_key,
+            "model_name": self.current_model_display_name(),
+            "frame_count": len(self.trajectory.frames),
+            "current_time": float(viewer.get_current_time()),
+            "selected_frame": self.controls.frame_box.currentText(),
+            "active_view": active_view,
+        }
+        if extra:
+            details.update(extra)
+        return details
+
+    def update_project_panel(self):
+        if self.current_project is None:
+            self.project_name_label.setText("No project open")
+            self.update_project_chrome()
+            return
+        name = self.current_project.project_name
+        if self.project_dirty:
+            name = f"{name} *"
+        lines = [name, str(self.current_project.root_dir)]
+        if self.project_dirty:
+            lines.append("Unsaved changes")
+        self.project_name_label.setText("\n".join(lines))
+        self.update_project_chrome()
+
+    def recent_project_display_name(self, entry):
+        project_path = Path(entry["path"])
+        project_name = entry.get("project_name") or project_path.stem
+        folder_name = project_path.name
+        if folder_name.endswith(".ghostgui"):
+            folder_name = folder_name[: -len(".ghostgui")]
+        if folder_name and folder_name != project_name:
+            return f"{project_name} ({folder_name})"
+        return project_name
+
+    def refresh_recent_projects(self):
+        if not hasattr(self, "recent_projects_box"):
+            return
+        entries = load_recent_projects()
+        box = self.recent_projects_box
+        was_blocked = box.blockSignals(True)
+        try:
+            box.clear()
+            box.addItem("Recent projects...", "")
+            for entry in entries:
+                path = entry["path"]
+                box.addItem(self.recent_project_display_name(entry), path)
+                index = box.count() - 1
+                box.setItemData(index, path, Qt.ItemDataRole.ToolTipRole)
+            box.setCurrentIndex(0)
+            box.setEnabled(bool(entries))
+        finally:
+            box.blockSignals(was_blocked)
+
+    def remember_current_project(self):
+        if self.current_project is None:
+            return
+        try:
+            remember_recent_project(self.current_project)
+            self.refresh_recent_projects()
+        except OSError as exc:
+            if hasattr(self, "status_text"):
+                self.status_text.append(f"Could not update recent projects: {exc}")
+
+    def on_recent_project_selected(self, index):
+        path = self.recent_projects_box.itemData(index)
+        self.recent_projects_box.setCurrentIndex(0)
+        if not path:
+            return
+        self.open_project_path(path, source="recent_projects")
+
+    def build_project_browser_dialog(self):
+        return ProjectBrowserDialog(load_project_browser_previews(), parent=self)
+
+    def on_open_project(self):
+        dialog = self.build_project_browser_dialog()
+        if dialog.exec():
+            if dialog.selected_project_path:
+                self.open_project_path(
+                    dialog.selected_project_path,
+                    source="project_browser",
+                )
+            elif dialog.browse_requested:
+                self.on_browse_project_folder()
+        self.refresh_recent_projects()
+
+    def on_project_browser(self):
+        self.on_open_project()
+
+    def on_new_project(self):
+        if not self.confirm_project_transition("create a new project"):
+            return
+        default_name = (
+            self.current_project.project_name
+            if self.current_project is not None
+            else f"{self.model_key}_project"
+        )
+        name, accepted = QInputDialog.getText(
+            self,
+            "New GhostGUI Project",
+            "Project name",
+            text=default_name,
+        )
+        if not accepted or not name.strip():
+            return
+        project_root = available_default_project_root_from_name(name)
+        try:
+            self.create_project_at(
+                project_root,
+                name.strip(),
+                reset_workspace=True,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Create project failed", str(exc))
+
+    def on_browse_project_folder(self):
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Open GhostGUI Project",
+            str(Path.home()),
+        )
+        if path:
+            self.open_project_path(path, source="folder_dialog")
+
+    def on_save_project(self):
+        if self.current_project is None:
+            default_name = f"{self.model_key}_project"
+            name, accepted = QInputDialog.getText(
+                self,
+                "Save GhostGUI Project",
+                "Project name",
+                text=default_name,
+            )
+            if not accepted or not name.strip():
+                return
+            project_root = available_default_project_root_from_name(name)
+            try:
+                self.create_project_at(project_root, name.strip())
+            except (OSError, ValueError) as exc:
+                QMessageBox.warning(self, "Save project failed", str(exc))
+            return
+        try:
+            self.save_current_project()
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Save project failed", str(exc))
+
+    def reset_workspace_for_new_project(self):
+        was_suppressing_dirty = self._suppress_project_dirty
+        self._suppress_project_dirty = True
+        try:
+            viewer = self.viewer_3d
+            viewer.pause_playback()
+            viewer.canvas.cancel_transform_drag()
+            self.trajectory.clear()
+            self.active_index = -1
+            viewer.clear_robot_trajectory()
+            viewer.clear_editable_timeline(keep_current_pose=False, reset_time=0.0)
+            viewer.preview_active = False
+            viewer.canvas.set_preview_visible(False)
+            viewer.canvas.camera_distance = 5.0
+            viewer.canvas.camera_yaw = 38.0
+            viewer.canvas.camera_pitch = 24.0
+            viewer.canvas.camera_center = np.asarray([0.0, 0.0, 0.75], dtype=float)
+            viewer.canvas.update()
+            self.set_editor_timeline_duration(5.0)
+            self.controls.time_slider.set_value(0.0)
+            self.controls.show_keyframes_box.setChecked(True)
+            self.controls.show_lines_box.setChecked(True)
+            self.controls.corner_smoothing_slider.set_value(0.0)
+            viewer.show_ghosts.setChecked(False)
+            viewer.frame_slider.setValue(0)
+            if self.controls.table.currentRow() >= 0:
+                self.controls.table.clearSelection()
+            self.set_current_frame_to_model_reference(
+                self.controls.frame_box.currentText(),
+                emit_pose_changed=False,
+            )
+            self.refresh_display()
+            self._refresh_history_baseline()
+        finally:
+            self._suppress_project_dirty = was_suppressing_dirty
+
+    def create_project_at(self, project_root, project_name, reset_workspace=False):
+        if reset_workspace:
+            self.reset_workspace_for_new_project()
+        project = GhostGUIProject.create(
+            project_root,
+            project_name,
+            self.model_key,
+            self.current_model_display_name(),
+        )
+        self.current_project = project
+        self.save_current_project(reason="initial_create")
+        return project
+
+    def save_current_project(
+        self,
+        show_status=True,
+        capture_snapshot=True,
+        reason="manual",
+    ):
+        project = self.current_project
+        if project is None:
+            return False
+
+        viewer = self.viewer_3d
+        if viewer.state_timeline is not None and viewer.committed_state is not None:
+            viewer.state_timeline.set_state(
+                viewer.get_current_time(),
+                viewer.committed_state.get_qpos(),
+            )
+
+        project.update_robot(self.model_key, self.current_model_display_name())
+        project.write_trajectory(self.trajectory)
+        if viewer.state_timeline is not None:
+            project.save_qpos_timeline(viewer.state_timeline)
+        project.write_workspace(self.capture_project_workspace())
+        snapshot_saved = False
+        if capture_snapshot:
+            snapshot_saved = bool(self.save_project_snapshot(project))
+        project.save_metadata()
+        project.clear_autosave()
+        project.append_session_event(
+            "project_saved",
+            self.project_session_details(
+                {
+                    "reason": reason,
+                    "snapshot_saved": snapshot_saved,
+                }
+            ),
+        )
+        self.set_project_dirty(False)
+        self.remember_current_project()
+        if show_status:
+            message = f"Saved project: {project.root_dir}"
+            self.status_text.setText(message)
+            self.statusBar().showMessage(message, 3000)
+        return True
+
+    def autosave_current_project(
+        self,
+        show_status=True,
+        capture_snapshot=False,
+        reason="manual",
+    ):
+        project = self.current_project
+        if project is None:
+            return False
+
+        viewer = self.viewer_3d
+        if viewer.state_timeline is None or viewer.committed_state is None:
+            return False
+
+        viewer.state_timeline.set_state(
+            viewer.get_current_time(),
+            viewer.committed_state.get_qpos(),
+        )
+        project.write_autosave(
+            self.trajectory,
+            viewer.state_timeline,
+            self.capture_project_workspace(),
+            self.model_key,
+            self.current_model_display_name(),
+        )
+        snapshot_saved = False
+        if capture_snapshot:
+            snapshot_saved = bool(self.save_project_snapshot(project))
+        project.append_session_event(
+            "project_autosaved",
+            self.project_session_details(
+                {
+                    "reason": reason,
+                    "snapshot_saved": snapshot_saved,
+                }
+            ),
+        )
+        if show_status:
+            message = f"Autosaved project recovery state: {project.root_dir}"
+            self.statusBar().showMessage(message, 3000)
+        return True
+
+    def save_project_snapshot(self, project):
+        try:
+            path = project.paths.last_snapshot
+            path.parent.mkdir(parents=True, exist_ok=True)
+            pixmap = self.grab()
+            if not pixmap.isNull():
+                return pixmap.save(str(path))
+        except Exception:
+            return False
+        return False
+
+    def capture_project_workspace(self):
+        viewer = self.viewer_3d
+        canvas = viewer.canvas
+        selected_kind, selected_name = viewer._selected_target()
+        return {
+            "schema_version": 1,
+            "active_index": int(self.active_index),
+            "active_view_index": int(self.viewer_tabs.currentIndex()),
+            "current_time": float(viewer.get_current_time()),
+            "selected_frame": self.controls.frame_box.currentText(),
+            "selected_row": int(self.controls.selected_row()),
+            "timeline_duration": float(viewer.timeline_duration),
+            "control_frame": self.controls.current_frame().to_dict(),
+            "target_selection": {
+                "kind": selected_kind,
+                "name": selected_name,
+            },
+            "camera": {
+                "yaw": float(canvas.camera_yaw),
+                "pitch": float(canvas.camera_pitch),
+                "distance": float(canvas.camera_distance),
+                "center": [float(value) for value in canvas.camera_center],
+            },
+            "display": {
+                "show_keyframes": bool(self.controls.show_keyframes()),
+                "show_trajectory_lines": bool(self.controls.show_trajectory_lines()),
+                "smoothing": float(self.controls.corner_smoothing()),
+                "show_playback_ghosts": bool(viewer.show_ghosts.isChecked()),
+                "frame_slider_value": int(viewer.frame_slider.value()),
+                "trajectory_import_dt": float(viewer.trajectory_import_dt.value()),
+            },
+        }
+
+    def open_project_path(self, path, source="direct"):
+        try:
+            project = GhostGUIProject.open(path)
+        except (OSError, ValueError) as exc:
+            try:
+                forget_recent_project(path)
+                self.refresh_recent_projects()
+            except OSError:
+                pass
+            QMessageBox.warning(self, "Open project failed", str(exc))
+            return False
+
+        if not self.confirm_project_transition(f"open {project.project_name}"):
+            return False
+
+        restore_autosave = self.should_restore_project_autosave(project)
+        model_key = self.project_restore_model_key(project, restore_autosave)
+
+        if model_key != self.model_key:
+            if model_key not in self.model_registry:
+                message = f"Project robot model is not available: {model_key}"
+                QMessageBox.warning(self, "Open project failed", message)
+                return False
+            self._pending_project_restore = project
+            self._pending_project_restore_autosave = restore_autosave
+            self._pending_project_restore_source = source
+            self.on_model_changed(model_key)
+            self.restore_pending_project_if_ready()
+            return True
+
+        return self.restore_project(
+            project,
+            autosave=restore_autosave,
+            source=source,
+        )
+
+    def should_restore_project_autosave(self, project):
+        if not project.is_autosave_newer():
+            return False
+        response = QMessageBox.question(
+            self,
+            "Restore project autosave?",
+            (
+                "A newer autosave exists for this project. "
+                "Restore the autosaved workspace?\n\n"
+                "Choose No to discard the autosave and open the last saved project."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if response == QMessageBox.StandardButton.Yes:
+            return True
+        project.clear_autosave()
+        project.append_session_event(
+            "project_autosave_discarded",
+            {
+                "model_key": project.model_key,
+                "source": "open_project",
+            },
+        )
+        return False
+
+    def project_restore_model_key(self, project, autosave=False):
+        if not autosave:
+            return project.model_key
+        try:
+            return project.autosave_model_key()
+        except (OSError, TypeError, ValueError):
+            return project.model_key
+
+    def restore_pending_project_if_ready(self):
+        project = self._pending_project_restore
+        autosave = self._pending_project_restore_autosave
+        source = self._pending_project_restore_source
+        if project is None:
+            return False
+        model_key = self.project_restore_model_key(project, autosave)
+        if model_key != self.model_key:
+            return False
+        self._pending_project_restore = None
+        self._pending_project_restore_autosave = False
+        self._pending_project_restore_source = "direct"
+        return self.restore_project(project, autosave=autosave, source=source)
+
+    def restore_project(self, project, autosave=False, source="direct"):
+        try:
+            trajectory_data = project.read_trajectory_dict(autosave=autosave)
+            workspace = project.read_workspace(autosave=autosave)
+        except (OSError, TypeError, ValueError) as exc:
+            QMessageBox.warning(self, "Open project failed", str(exc))
+            return False
+        if not isinstance(workspace, dict):
+            QMessageBox.warning(
+                self,
+                "Open project failed",
+                "Project workspace data must be a JSON object.",
+            )
+            return False
+
+        viewer = self.viewer_3d
+        viewer.pause_playback()
+        viewer.canvas.cancel_transform_drag()
+        viewer.clear_robot_trajectory()
+        try:
+            self.trajectory.load_project_dict(trajectory_data)
+        except (TypeError, ValueError) as exc:
+            QMessageBox.warning(self, "Open project failed", str(exc))
+            return False
+
+        if viewer.state_timeline is not None:
+            qpos_path = (
+                project.autosave_paths.qpos_timeline
+                if autosave else project.paths.qpos_timeline
+            )
+            if qpos_path.exists():
+                try:
+                    project.load_qpos_timeline(
+                        viewer.state_timeline,
+                        autosave=autosave,
+                    )
+                except ValueError as exc:
+                    QMessageBox.warning(self, "Open project failed", str(exc))
+                    return False
+            else:
+                viewer.clear_editable_timeline(keep_current_pose=True, reset_time=0.0)
+
+        timeline_duration = workspace.get("timeline_duration")
+        if timeline_duration is not None:
+            self.set_editor_timeline_duration(float(timeline_duration))
+
+        frame_data = workspace.get("control_frame")
+        if frame_data:
+            try:
+                self._restore_control_frame(TargetFrame.from_dict(dict(frame_data)))
+            except (TypeError, ValueError) as exc:
+                QMessageBox.warning(self, "Open project failed", str(exc))
+                return False
+
+        was_suppressing_dirty = self._suppress_project_dirty
+        self._suppress_project_dirty = True
+        try:
+            self.restore_project_workspace(workspace)
+        finally:
+            self._suppress_project_dirty = was_suppressing_dirty
+
+        current_time = float(workspace.get("current_time", 0.0))
+        viewer.set_current_time(current_time)
+        self.controls._suppress_pose_changed = True
+        try:
+            self.controls.time_slider.set_value(current_time)
+        finally:
+            self.controls._suppress_pose_changed = False
+
+        self.active_index = int(workspace.get("active_index", -1))
+        self.refresh_display(apply_stickman_frame=False)
+        selected_row = int(workspace.get("selected_row", -1))
+        if 0 <= selected_row < self.controls.table.rowCount():
+            self.controls.table.setCurrentCell(selected_row, 0)
+        else:
+            self.controls.table.clearSelection()
+
+        self.current_project = project
+        self.set_project_dirty(False)
+        self.remember_current_project()
+        project.append_session_event(
+            "project_opened",
+            self.project_session_details(
+                {
+                    "autosave": bool(autosave),
+                    "source": source,
+                }
+            ),
+        )
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self._refresh_history_baseline()
+        source = "autosaved project" if autosave else "project"
+        message = f"Opened {source}: {project.root_dir}"
+        self.status_text.setText(message)
+        self.statusBar().showMessage(message, 3000)
+        return True
+
+    def restore_project_workspace(self, workspace):
+        display = workspace.get("display", {})
+        if "show_keyframes" in display:
+            self.controls.show_keyframes_box.setChecked(bool(display["show_keyframes"]))
+        if "show_trajectory_lines" in display:
+            self.controls.show_lines_box.setChecked(
+                bool(display["show_trajectory_lines"])
+            )
+        if "smoothing" in display:
+            self.controls.corner_smoothing_slider.set_value(float(display["smoothing"]))
+        if "trajectory_import_dt" in display:
+            self.viewer_3d.trajectory_import_dt.setValue(
+                float(display["trajectory_import_dt"])
+            )
+        if "show_playback_ghosts" in display:
+            self.viewer_3d.show_ghosts.setChecked(
+                bool(display["show_playback_ghosts"])
+            )
+        if "frame_slider_value" in display:
+            self.viewer_3d.frame_slider.setValue(int(display["frame_slider_value"]))
+
+        target = workspace.get("target_selection", {})
+        target_kind = target.get("kind")
+        target_name = target.get("name")
+        if target_kind and target_name:
+            self.viewer_3d.select_target(target_kind, target_name, emit=False)
+        else:
+            selected_frame = workspace.get("selected_frame")
+            binding = self.viewer_3d.frame_bindings.get(selected_frame)
+            if binding is not None:
+                self.viewer_3d.select_target(*binding, emit=False)
+
+        camera = workspace.get("camera", {})
+        canvas = self.viewer_3d.canvas
+        if "yaw" in camera:
+            canvas.camera_yaw = float(camera["yaw"])
+        if "pitch" in camera:
+            canvas.camera_pitch = float(camera["pitch"])
+        if "distance" in camera:
+            canvas.camera_distance = float(camera["distance"])
+        center = camera.get("center")
+        if isinstance(center, list) and len(center) == 3:
+            canvas.camera_center = np.asarray(center, dtype=float)
+        canvas.update()
+
+        active_view_index = int(workspace.get("active_view_index", 0))
+        if 0 <= active_view_index < self.viewer_tabs.count():
+            self.viewer_tabs.setCurrentIndex(active_view_index)
 
     def build_help_button(self):
         button = QToolButton(self)
@@ -728,6 +1504,18 @@ class RobotGuiMainWindow(QMainWindow):
                 self.on_viewer_geometry_progress(viewer, complete, total)
             )
         )
+        viewer_3d.canvas.camera_changed.connect(
+            lambda: self.mark_project_dirty("Camera")
+        )
+        viewer_3d.show_ghosts.toggled.connect(
+            lambda _checked: self.mark_project_dirty("Display settings")
+        )
+        viewer_3d.frame_slider.valueChanged.connect(
+            lambda _value: self.mark_project_dirty("Playback frame")
+        )
+        viewer_3d.trajectory_import_dt.valueChanged.connect(
+            lambda _value: self.mark_project_dirty("Import time step")
+        )
         viewer_3d.timeslice_time_changed.connect(
             self.on_viewer_timeslice_time_changed
         )
@@ -907,6 +1695,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.redo_stack.clear()
         self._last_history_snapshot = after
         self.statusBar().showMessage(f"{description}; Ctrl+Z can undo.", 3000)
+        self.mark_project_dirty(description)
         return True
 
     def undo_last_action(self):
@@ -919,6 +1708,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.restore_history_snapshot(entry.snapshot)
         self._last_history_snapshot = entry.snapshot
         self.statusBar().showMessage(f"Undid {entry.description}.", 3000)
+        self.mark_project_dirty(f"Undo {entry.description}")
 
     def redo_last_action(self):
         if not self.redo_stack:
@@ -930,6 +1720,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.restore_history_snapshot(entry.snapshot)
         self._last_history_snapshot = entry.snapshot
         self.statusBar().showMessage(f"Redid {entry.description}.", 3000)
+        self.mark_project_dirty(f"Redo {entry.description}")
 
     def on_viewer_history_action_finished(self, description):
         self.record_history_action(description)
@@ -1062,6 +1853,16 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_model_load_failed(self, model_key, error):
         self.model_loaders.pop(model_key, None)
+        if (
+            self._pending_project_restore is not None
+            and self.project_restore_model_key(
+                self._pending_project_restore,
+                self._pending_project_restore_autosave,
+            ) == model_key
+        ):
+            self._pending_project_restore = None
+            self._pending_project_restore_autosave = False
+            self._pending_project_restore_source = "direct"
         self.finish_model_loading_ui()
         self.finish_render_progress()
         self.status_text.setText(f"Could not load {model_key}: {error}")
@@ -1159,6 +1960,14 @@ class RobotGuiMainWindow(QMainWindow):
         self.statusBar().clearMessage()
 
     def activate_model_session(self, model_key, session):
+        previous_model_key = self.model_key
+        restoring_project = (
+            self._pending_project_restore is not None
+            and self.project_restore_model_key(
+                self._pending_project_restore,
+                self._pending_project_restore_autosave,
+            ) == model_key
+        )
         model_sessions.remember_current_session(
             self.model_sessions, self.model_key, self.trajectory, self.active_index
         )
@@ -1178,15 +1987,16 @@ class RobotGuiMainWindow(QMainWindow):
             viewer=self.viewer_3d,
         )
         self.controls.set_frame_names(session.adapter.trajectory_frames)
-        self.setWindowTitle(
-            f"Reference Frame Trajectory GUI — {session.adapter.model_name}"
-        )
+        self.update_project_chrome()
         self.update_editor_context()
         self.refresh_display(apply_stickman_frame=False)
         self.request_active_model_render()
         self.undo_stack.clear()
         self.redo_stack.clear()
         self._refresh_history_baseline()
+        if previous_model_key != model_key and not restoring_project:
+            self.mark_project_dirty("Change robot model")
+        self.restore_pending_project_if_ready()
 
     def on_trajectory_csv_loaded(self, csv_path):
         self.viewer_3d_mujoco.set_trajectory_csv(csv_path)
@@ -1214,6 +2024,7 @@ class RobotGuiMainWindow(QMainWindow):
         )
         if accepted:
             self.viewer_3d.trajectory_import_dt.setValue(value)
+            self.mark_project_dirty("Import time step")
 
     # ============================================================
     # GUI interaction callbacks
@@ -1260,6 +2071,7 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_viewer_timeline_duration_changed(self, duration):
         self.set_sidebar_timeline_duration(duration)
+        self.mark_project_dirty("Timeline duration")
 
     def set_sidebar_timeline_duration(self, duration):
         self.controls.time_slider.set_range(0, int(round(float(duration) * 100.0)))
@@ -1531,6 +2343,7 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_trajectory_display_changed(self, checked):
         self.refresh_display()
+        self.mark_project_dirty("Display settings")
 
     def on_add_keyframe(self):
         """

@@ -98,8 +98,16 @@ class AppSidebar(QWidget):
 
 
 class AppLeftSidebar(AppSidebar):
-    def __init__(self, trajectory_controls, editor_tabs=None, parent=None):
+    def __init__(
+        self,
+        trajectory_controls,
+        editor_tabs=None,
+        project_panel=None,
+        parent=None,
+    ):
         super().__init__(parent)
+        if project_panel is not None:
+            self.add_section("Project", project_panel, expanded=True)
         self.add_sections(trajectory_controls.workflow_sections())
         self.view_panel = self._build_view_panel(
             trajectory_controls.view_panel, editor_tabs
