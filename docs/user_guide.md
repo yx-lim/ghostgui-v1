@@ -45,7 +45,7 @@ IK. This is the usual export target.
 
 ## First Motion Workflow
 
-1. Choose a robot in **Setup**.
+1. Choose a robot in the app toolbar.
 2. Select a **Target robot frame**, such as `left_hand`.
 3. Move the target with the 3D transform gizmo or the pose sliders.
 4. Inspect the orange preview robot.
@@ -53,7 +53,7 @@ IK. This is the usual export target.
 6. Click **Slice** to commit the preview and save it at the current time.
 7. Move to another time, adjust the frame again, and click **Slice** again.
 8. Click **Generate** or **Generate / Simulate**.
-9. Use **Setup -> Export -> Trajectory** to save timed qpos rows.
+9. Use **Export -> Trajectory** in the app toolbar to save timed qpos rows.
 
 The beginner workflow is:
 
@@ -63,11 +63,12 @@ select frame -> move target -> orange preview -> Slice -> Generate -> Export
 
 ## GUI Sections
 
-### Setup
+### App Toolbar
 
-Choose the active robot model and import or export data. Import supports models,
-qpos poses, and trajectories. Export can save a single committed qpos pose or a
-timed trajectory.
+Create/open/save projects, choose the active robot model, import or export data,
+switch views, and open help. Import supports models, qpos poses, and
+trajectories. Export can save a single committed qpos pose or a timed
+trajectory.
 
 ### Target / Pose
 
@@ -137,9 +138,9 @@ detailed messages.
 
 ## Import And Export
 
-Use **Setup -> Import** for model, qpos, or trajectory input.
+Use toolbar **Import** for model, qpos, or trajectory input.
 
-Use **Setup -> Export** for:
+Use toolbar **Export** for:
 
 - **Qpos**: the current committed pose as one headerless qpos row.
 - **Trajectory**: timed qpos rows from the generated trajectory or editable

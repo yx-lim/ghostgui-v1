@@ -103,16 +103,19 @@ class AppLeftSidebar(AppSidebar):
         trajectory_controls,
         editor_tabs=None,
         project_panel=None,
+        include_view=True,
         parent=None,
     ):
         super().__init__(parent)
         if project_panel is not None:
             self.add_section("Project", project_panel, expanded=True)
         self.add_sections(trajectory_controls.workflow_sections())
-        self.view_panel = self._build_view_panel(
-            trajectory_controls.view_panel, editor_tabs
-        )
-        self.add_section("View", self.view_panel, expanded=False)
+        self.view_panel = None
+        if include_view:
+            self.view_panel = self._build_view_panel(
+                trajectory_controls.view_panel, editor_tabs
+            )
+            self.add_section("View", self.view_panel, expanded=False)
         self.add_stretch()
 
     def _build_view_panel(self, display_panel, editor_tabs):

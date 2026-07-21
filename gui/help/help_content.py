@@ -21,7 +21,7 @@ HELP_SECTIONS = [
 
 Use this workflow to create one editable robot motion.
 
-1. Choose the robot model in **Setup**.
+1. Choose the robot model in the app toolbar.
 2. Select a **Target robot frame**, such as `left_hand`.
 3. Move the target with the 3D gizmo or the position/orientation sliders.
 4. The orange robot is the temporary preview. It is not saved yet.
@@ -29,7 +29,7 @@ Use this workflow to create one editable robot motion.
 6. Click **Slice** to accept the current preview, record it at the active time, and advance the timeline.
 7. Add another slice at a later time.
 8. Click **Generate** or **Generate / Simulate**.
-9. Export the trajectory or qpos data from **Setup**.
+9. Export the trajectory or qpos data from the app toolbar.
 
 The main idea is:
 
@@ -43,9 +43,9 @@ move target -> orange preview -> Slice -> committed time slice -> Generate -> Ex
         """
 # Controls Map
 
-## Setup
+## App Toolbar
 
-Choose the robot model, import qpos or trajectory data, and export qpos rows or timed trajectories.
+Create/open/save projects, choose the robot model, import qpos or trajectory data, export qpos rows or timed trajectories, switch views, and open help.
 
 ## Target / Pose
 
@@ -133,7 +133,7 @@ A sampled sequence built from saved slices/keyframes and IK. This is the data yo
         """
 # Export Format
 
-Use **Setup -> Export** to choose what to save.
+Use the toolbar **Export** control to choose what to save.
 
 - **Qpos** saves the current committed pose as one headerless qpos row.
 - **Trajectory** saves timed qpos rows from the generated trajectory, or from the editable timeline when no generated trajectory is active.

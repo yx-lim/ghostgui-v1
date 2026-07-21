@@ -144,7 +144,10 @@ class TutorialManager(QObject):
             self.main_window.update_editor_context()
         elif hook == "expand_setup":
             self._run_before_show("show_3d_view")
-            self._set_section_expanded("Setup", True)
+            toolbar = getattr(self.main_window, "app_toolbar", None)
+            if toolbar is not None:
+                toolbar.show()
+                toolbar.raise_()
         elif hook == "expand_target_pose":
             self._run_before_show("show_3d_view")
             self._set_section_expanded("Target / Pose", True)

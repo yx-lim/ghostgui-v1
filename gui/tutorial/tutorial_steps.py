@@ -28,9 +28,9 @@ FIRST_MOTION_TUTORIAL = [
         title="Choose A Robot",
         body=(
             "The robot model controls the available joints, frames, geometry, "
-            "and home pose. Start with G1 for the humanoid workflow."
+            "and home pose. Open the Robot dropdown to choose the active model."
         ),
-        target="robotModelCombo",
+        target="robotToolbarButton",
         before_show="expand_setup",
     ),
     TutorialStep(
@@ -90,10 +90,10 @@ FIRST_MOTION_TUTORIAL = [
         id="export",
         title="Export The Result",
         body=(
-            "Use Setup -> Export to save the current committed qpos or timed "
+            "Use the Export dropdown to save the current committed qpos or timed "
             "trajectory rows. Unsaved orange previews are not exported."
         ),
-        target="exportActionCombo",
+        target="exportToolbarButton",
         before_show="expand_setup",
     ),
 ]

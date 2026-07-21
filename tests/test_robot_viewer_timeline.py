@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QTabWidget,
+    QToolBar,
     QToolButton,
     QWidget,
 )
@@ -924,18 +925,15 @@ class RobotViewerTimelineTests(unittest.TestCase):
         ]
         self.assertEqual(
             left_titles,
-            ["Project", "Setup", "Target / Pose", "Time Slices", "View"],
+            ["Target / Pose", "Time Slices"],
         )
         self.assertEqual(
             right_titles,
             ["Selected Object", "IK / Constraints", "Status"],
         )
         expected_visible = {
-            "Project": True,
-            "Setup": False,
             "Target / Pose": True,
             "Time Slices": False,
-            "View": False,
             "Selected Object": False,
             "IK / Constraints": False,
             "Status": True,
@@ -949,35 +947,73 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 expected_visible[section.title],
             )
         self.assertEqual(self.window.menuBar().actions(), [])
+        toolbar = self.window.findChild(QToolBar, "appToolbar")
+        self.assertIs(toolbar, self.window.app_toolbar)
         help_button = self.window.findChild(QToolButton, "helpButton")
         self.assertIsNotNone(help_button)
-        self.assertEqual(help_button.text(), "?")
+        self.assertEqual(help_button.text(), "Help")
         self.assertFalse(hasattr(self.window, "workflow_toolbar"))
         self.assertTrue(self.window.viewer_tabs.tabBar().isHidden())
-        project_buttons = [
-            button.text()
-            for button in self.window.project_panel.findChildren(QPushButton)
+        toolbar_buttons = {
+            button.objectName(): button.text()
+            for button in self.window.app_toolbar.findChildren(QToolButton)
+            if button.objectName()
+        }
+        self.assertEqual(toolbar_buttons["projectToolbarButton"], "Project")
+        self.assertEqual(toolbar_buttons["robotToolbarButton"], "Robot")
+        self.assertEqual(toolbar_buttons["importToolbarButton"], "Import")
+        self.assertEqual(toolbar_buttons["exportToolbarButton"], "Export")
+        self.assertEqual(toolbar_buttons["viewToolbarButton"], "View")
+        self.assertEqual(toolbar_buttons["helpButton"], "Help")
+        project_action_texts = [
+            action.text()
+            for action in self.window.project_toolbar_menu.actions()
+            if action.text()
         ]
-        self.assertEqual(project_buttons, ["New", "Open", "Save"])
+        self.assertEqual(project_action_texts, ["New", "Open", "Save"])
         recent_projects_box = self.window.project_panel.findChild(
             QComboBox, "recentProjectsCombo"
         )
         self.assertIsNotNone(recent_projects_box)
         self.assertEqual(recent_projects_box.count(), 1)
         self.assertFalse(recent_projects_box.isEnabled())
+        self.assertIs(
+            self.window.project_toolbar_button.menu(),
+            self.window.project_toolbar_menu,
+        )
+        self.assertIs(self.window.project_panel.parent(), self.window.project_toolbar_menu)
+        self.assertIs(
+            self.window.robot_toolbar_button.menu(),
+            self.window.robot_toolbar_menu,
+        )
+        self.assertIs(self.window.controls.model_box.parent(), self.window.robot_menu_panel)
+        self.assertIs(
+            self.window.import_toolbar_button.menu(),
+            self.window.import_toolbar_menu,
+        )
+        self.assertIs(
+            self.window.export_toolbar_button.menu(),
+            self.window.export_toolbar_menu,
+        )
+        self.assertEqual(
+            [action.text() for action in self.window.import_toolbar_menu.actions()],
+            ["Model", "Qpos", "Trajectory"],
+        )
+        self.assertEqual(
+            [action.text() for action in self.window.export_toolbar_menu.actions()],
+            ["Qpos", "Trajectory"],
+        )
         self.assertEqual(self.window.viewer_tabs.tabText(0), "3D Pose")
         self.assertIs(
             self.window.viewer_tabs.widget(0), self.window.viewer_3d_stack
         )
-        view_buttons = [
-            button.text()
-            for button in self.window.left_sidebar_content.view_panel.findChildren(
-                QPushButton
-            )
-        ]
         self.assertEqual(
-            view_buttons,
+            [action.text() for action in self.window.view_actions],
             ["3D Pose", "2D Side View", "2D Skeleton", "Simulation"],
+        )
+        self.assertIs(
+            self.window.controls.view_panel.parent(),
+            self.window.view_toolbar_menu,
         )
 
         self.assertTrue(
@@ -999,19 +1035,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertFalse(
             any(text.startswith("Model:") for text in robot_labels)
         )
-        self.assertIs(self.window.controls.robot_label.parent(), self.window.controls.robot_panel)
-        self.assertIs(self.window.controls.model_box.parent(), self.window.controls.robot_panel)
         self.assertTrue(self.window.controls.phase_label.isHidden())
         self.assertTrue(self.window.controls.phase_box.isHidden())
         self.assertTrue(self.window.controls.table.isColumnHidden(1))
-        setup_widgets = set(self.window.controls.robot_panel.findChildren(QWidget))
-        for setup_widget in (
-            self.window.controls.import_action_label,
-            self.window.controls.import_action_box,
-            self.window.controls.export_action_label,
-            self.window.controls.export_action_box,
-        ):
-            self.assertIn(setup_widget, setup_widgets)
         self.assertTrue(self.window.controls.open_model_button.isHidden())
         self.assertTrue(self.window.controls.choose_mesh_folder_button.isHidden())
         self.assertTrue(self.viewer.trajectory_csv_group.isHidden())
@@ -1551,6 +1577,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
             project = self.window.create_project_at(project_root, "dirty_test")
             self.assertFalse(self.window.project_dirty)
             self.assertNotIn("Unsaved changes", self.window.project_name_label.text())
+            self.assertNotIn(
+                "Unsaved changes",
+                self.window.project_name_label.toolTip(),
+            )
 
             self.window.controls.frame_box.setCurrentText("left_hand")
             self.window.controls.set_position_values(
@@ -1562,7 +1592,11 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.on_add_keyframe()
 
             self.assertTrue(self.window.project_dirty)
-            self.assertIn("Unsaved changes", self.window.project_name_label.text())
+            self.assertTrue(self.window.project_name_label.text().endswith("*"))
+            self.assertIn(
+                "Unsaved changes",
+                self.window.project_name_label.toolTip(),
+            )
             self.assertTrue(self.window.windowTitle().endswith("*"))
 
             self.assertTrue(
@@ -1574,6 +1608,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
             self.assertFalse(self.window.project_dirty)
             self.assertNotIn("Unsaved changes", self.window.project_name_label.text())
+            self.assertNotIn(
+                "Unsaved changes",
+                self.window.project_name_label.toolTip(),
+            )
             self.assertFalse(self.window.windowTitle().endswith("*"))
             events = project.read_session_log()
             self.assertEqual(events[-1]["event"], "project_saved")
@@ -2045,11 +2083,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(manager.steps[manager.current_index].id, "choose_model")
         self.assertFalse(manager.overlay.target_rect.isNull())
         self.assertIn("Choose A Robot", manager.card.title_label.text())
-        setup_section = next(
-            section for section in self.window.left_sidebar_content.sections
-            if section.title == "Setup"
-        )
-        self.assertTrue(setup_section.content.isVisible())
+        self.assertTrue(self.window.app_toolbar.isVisible())
+        self.assertTrue(self.window.robot_toolbar_button.isVisible())
         self.assertTrue(back_button.isEnabled())
 
         back_button.click()

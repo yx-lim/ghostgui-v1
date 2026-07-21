@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -35,8 +35,10 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QMessageBox,
     QComboBox,
-    QPushButton,
+    QMenu,
+    QToolBar,
     QToolButton,
+    QWidgetAction,
 )
 
 from core.trajectory import (
@@ -329,12 +331,15 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_tabs = self.build_viewer_tabs()
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
         self.project_panel = self.build_project_panel()
+        self.help_dialog = None
+        self.help_button = self.build_help_button()
+        self.app_toolbar = self.build_app_toolbar()
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.app_toolbar)
         self.refresh_recent_projects()
         self.status_panel = self.build_status_panel()
         self.left_sidebar_content = AppLeftSidebar(
             self.controls,
-            self.viewer_tabs,
-            project_panel=self.project_panel,
+            include_view=False,
         )
         self.right_sidebar_content = AppRightSidebar(
             self.status_panel, self.controls.inspector_sections()
@@ -380,10 +385,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.main_splitter.setSizes([200, 900, 260])
         self.setCentralWidget(self.main_splitter)
         self.render_progress_overlay = RenderProgressOverlay(self.viewer_3d_stack)
-        self.help_dialog = None
-        self.help_button = self.build_help_button()
         self.tutorial_manager = TutorialManager(self)
-        self.position_help_button()
 
         # Initial view
         if self.robot_model_3d is not None:
@@ -414,51 +416,173 @@ class RobotGuiMainWindow(QMainWindow):
 
     def build_project_panel(self):
         panel = QWidget()
+        panel.setObjectName("projectMenuPanel")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
         self.project_name_label = QLabel("No project open")
         self.project_name_label.setObjectName("projectNameLabel")
+        self.project_name_label.setMinimumWidth(180)
+        self.project_name_label.setMaximumWidth(240)
         self.project_name_label.setWordWrap(True)
         layout.addWidget(self.project_name_label)
 
-        button_row = QHBoxLayout()
-        button_row.setContentsMargins(0, 0, 0, 0)
-        button_row.setSpacing(4)
-
-        self.new_project_button = QPushButton("New")
-        self.new_project_button.setObjectName("newProjectButton")
-        self.new_project_button.setToolTip("Create a GhostGUI project folder.")
-        self.new_project_button.clicked.connect(self.on_new_project)
-
-        self.open_project_button = QPushButton("Open")
-        self.open_project_button.setObjectName("openProjectButton")
-        self.open_project_button.setToolTip("Show GhostGUI project previews.")
-        self.open_project_button.clicked.connect(self.on_open_project)
-
-        self.save_project_button = QPushButton("Save")
-        self.save_project_button.setObjectName("saveProjectButton")
-        self.save_project_button.setToolTip("Save the current GhostGUI project.")
-        self.save_project_button.clicked.connect(self.on_save_project)
-
-        for button in (
-            self.new_project_button,
-            self.open_project_button,
-            self.save_project_button,
-        ):
-            button.setMinimumWidth(0)
-            button_row.addWidget(button)
-
-        layout.addLayout(button_row)
-
         self.recent_projects_box = QComboBox()
         self.recent_projects_box.setObjectName("recentProjectsCombo")
-        self.recent_projects_box.setMinimumWidth(0)
+        self.recent_projects_box.setMinimumWidth(180)
+        self.recent_projects_box.setMaximumWidth(240)
         self.recent_projects_box.setToolTip("Open a recently used GhostGUI project.")
         self.recent_projects_box.activated.connect(self.on_recent_project_selected)
         layout.addWidget(self.recent_projects_box)
         return panel
+
+    def build_toolbar_dropdown(self, text, object_name):
+        button = QToolButton()
+        button.setObjectName(object_name)
+        button.setText(text)
+        button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(text, button)
+        button.setMenu(menu)
+        return button, menu
+
+    def build_robot_menu_panel(self):
+        panel = QWidget()
+        panel.setObjectName("robotMenuPanel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        self.controls.model_box.setMinimumWidth(180)
+        self.controls.model_box.setMaximumWidth(240)
+        layout.addWidget(self.controls.model_box)
+        return panel
+
+    def build_app_toolbar(self):
+        toolbar = QToolBar("App", self)
+        toolbar.setObjectName("appToolbar")
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
+        toolbar.setAllowedAreas(Qt.ToolBarArea.TopToolBarArea)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+
+        self.project_toolbar_button, self.project_toolbar_menu = (
+            self.build_toolbar_dropdown("Project", "projectToolbarButton")
+        )
+        self.new_project_action = self.project_toolbar_menu.addAction("New")
+        self.new_project_action.setObjectName("newProjectAction")
+        self.new_project_action.setToolTip("Create a GhostGUI project folder.")
+        self.new_project_action.triggered.connect(
+            lambda checked=False: self.on_new_project()
+        )
+        self.open_project_action = self.project_toolbar_menu.addAction("Open")
+        self.open_project_action.setObjectName("openProjectAction")
+        self.open_project_action.setToolTip("Show GhostGUI project previews.")
+        self.open_project_action.triggered.connect(
+            lambda checked=False: self.on_open_project()
+        )
+        self.save_project_action = self.project_toolbar_menu.addAction("Save")
+        self.save_project_action.setObjectName("saveProjectAction")
+        self.save_project_action.setToolTip("Save the current GhostGUI project.")
+        self.save_project_action.triggered.connect(
+            lambda checked=False: self.on_save_project()
+        )
+        self.project_toolbar_menu.addSeparator()
+        self.project_panel_action = QWidgetAction(self.project_toolbar_menu)
+        self.project_panel_action.setDefaultWidget(self.project_panel)
+        self.project_toolbar_menu.addAction(self.project_panel_action)
+        self.project_toolbar_button.setToolTip("No GhostGUI project is open.")
+        toolbar.addWidget(self.project_toolbar_button)
+        toolbar.addSeparator()
+
+        if hasattr(self.controls, "model_box"):
+            self.robot_toolbar_button, self.robot_toolbar_menu = (
+                self.build_toolbar_dropdown("Robot", "robotToolbarButton")
+            )
+            self.robot_menu_panel = self.build_robot_menu_panel()
+            self.robot_panel_action = QWidgetAction(self.robot_toolbar_menu)
+            self.robot_panel_action.setDefaultWidget(self.robot_menu_panel)
+            self.robot_toolbar_menu.addAction(self.robot_panel_action)
+            toolbar.addWidget(self.robot_toolbar_button)
+            toolbar.addSeparator()
+
+        self.import_toolbar_button, self.import_toolbar_menu = (
+            self.build_toolbar_dropdown("Import", "importToolbarButton")
+        )
+        if hasattr(self.controls, "import_action_box"):
+            self.import_actions = {}
+            for label, action_key in (
+                ("Model", "model"),
+                ("Qpos", "qpos"),
+                ("Trajectory", "trajectory"),
+            ):
+                action = self.import_toolbar_menu.addAction(label)
+                action.setObjectName(f"import{label}Action")
+                action.setData(action_key)
+                action.triggered.connect(
+                    lambda checked=False, key=action_key: (
+                        self.on_setup_import_requested(key)
+                    )
+                )
+                self.import_actions[action_key] = action
+            toolbar.addWidget(self.import_toolbar_button)
+
+        self.export_toolbar_button, self.export_toolbar_menu = (
+            self.build_toolbar_dropdown("Export", "exportToolbarButton")
+        )
+        if hasattr(self.controls, "export_action_box"):
+            self.export_actions = {}
+            for label, action_key in (
+                ("Qpos", "qpos"),
+                ("Trajectory", "trajectory"),
+            ):
+                action = self.export_toolbar_menu.addAction(label)
+                action.setObjectName(f"export{label}Action")
+                action.setData(action_key)
+                action.triggered.connect(
+                    lambda checked=False, key=action_key: (
+                        self.on_setup_export_requested(key)
+                    )
+                )
+                self.export_actions[action_key] = action
+            toolbar.addWidget(self.export_toolbar_button)
+            toolbar.addSeparator()
+
+        self.view_toolbar_button, self.view_toolbar_menu = (
+            self.build_toolbar_dropdown("View", "viewToolbarButton")
+        )
+        self.view_action_group = QActionGroup(self)
+        self.view_action_group.setExclusive(True)
+        self.view_actions = []
+
+        for index in range(self.viewer_tabs.count()):
+            action = QAction(self.viewer_tabs.tabText(index), self)
+            action.setCheckable(True)
+            action.setData(index)
+            action.triggered.connect(
+                lambda checked=False, tab_index=index: (
+                    self.viewer_tabs.setCurrentIndex(tab_index)
+                )
+            )
+            self.view_action_group.addAction(action)
+            self.view_toolbar_menu.addAction(action)
+            self.view_actions.append(action)
+
+        self.view_toolbar_menu.addSeparator()
+        self.controls.view_panel.setObjectName("toolbarViewPanel")
+        self.view_panel_action = QWidgetAction(self.view_toolbar_menu)
+        self.view_panel_action.setDefaultWidget(self.controls.view_panel)
+        self.view_toolbar_menu.addAction(self.view_panel_action)
+        self.viewer_tabs.currentChanged.connect(self.sync_view_toolbar_actions)
+        self.sync_view_toolbar_actions(self.viewer_tabs.currentIndex())
+
+        toolbar.addWidget(self.view_toolbar_button)
+        toolbar.addSeparator()
+        toolbar.addWidget(self.help_button)
+        return toolbar
+
+    def sync_view_toolbar_actions(self, active_index):
+        for index, action in enumerate(getattr(self, "view_actions", [])):
+            action.setChecked(index == active_index)
 
     # ============================================================
     # Build right status/debug panel
@@ -717,15 +841,23 @@ class RobotGuiMainWindow(QMainWindow):
     def update_project_panel(self):
         if self.current_project is None:
             self.project_name_label.setText("No project open")
+            self.project_name_label.setToolTip("No GhostGUI project is open.")
+            project_button = getattr(self, "project_toolbar_button", None)
+            if project_button is not None:
+                project_button.setToolTip("No GhostGUI project is open.")
             self.update_project_chrome()
             return
         name = self.current_project.project_name
         if self.project_dirty:
             name = f"{name} *"
-        lines = [name, str(self.current_project.root_dir)]
+        lines = [str(self.current_project.root_dir)]
         if self.project_dirty:
             lines.append("Unsaved changes")
-        self.project_name_label.setText("\n".join(lines))
+        self.project_name_label.setText(name)
+        self.project_name_label.setToolTip("\n".join(lines))
+        project_button = getattr(self, "project_toolbar_button", None)
+        if project_button is not None:
+            project_button.setToolTip("\n".join(lines))
         self.update_project_chrome()
 
     def recent_project_display_name(self, entry):
@@ -1260,18 +1392,20 @@ class RobotGuiMainWindow(QMainWindow):
             self.viewer_tabs.setCurrentIndex(active_view_index)
 
     def build_help_button(self):
-        button = QToolButton(self)
+        button = QToolButton()
         button.setObjectName("helpButton")
-        button.setText("?")
+        button.setText("Help")
         button.setToolTip("Open GhostGUI help center")
-        button.setFixedSize(30, 30)
+        button.setMinimumWidth(54)
+        button.setFixedHeight(28)
         button.clicked.connect(self.show_help_center)
-        button.raise_()
         return button
 
     def position_help_button(self):
         button = getattr(self, "help_button", None)
         if button is None:
+            return
+        if button.parentWidget() is not self:
             return
         margin = 10
         x = max(margin, self.width() - button.width() - margin)

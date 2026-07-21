@@ -550,7 +550,6 @@ class TrajectoryControlPanel(QGroupBox):
 
     def workflow_sections(self):
         return [
-            ("Setup", self.robot_panel, False),
             ("Target / Pose", self.target_panel, True),
             ("Time Slices", self.trajectory_panel, False),
         ]

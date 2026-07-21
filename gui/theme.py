@@ -272,6 +272,7 @@ def application_stylesheet(widget: QWidget | None = None) -> str:
         }}
     """
         + _section_stylesheet(theme)
+        + _toolbar_stylesheet(theme)
         + _quick_actions_stylesheet(theme)
         + _render_progress_stylesheet(theme)
         + _tutorial_card_stylesheet(theme)
@@ -301,7 +302,7 @@ class ThemeSynchronizer(QObject):
             QEvent.Type.PaletteChange,
         ):
             self.schedule_apply()
-        return super().eventFilter(watched, event)
+        return False
 
     def schedule_apply(self, *args) -> None:
         if self._pending:
@@ -364,6 +365,51 @@ def _section_stylesheet(theme: Theme) -> str:
 
 def section_stylesheet(widget: QWidget | None = None) -> str:
     return _section_stylesheet(current_theme(widget))
+
+
+def _toolbar_stylesheet(theme: Theme) -> str:
+    return f"""
+        QToolBar#appToolbar {{
+            background: {theme.sidebar_bg};
+            border: none;
+            border-bottom: 1px solid {theme.border};
+            spacing: 6px;
+            padding: 4px 6px;
+        }}
+        QToolBar#appToolbar::separator {{
+            background: {theme.border};
+            width: 1px;
+            margin: 4px 3px;
+        }}
+        QToolBar#appToolbar QToolButton {{
+            color: {theme.text};
+            background: {theme.elevated_bg};
+            border: 1px solid {theme.border};
+            border-radius: 4px;
+            padding: 4px 8px;
+        }}
+        QToolBar#appToolbar QToolButton:hover {{
+            color: {theme.section_header_hover_text};
+            background: {theme.section_header_hover_bg};
+            border-color: {theme.focus_border};
+        }}
+        QLabel#toolbarLabel {{
+            color: {theme.muted_text};
+        }}
+        QLabel#projectNameLabel {{
+            color: {theme.text};
+        }}
+        QWidget#toolbarViewPanel, QWidget#projectMenuPanel,
+        QWidget#robotMenuPanel {{
+            background: {theme.panel_bg};
+            color: {theme.text};
+            min-width: 230px;
+        }}
+    """
+
+
+def toolbar_stylesheet(widget: QWidget | None = None) -> str:
+    return _toolbar_stylesheet(current_theme(widget))
 
 
 def _quick_actions_stylesheet(theme: Theme) -> str:
@@ -460,7 +506,8 @@ def _help_button_stylesheet(theme: Theme) -> str:
             color: {theme.text};
             background: {theme.quick_panel_bg};
             border: 1px solid {theme.quick_panel_border};
-            border-radius: 15px;
+            border-radius: 4px;
+            padding: 4px 8px;
         }}
         QToolButton#helpButton:hover {{
             color: {theme.section_header_hover_text};
