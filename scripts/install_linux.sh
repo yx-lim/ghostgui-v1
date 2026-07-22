@@ -3,6 +3,13 @@ set -e
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+require_python_310() {
+    "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' || {
+        echo "GhostGUI requires Python 3.10 or newer. Found: $("$1" --version)"
+        exit 1
+    }
+}
+
 echo "Installing Linux system packages for GhostGUI..."
 sudo apt update
 sudo apt install -y \
@@ -15,6 +22,8 @@ sudo apt install -y \
     libxcb-cursor0 \
     libxcb-xinerama0 \
     libxcb-xinput0
+
+require_python_310 python3
 
 if [ ! -d ".venv" ]; then
     echo "Creating .venv..."

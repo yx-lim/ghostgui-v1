@@ -1,0 +1,130 @@
+schema_version: 1
+coordinator:
+  model: gpt-5.6-sol
+  delegation:
+    architecture: gpt-5.6-sol
+    bounded_implementation: gpt-5.6-terra
+    tests_and_fixtures: gpt-5.6-terra
+    deterministic_inventory_docs: gpt-5.6-luna
+policy:
+  execute_only_if_status: approved
+  stop_dependents_on_failed_acceptance: true
+  migration_policy: backward-compatible-v1-to-v2
+phases:
+  - id: baseline-audit
+    status: passed
+    depends_on: []
+    acceptance:
+      - installation scripts parse
+      - project create/open/autosave/recovery tests pass
+      - full unittest suite has no missing repository fixtures
+    evidence:
+      - QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -p 'test_robot_viewer_timeline.py' -v
+      - python3 -m unittest tests.test_mujoco_csv_player -v
+  - id: scene-domain
+    status: passed
+    depends_on: [baseline-audit]
+    acceptance:
+      - stable actor UUIDs
+      - actor names are display labels only
+      - actor-qualified robot and object tracks
+      - no visible behavior change for single-robot editing
+    files:
+      - core/scene/model.py
+      - core/scene/runtime.py
+      - tests/test_scene_model.py
+  - id: project-schema-v2
+    status: passed
+    depends_on: [scene-domain]
+    acceptance:
+      - new projects write data/scene.json
+      - v1 metadata migrates in memory
+      - legacy target trajectory remains available
+      - autosave can carry scene state
+    files:
+      - application/project_manager.py
+      - gui/main_window.py
+      - tests/test_scene_model.py
+  - id: one-robot-one-object
+    status: passed
+    depends_on: [project-schema-v2]
+    acceptance:
+      - one robot actor remains active for existing UI
+      - one primitive object actor can be added and rendered
+      - object actor persists through save/open
+    files:
+      - gui/main_window.py
+      - gui/viewers/robot_canvas_3d.py
+      - tests/test_scene_main_window.py
+  - id: multi-object-scene-tree
+    status: passed
+    depends_on: [one-robot-one-object]
+    acceptance:
+      - add object
+      - duplicate actor
+      - delete actor
+      - visibility toggle
+      - locking toggle
+    files:
+      - gui/main_window.py
+  - id: per-actor-tracks-undo-redo
+    status: passed
+    depends_on: [multi-object-scene-tree]
+    acceptance:
+      - robot target tracks are actor-qualified
+      - object transform tracks are actor-qualified
+      - scene state participates in undo/redo snapshots
+      - timeline selection is stored in scene/workspace
+    files:
+      - core/scene/model.py
+      - gui/main_window.py
+  - id: attachment-constraints
+    status: passed
+    depends_on: [per-actor-tracks-undo-redo]
+    acceptance:
+      - constraints reference actor_id plus frame_id
+      - actor deletion removes related constraints
+      - main window exposes attachment API
+      - attachment records compile as MuJoCo weld constraints
+    files:
+      - core/scene/model.py
+      - gui/main_window.py
+  - id: multi-robot-runtime-namespaces
+    status: passed
+    depends_on: [attachment-constraints]
+    acceptance:
+      - multiple robot actors can be represented in the scene without corrupting the editor robot
+      - runtime plan assigns deterministic namespaces
+      - composed MJCF namespaces robot bodies, joints, actuators, objects, meshes, and constraints
+      - composed scene can compile through MuJoCo
+      - bundled floating-base robots compile without wrapper-body or default-class collisions
+      - logical frame welds resolve through namespaced robot sites when adapter bindings are available
+    files:
+      - core/scene/runtime.py
+      - tests/test_scene_model.py
+  - id: import-mesh-object
+    status: passed
+    depends_on: [multi-robot-runtime-namespaces]
+    acceptance:
+      - Add Object still creates a primitive object actor
+      - Import Mesh copies OBJ/STL files into project-local assets/objects
+      - imported mesh actors store project-relative asset references
+      - imported mesh actors persist through scene serialization
+      - imported mesh actors render in the 3D canvas
+    files:
+      - application/scene_object_importer.py
+      - application/project_manager.py
+      - core/scene/mesh.py
+      - core/scene/model.py
+      - gui/main_window.py
+      - gui/robot_viewer_3d.py
+      - gui/viewers/robot_canvas_3d.py
+      - tests/test_scene_main_window.py
+      - tests/test_scene_model.py
+  - id: hardening
+    status: passed
+    depends_on: [import-mesh-object]
+    acceptance:
+      - focused scene tests pass
+      - existing project regression tests pass
+      - installers enforce Python >=3.10

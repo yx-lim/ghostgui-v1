@@ -11,16 +11,20 @@ import re
 import sys
 
 from application.paths import PROJECT_ROOT
+from application.scene_object_importer import import_object_mesh
+from core.scene import Scene
 
 
 PROJECT_FILENAME = "ghostgui_project.json"
-PROJECT_SCHEMA_VERSION = 1
+PROJECT_SCHEMA_VERSION = 2
+SUPPORTED_PROJECT_SCHEMA_VERSIONS = {1, 2}
 RECENT_PROJECTS_FILENAME = "recent_projects.json"
 PROJECTS_DIR_ENV = "GHOSTGUI_PROJECTS_DIR"
 PROJECTS_FOLDER_NAME = "projects"
 MAX_RECENT_PROJECTS = 10
 
 DEFAULT_PROJECT_FILES = {
+    "scene": "data/scene.json",
     "target_trajectory": "data/target_frames.json",
     "qpos_timeline": "data/qpos_timeline.npz",
     "workspace": "workspace/workspace.json",
@@ -30,6 +34,7 @@ DEFAULT_PROJECT_FILES = {
 
 DEFAULT_AUTOSAVE_FILES = {
     "manifest": "autosave/autosave_manifest.json",
+    "scene": "autosave/scene.autosave.json",
     "target_trajectory": "autosave/target_frames.autosave.json",
     "qpos_timeline": "autosave/qpos_timeline.autosave.npz",
     "workspace": "autosave/workspace.autosave.json",
@@ -65,6 +70,37 @@ def _json_safe(value):
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value]
     return str(value)
+
+
+def _copy_json_object(value):
+    return json.loads(json.dumps(value))
+
+
+def _ensure_project_file_defaults(metadata):
+    files = metadata.setdefault("files", {})
+    for key, value in DEFAULT_PROJECT_FILES.items():
+        files.setdefault(key, value)
+    autosave_files = metadata.setdefault("autosave_files", {})
+    for key, value in DEFAULT_AUTOSAVE_FILES.items():
+        autosave_files.setdefault(key, value)
+    return metadata
+
+
+def migrate_project_metadata(metadata):
+    metadata = _copy_json_object(metadata)
+    schema_version = int(metadata.get("schema_version", 0))
+    if schema_version not in SUPPORTED_PROJECT_SCHEMA_VERSIONS:
+        raise ValueError(f"Unsupported GhostGUI project schema: {schema_version}")
+    if schema_version == 1:
+        metadata["schema_version"] = PROJECT_SCHEMA_VERSION
+        application = metadata.setdefault("application", {})
+        application["project_format"] = "ghostgui.project.v2"
+        metadata.setdefault("migration", {})["from_schema_version"] = 1
+        metadata["migration"]["migrated_at"] = utc_now_iso()
+    metadata.setdefault("application", {})
+    metadata["application"].setdefault("name", "GhostGUI")
+    metadata["application"].setdefault("project_format", "ghostgui.project.v2")
+    return _ensure_project_file_defaults(metadata)
 
 
 def sanitized_project_folder_name(project_name):
@@ -313,6 +349,7 @@ def load_project_browser_previews(
 @dataclass(frozen=True)
 class ProjectPaths:
     project_file: Path
+    scene: Path
     target_trajectory: Path
     qpos_timeline: Path
     workspace: Path
@@ -323,6 +360,7 @@ class ProjectPaths:
 @dataclass(frozen=True)
 class AutosavePaths:
     manifest: Path
+    scene: Path
     target_trajectory: Path
     qpos_timeline: Path
     workspace: Path
@@ -344,7 +382,7 @@ class GhostGUIProject:
             "modified_at": now,
             "application": {
                 "name": "GhostGUI",
-                "project_format": "ghostgui.project.v1",
+                "project_format": "ghostgui.project.v2",
             },
             "robot": {
                 "model_key": model_key,
@@ -355,6 +393,9 @@ class GhostGUIProject:
         project = cls(root_dir=root_dir, metadata=metadata)
         project.ensure_directories()
         project.save_metadata(update_modified=False)
+        project.write_scene(
+            Scene.single_robot(model_key, model_name=model_name).to_dict()
+        )
         project.append_session_event(
             "project_created",
             {
@@ -371,11 +412,7 @@ class GhostGUIProject:
         project_file = path / PROJECT_FILENAME if path.is_dir() else path
         project_file = project_file.resolve()
         metadata = _read_json(project_file)
-        schema_version = int(metadata.get("schema_version", 0))
-        if schema_version != PROJECT_SCHEMA_VERSION:
-            raise ValueError(
-                f"Unsupported GhostGUI project schema: {schema_version}"
-            )
+        metadata = migrate_project_metadata(metadata)
         return cls(root_dir=project_file.parent, metadata=metadata)
 
     @property
@@ -394,6 +431,7 @@ class GhostGUIProject:
     def paths(self):
         return ProjectPaths(
             project_file=self.project_file,
+            scene=self.resolve_file("scene"),
             target_trajectory=self.resolve_file("target_trajectory"),
             qpos_timeline=self.resolve_file("qpos_timeline"),
             workspace=self.resolve_file("workspace"),
@@ -405,6 +443,7 @@ class GhostGUIProject:
     def autosave_paths(self):
         return AutosavePaths(
             manifest=self.resolve_autosave_file("manifest"),
+            scene=self.resolve_autosave_file("scene"),
             target_trajectory=self.resolve_autosave_file("target_trajectory"),
             qpos_timeline=self.resolve_autosave_file("qpos_timeline"),
             workspace=self.resolve_autosave_file("workspace"),
@@ -431,6 +470,7 @@ class GhostGUIProject:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         for path in self.autosave_paths.__dict__.values():
             Path(path).parent.mkdir(parents=True, exist_ok=True)
+        (self.root_dir / "assets" / "objects").mkdir(parents=True, exist_ok=True)
         (self.root_dir / "exports").mkdir(parents=True, exist_ok=True)
         (self.root_dir / "logs").mkdir(parents=True, exist_ok=True)
 
@@ -489,6 +529,54 @@ class GhostGUIProject:
         )
         return _read_json(path)
 
+    def write_scene(self, scene):
+        if hasattr(scene, "to_dict"):
+            scene = scene.to_dict()
+        _write_json(self.paths.scene, scene)
+
+    def read_scene_dict(self, autosave=False):
+        path = self.autosave_paths.scene if autosave else self.paths.scene
+        try:
+            return _read_json(path)
+        except FileNotFoundError:
+            if autosave:
+                raise
+            return self.legacy_scene_dict()
+
+    def legacy_scene_dict(self):
+        trajectory_data = None
+        workspace = None
+        try:
+            trajectory_data = self.read_trajectory_dict()
+        except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+        try:
+            workspace = self.read_workspace()
+        except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+        robot = self.metadata.get("robot", {})
+        return Scene.from_legacy(
+            robot.get("model_key", self.model_key),
+            model_name=robot.get("model_name", self.model_key),
+            trajectory_data=trajectory_data,
+            workspace=workspace,
+        ).to_dict()
+
+    def import_object_mesh(self, source_path):
+        self.ensure_directories()
+        imported = import_object_mesh(source_path, self.root_dir)
+        self.append_session_event(
+            "object_mesh_imported",
+            {
+                "asset_path": imported.asset_path,
+                "source_name": imported.source_name,
+                "mesh_format": imported.mesh_format,
+                "vertex_count": imported.vertex_count,
+                "face_count": imported.face_count,
+            },
+        )
+        return imported
+
     def save_qpos_timeline(self, timeline):
         timeline.save_npz(self.paths.qpos_timeline)
 
@@ -513,8 +601,11 @@ class GhostGUIProject:
         workspace_state,
         model_key,
         model_name=None,
+        scene=None,
     ):
         self.ensure_directories()
+        if scene is not None:
+            _write_json(self.autosave_paths.scene, scene)
         _write_json(self.autosave_paths.target_trajectory, trajectory.to_project_dict())
         timeline.save_npz(self.autosave_paths.qpos_timeline)
         _write_json(self.autosave_paths.workspace, workspace_state)
@@ -552,9 +643,17 @@ class GhostGUIProject:
         if not self.autosave_exists():
             return False
         try:
+            autosave_paths = [
+                self.autosave_paths.manifest,
+                self.autosave_paths.target_trajectory,
+                self.autosave_paths.qpos_timeline,
+                self.autosave_paths.workspace,
+            ]
+            if self.autosave_paths.scene.exists():
+                autosave_paths.append(self.autosave_paths.scene)
             autosave_mtime = max(
                 path.stat().st_mtime
-                for path in self.autosave_paths.__dict__.values()
+                for path in autosave_paths
             )
             saved_mtime = max(
                 path.stat().st_mtime

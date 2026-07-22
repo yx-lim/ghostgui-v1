@@ -590,6 +590,29 @@ class RobotStateTimeline:
         self.states[key] = qpos.copy()
         return qpos
 
+    def sample_state(self, time, fallback_qpos=None):
+        """Return the state at ``time`` without inserting an interpolated keyframe."""
+        key = self.time_key(time)
+        existing = self.states.get(key)
+        if existing is not None:
+            return existing.copy()
+
+        times = sorted(self.states)
+        lower = max((value for value in times if value < key), default=None)
+        upper = min((value for value in times if value > key), default=None)
+        if lower is not None and upper is not None:
+            fraction = (key - lower) / (upper - lower)
+            return self._interpolate(
+                self.states[lower], self.states[upper], fraction
+            )
+        if lower is not None:
+            return self.states[lower].copy()
+        if upper is not None:
+            return self.states[upper].copy()
+        if fallback_qpos is not None:
+            return np.asarray(fallback_qpos, dtype=float).copy()
+        return self.robot_model.home_qpos.copy()
+
     def _interpolate(self, start, end, fraction):
         # MuJoCo's position manifold helpers correctly interpolate free-joint
         # quaternions instead of linearly blending their four components.

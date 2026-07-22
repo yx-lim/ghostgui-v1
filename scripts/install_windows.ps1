@@ -12,6 +12,13 @@ if (Get-Command py -ErrorAction SilentlyContinue) {
     Write-Error "Python was not found. Install Python 3.10 or newer and re-run this script."
 }
 
+$PythonVersion = & $PythonExe @PythonArgs -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"
+& $PythonExe @PythonArgs -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "GhostGUI requires Python 3.10 or newer. Found Python $PythonVersion."
+}
+Write-Host "Using Python $PythonVersion."
+
 if (-not (Test-Path ".venv")) {
     Write-Host "Creating .venv..."
     & $PythonExe @PythonArgs -m venv .venv

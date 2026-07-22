@@ -260,6 +260,92 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertTrue(self.viewer.preview_active)
         self.assertTrue(self.viewer.canvas.preview_visible)
 
+    def test_sequential_limb_drags_remain_pinned_until_slice_acceptance(self):
+        left = self.viewer.frame_bindings["left_hand"]
+        right = self.viewer.frame_bindings["right_hand"]
+        committed_left, _ = self.viewer.committed_state.get_body_pose(
+            left[1], left[0]
+        )
+        committed_right, _ = self.viewer.committed_state.get_body_pose(
+            right[1], right[0]
+        )
+
+        self.viewer.select_target(*left, emit=False)
+        self.viewer._set_target_to_selected_pose()
+        left_position = self.viewer.last_valid_target_position.copy()
+        left_quaternion = self.viewer.last_valid_target_quaternion.copy()
+        self.viewer._on_transform_moved(
+            left_position + np.array([0.04, 0.03, 0.0]),
+            left_quaternion,
+        )
+        pinned_left, _ = self.viewer.preview_state.get_body_pose(left[1], left[0])
+
+        self.viewer.select_target(*right, emit=False)
+        self.viewer._set_target_to_selected_pose()
+        right_position = self.viewer.last_valid_target_position.copy()
+        right_quaternion = self.viewer.last_valid_target_quaternion.copy()
+        self.viewer._on_transform_moved(
+            right_position + np.array([0.04, -0.03, 0.0]),
+            right_quaternion,
+        )
+
+        final_left, _ = self.viewer.preview_state.get_body_pose(left[1], left[0])
+        final_right, _ = self.viewer.preview_state.get_body_pose(right[1], right[0])
+        tolerance = self.viewer.ik_position_tolerance.value()
+        self.assertEqual(
+            set(self.viewer.pinned_frame_targets),
+            {"left_hand", "right_hand"},
+        )
+        self.assertLessEqual(np.linalg.norm(final_left - pinned_left), tolerance)
+        self.assertGreater(np.linalg.norm(final_left - committed_left), 0.02)
+        self.assertGreater(np.linalg.norm(final_right - committed_right), 0.02)
+        preview_qpos = self.viewer.preview_state.get_qpos()
+
+        self.viewer.accept_timeslice()
+
+        self.assertFalse(self.viewer.preview_active)
+        self.assertEqual(self.viewer.pinned_frame_targets, {})
+        np.testing.assert_allclose(
+            self.viewer.state_timeline.get_state(0.0),
+            preview_qpos,
+        )
+        targets = self.window.trajectory.targets_at_time(0.0)
+        np.testing.assert_allclose(
+            [targets["left_hand"].x, targets["left_hand"].y, targets["left_hand"].z],
+            final_left,
+        )
+        np.testing.assert_allclose(
+            [
+                targets["right_hand"].x,
+                targets["right_hand"].y,
+                targets["right_hand"].z,
+            ],
+            final_right,
+        )
+
+    def test_preview_pin_lifecycle_clears_on_cancel_and_time_change(self):
+        binding = self.viewer.frame_bindings["left_hand"]
+        self.viewer.select_target(*binding, emit=False)
+        self.viewer._set_target_to_selected_pose()
+        position = self.viewer.last_valid_target_position.copy()
+        quaternion = self.viewer.last_valid_target_quaternion.copy()
+        self.viewer._on_transform_moved(
+            position + np.array([0.02, 0.0, 0.0]),
+            quaternion,
+        )
+        self.assertEqual(set(self.viewer.pinned_frame_targets), {"left_hand"})
+
+        self.viewer.cancel_preview()
+        self.assertEqual(self.viewer.pinned_frame_targets, {})
+
+        self.viewer._on_transform_moved(
+            position + np.array([0.02, 0.0, 0.0]),
+            quaternion,
+        )
+        self.assertEqual(set(self.viewer.pinned_frame_targets), {"left_hand"})
+        self.viewer.set_current_time(0.2)
+        self.assertEqual(self.viewer.pinned_frame_targets, {})
+
     def test_cancel_discards_preview_without_touching_committed(self):
         before = self.viewer.committed_state.get_qpos()
         name = self.viewer.preview_state.get_joint_names()[-1]
@@ -929,11 +1015,12 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertEqual(
             right_titles,
-            ["Selected Object", "IK / Constraints", "Status"],
+            ["Scene", "Selected Object", "IK / Constraints", "Status"],
         )
         expected_visible = {
             "Target / Pose": True,
             "Time Slices": False,
+            "Scene": True,
             "Selected Object": False,
             "IK / Constraints": False,
             "Status": True,
@@ -1106,11 +1193,11 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.timeslice_context_panel,
         )
         self.assertIs(
-            self.window.right_sidebar_content.sections[0].content,
+            self.window.right_sidebar_content.sections[1].content,
             self.window.controls.selection_detail_panel,
         )
         self.assertIs(
-            self.window.right_sidebar_content.sections[1].content,
+            self.window.right_sidebar_content.sections[2].content,
             self.window.controls.preview_ik_panel,
         )
         self.assertIs(

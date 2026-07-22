@@ -14,10 +14,17 @@ class RobotModelSession:
     viewer_2d_skeleton: object
     trajectory: object
     active_index: int = -1
+    actor_id: str | None = None
+    model_key: str | None = None
+    selected_frame: str | None = None
 
 
-def remember_current_session(model_sessions, model_key, trajectory, active_index):
-    current = model_sessions.get(model_key)
+def session_key(actor_id, model_key):
+    return str(actor_id), str(model_key)
+
+
+def remember_current_session(model_sessions, key, trajectory, active_index):
+    current = model_sessions.get(key)
     if current is not None:
         current.trajectory = trajectory
         current.active_index = active_index

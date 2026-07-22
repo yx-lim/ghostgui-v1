@@ -42,6 +42,8 @@ from core.ik import (
     JointRegularizationTask,
     PostureTask,
     RootPoseTask,
+    TCPOrientationTask,
+    TCPPositionTask,
 )
 from .widgets.compact import compact_combo as _compact_combo
 from .widgets.compact import compact_spinbox as _compact_spinbox
@@ -68,12 +70,23 @@ class PreviewPathValidation:
     failed_index: int | None = None
 
 
+@dataclass
+class PinnedFrameTarget:
+    kind: str
+    name: str
+    position: np.ndarray
+    quaternion: np.ndarray | None = None
+
+
 class RobotViewer3D(QWidget):
     """Live FK/IK/trajectory viewer. It preserves the old canvas contract."""
 
     target_dragged = Signal(float, float)
     target_pose_dragged = Signal(float, float, float, float, float, float)
     target_pose_drag_finished = Signal(float, float, float, float, float, float)
+    scene_actor_transform_dragged = Signal(str, object, object)
+    scene_actor_transform_drag_finished = Signal(str, object, object)
+    scene_robot_body_double_clicked = Signal(str, str)
     target_frame_changed = Signal(str)
     preview_cancelled = Signal()
     trajectory_csv_loaded = Signal(str)
@@ -132,6 +145,7 @@ class RobotViewer3D(QWidget):
             )
         }
         self.preview_reference_qpos = None
+        self.pinned_frame_targets = {}
         self.foot_lock_targets = {}
         self.root_lock_target = None
         self._last_ik_status = None
@@ -142,6 +156,15 @@ class RobotViewer3D(QWidget):
         self.canvas.target_transform_dragged.connect(self._on_transform_moved)
         self.canvas.transform_drag_finished.connect(
             self._on_transform_drag_finished
+        )
+        self.canvas.scene_actor_transform_dragged.connect(
+            self.scene_actor_transform_dragged.emit
+        )
+        self.canvas.scene_actor_transform_drag_finished.connect(
+            self.scene_actor_transform_drag_finished.emit
+        )
+        self.canvas.scene_robot_body_double_clicked.connect(
+            self.scene_robot_body_double_clicked.emit
         )
         self.canvas.transform_drag_cancel_requested.connect(
             self._on_transform_cancel_requested
@@ -274,6 +297,7 @@ class RobotViewer3D(QWidget):
         preview_ik_layout.setSpacing(4)
 
         preview_group = QWidget()
+        self.preview_ik_group = preview_group
         preview_layout = QVBoxLayout(preview_group)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         self.plan_preview_button = QPushButton("Plan Preview")
@@ -382,6 +406,23 @@ class RobotViewer3D(QWidget):
         preview_group.setEnabled(enabled)
         self.quick_actions_panel.setEnabled(enabled)
         self.timeslice_editor.setEnabled(enabled)
+
+    def set_editing_enabled(self, enabled):
+        enabled = bool(enabled and self.robot_state is not None)
+        self.editing_enabled = enabled
+        for widget in (
+            self.load_qpos_button,
+            self.load_trajectory_button,
+            self.trajectory_import_dt,
+            self.save_qpos_button,
+            self.save_trajectory_button,
+            self.selection_context_panel,
+            self.timeslice_context_panel,
+            self.preview_ik_group,
+            self.quick_actions_panel,
+            self.timeslice_editor,
+        ):
+            widget.setEnabled(enabled)
 
     def _build_canvas_workspace(self):
         self.canvas_workspace = QWidget()
@@ -858,18 +899,32 @@ class RobotViewer3D(QWidget):
         self,
         trajectory,
         active_frame=None,
+        scene=None,
         show_trajectory_lines=True,
         trajectory_smoothing=0.0,
         show_keyframes=True,
+        scene_asset_root=None,
+        scene_edit_actor_id=None,
+        scene_robot_adapters=None,
+        scene_edit_target=None,
+        active_robot_actor_id=None,
+        scene_robot_states=None,
     ):
         # The live gizmo owns its quaternion while editing. Ordinary status
         # refreshes must not reset an in-progress ring rotation from controls.
         self.canvas.update_scene(
             trajectory,
             None,
+            scene=scene,
             show_trajectory_lines=show_trajectory_lines,
             trajectory_smoothing=trajectory_smoothing,
             show_keyframes=show_keyframes,
+            scene_asset_root=scene_asset_root,
+            scene_edit_actor_id=scene_edit_actor_id,
+            scene_robot_adapters=scene_robot_adapters,
+            scene_edit_target=scene_edit_target,
+            active_robot_actor_id=active_robot_actor_id,
+            scene_robot_states=scene_robot_states,
         )
         if active_frame is not None:
             binding = self.frame_bindings.get(active_frame.frame_name)
@@ -1063,6 +1118,30 @@ class RobotViewer3D(QWidget):
                 reference_qpos=self.robot_model.home_qpos,
             ))
         selected = self.reverse_bindings.get(self._selected_target())
+        for logical, target in self.pinned_frame_targets.items():
+            if logical == selected:
+                continue
+            tasks.append(TCPPositionTask(
+                name=f"Hold {logical} position",
+                weight=1.0,
+                priority=1,
+                required=True,
+                tolerance=self.ik_position_tolerance.value(),
+                object_name=target.name,
+                kind=target.kind,
+                target_position=target.position,
+            ))
+            if target.quaternion is not None:
+                tasks.append(TCPOrientationTask(
+                    name=f"Hold {logical} orientation",
+                    weight=0.25,
+                    priority=1,
+                    required=True,
+                    tolerance=self.ik_orientation_tolerance.value(),
+                    object_name=target.name,
+                    kind=target.kind,
+                    target_quaternion=target.quaternion,
+                ))
         foot_enabled, foot_weight = self._task_setting("foot_lock")
         if foot_enabled and foot_weight > 0.0:
             for logical, (kind, name, position, _) in self.foot_lock_targets.items():
@@ -1091,10 +1170,54 @@ class RobotViewer3D(QWidget):
         if not self.robot_state or self.preview_active:
             return
         self.preview_state.set_qpos(self.committed_state.get_qpos())
+        self.clear_pinned_frame_targets()
         self._capture_secondary_targets()
         self.preview_active = True
         self.canvas.set_preview_visible(True)
         self._update_root_pose_label()
+
+    def clear_pinned_frame_targets(self):
+        self.pinned_frame_targets.clear()
+
+    def _pin_selected_frame_target(
+        self,
+        kind,
+        name,
+        position,
+        quaternion,
+        preserve_orientation=False,
+    ):
+        logical = self.reverse_bindings.get((kind, name))
+        if logical is None:
+            return
+        existing = self.pinned_frame_targets.get(logical)
+        keep_orientation = preserve_orientation or (
+            existing is not None and existing.quaternion is not None
+        )
+        self.pinned_frame_targets[logical] = PinnedFrameTarget(
+            kind=kind,
+            name=name,
+            position=np.asarray(position, dtype=float).copy(),
+            quaternion=(
+                np.asarray(quaternion, dtype=float).copy()
+                if keep_orientation else None
+            ),
+        )
+
+    def _target_orientation_changed(self, proposed_quaternion):
+        if self.last_valid_target_quaternion is None:
+            return False
+        previous = np.asarray(self.last_valid_target_quaternion, dtype=float)
+        proposed = np.asarray(proposed_quaternion, dtype=float)
+        previous_norm = float(np.linalg.norm(previous))
+        proposed_norm = float(np.linalg.norm(proposed))
+        if previous_norm <= 1e-12 or proposed_norm <= 1e-12:
+            return False
+        alignment = abs(float(np.dot(
+            previous / previous_norm,
+            proposed / proposed_norm,
+        )))
+        return alignment < 1.0 - 1e-6
 
     def _on_transform_moved(self, position, quaternion):
         kind, name = self._selected_target()
@@ -1109,6 +1232,7 @@ class RobotViewer3D(QWidget):
             self.last_valid_target_position = current_position
             self.last_valid_target_quaternion = current_quaternion
 
+        orientation_changed = self._target_orientation_changed(quaternion)
         secondary_tasks = self._secondary_ik_tasks()
         tcp_position_enabled, tcp_position_weight = self._task_setting(
             "tcp_position"
@@ -1146,6 +1270,13 @@ class RobotViewer3D(QWidget):
             self.preview_state.set_qpos(result.qpos)
             self.last_valid_target_position = result.position.copy()
             self.last_valid_target_quaternion = result.quaternion.copy()
+            self._pin_selected_frame_target(
+                kind,
+                name,
+                result.position,
+                result.quaternion,
+                preserve_orientation=orientation_changed,
+            )
 
         # Whether fully accepted, clamped, or rejected, snap the handle back to
         # the last collision-free pose rather than displaying an invalid target.
@@ -1305,6 +1436,7 @@ class RobotViewer3D(QWidget):
         self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
+        self.clear_pinned_frame_targets()
         self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
@@ -1324,6 +1456,7 @@ class RobotViewer3D(QWidget):
             return
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
+        self.clear_pinned_frame_targets()
         self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
@@ -1369,6 +1502,7 @@ class RobotViewer3D(QWidget):
         self.committed_state.set_qpos(qpos)
         self.preview_state.set_qpos(qpos)
         self.preview_active = False
+        self.clear_pinned_frame_targets()
         self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
@@ -1411,6 +1545,7 @@ class RobotViewer3D(QWidget):
         self.committed_state.reset_to_default()
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
+        self.clear_pinned_frame_targets()
         self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
@@ -1798,9 +1933,19 @@ class RobotViewer3D(QWidget):
         if not self.robot_trajectory:
             return
         index = max(0, min(len(self.robot_trajectory) - 1, int(index)))
+        if index < len(self.robot_trajectory_times):
+            self.current_time = float(self.robot_trajectory_times[index])
+            if self.state_timeline is not None:
+                self.current_time = self.state_timeline.time_key(self.current_time)
+            self._set_timeslice_widgets(self.current_time)
+            scene = getattr(self.canvas, "scene", None)
+            if scene is not None:
+                scene.timeline.current_time = self.current_time
+            self._update_timeline_label()
         self.committed_state.set_qpos(self.robot_trajectory[index])
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
+        self.clear_pinned_frame_targets()
         self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
