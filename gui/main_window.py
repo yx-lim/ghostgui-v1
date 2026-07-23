@@ -13,6 +13,7 @@ Updated project flow:
 """
 
 import copy
+import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -59,6 +60,7 @@ from core.trajectory import (
 )
 from core.scene import Scene, SceneRuntime, Transform, TransformKeyframe
 from application import model_sessions, timeslice_service, trajectory_generation
+from application.model_resources import ModelResourcePool
 from application.project_manager import (
     GhostGUIProject,
     available_default_project_root_from_name,
@@ -93,6 +95,7 @@ RIGHT_SIDEBAR_WIDTH = 270
 INITIAL_RENDER_PROGRESS_DELAY_MS = 500
 PROJECT_AUTOSAVE_INTERVAL_MS = 30000
 MAX_HISTORY_DEPTH = 100
+MODEL_IO_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -261,11 +264,36 @@ class ModelLoadThread(QThread):
 
     def run(self):
         try:
-            adapter = MuJoCoRobotAdapter(self.model_info or self.model_key)
+            with MODEL_IO_LOCK:
+                adapter = MuJoCoRobotAdapter(self.model_info or self.model_key)
         except Exception as exc:
             self.failed.emit(self.model_key, str(exc))
             return
         self.loaded.emit(self.model_key, adapter)
+
+
+class ModelImportThread(QThread):
+    imported = Signal(object)
+    failed = Signal(str, bool)
+
+    def __init__(self, source_path, library_root, mesh_roots=None, parent=None):
+        super().__init__(parent)
+        self.source_path = source_path
+        self.library_root = library_root
+        self.mesh_roots = list(mesh_roots or [])
+
+    def run(self):
+        try:
+            with MODEL_IO_LOCK:
+                info = import_robot_model(
+                    self.source_path,
+                    self.library_root,
+                    mesh_roots=self.mesh_roots,
+                )
+        except Exception as exc:
+            self.failed.emit(str(exc), isinstance(exc, RuntimeError))
+            return
+        self.imported.emit(info)
 
 
 class RobotGuiMainWindow(QMainWindow):
@@ -291,7 +319,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.register_model_info(info)
         self.import_mesh_folder = None
         self._scene_runtime_model_path_cache = {}
-        self._scene_robot_adapter_cache = {}
+        self.model_resources = ModelResourcePool()
         self._scene_robot_state_cache = {}
         self._scene_robot_timeline_cache = {}
         self.model_key = model_key
@@ -325,6 +353,7 @@ class RobotGuiMainWindow(QMainWindow):
                         f"Fallback g1 also failed: {fallback_exc}"
                     )
         if self.robot_model_3d is not None:
+            self.robot_model_3d = self.model_resources.register(self.robot_model_3d)
             self.setWindowTitle(
                 f"Reference Frame Trajectory GUI — {self.robot_model_3d.model_name}"
             )
@@ -364,6 +393,10 @@ class RobotGuiMainWindow(QMainWindow):
             robot_model=self.robot_model_3d,
             error=self.robot_model_error,
         )
+        # Release B owns exactly one OpenGL widget. Actor/model sessions retain
+        # editor and timeline state, then bind that state to this canvas when
+        # activated.
+        self.shared_scene_canvas = self.viewer_3d.canvas
         self.viewer_2d_stickman = Stickman2DViewer(self.robot_model_3d)
         self.viewer_3d_mujoco = Mujoco3DViewerPanel(self.robot_model_3d)
         initial_session = model_sessions.RobotModelSession(
@@ -384,6 +417,13 @@ class RobotGuiMainWindow(QMainWindow):
         }
         self.model_loaders = {}
         self._model_loader_actor_ids = {}
+        self._pending_scene_robot_loads = {}
+        self._pending_added_robot_ids = set()
+        self.model_importer = None
+        self._model_import_retry_prompted = False
+        self._close_confirmed = False
+        self._close_when_workers_finish = False
+        self._background_workers = set()
         self.current_project = None
         self._pending_project_restore = None
         self._pending_project_restore_autosave = False
@@ -769,10 +809,35 @@ class RobotGuiMainWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
-        if not self.confirm_project_transition("close GhostGUI"):
+        if (
+            not self._close_confirmed
+            and not self.confirm_project_transition("close GhostGUI")
+        ):
             event.ignore()
             return
+        self._close_confirmed = True
+        workers = [worker for worker in self._background_workers if worker.isRunning()]
+        if workers:
+            event.ignore()
+            self._close_when_workers_finish = True
+            self.statusBar().showMessage(
+                "Finishing background model work before closing…"
+            )
+            return
         super().closeEvent(event)
+
+    def _close_after_workers_finish(self):
+        if not self._close_when_workers_finish:
+            return
+        workers = [worker for worker in self._background_workers if worker.isRunning()]
+        if workers:
+            return
+        self._close_when_workers_finish = False
+        QTimer.singleShot(0, self.close)
+
+    def _background_worker_finished(self, worker):
+        self._background_workers.discard(worker)
+        self._close_after_workers_finish()
 
     def on_autosave_timer(self):
         try:
@@ -1030,13 +1095,20 @@ class RobotGuiMainWindow(QMainWindow):
         actor.world_transform = Transform(
             position=(0.80 * float(offset_index), 0.0, 0.0)
         )
-        try:
+        self._pending_added_robot_ids.add(actor.id)
+        model_info = self.model_registry.get(model_key)
+        adapter = self.model_resources.get(model_info=model_info)
+        if adapter is not None:
+            self.create_robot_actor_session(actor, adapter, model_key=model_key)
+            self._pending_added_robot_ids.discard(actor.id)
             self.select_scene_actor(actor.id)
-        except ValueError as exc:
-            self.scene.select_actor(actor.id)
-            self.refresh_display(apply_stickman_frame=False)
-            self.status_text.append(str(exc))
-        self.record_history_action("Add robot actor")
+            self.record_history_action("Add robot actor")
+            return actor
+
+        self.scene.select_actor(actor.id)
+        self._pending_scene_robot_loads[actor.id] = str(model_key)
+        self.refresh_display(apply_stickman_frame=False)
+        self.request_scene_robot_load(actor)
         return actor
 
     def duplicate_scene_actor(self, actor_id):
@@ -1059,6 +1131,8 @@ class RobotGuiMainWindow(QMainWindow):
         if deleting_editor:
             self.sync_current_robot_session()
         actor = self.scene.delete_actor(actor_id)
+        self._pending_scene_robot_loads.pop(actor.id, None)
+        self._pending_added_robot_ids.discard(actor.id)
         if deleting_editor:
             replacement = self.scene.active_robot()
             if replacement is not None:
@@ -1125,7 +1199,14 @@ class RobotGuiMainWindow(QMainWindow):
         adapter = self.scene_robot_adapter(actor)
         if adapter is None:
             reference = actor.model_reference or {}
-            return reference.get("model_path")
+            model_key = reference.get("model_key")
+            model_info = self.model_registry.get(model_key)
+            model_path = reference.get("model_path") or getattr(
+                model_info, "model_path", None
+            )
+            if model_path is None:
+                raise ValueError(f"Robot actor {actor.name!r} is still loading.")
+            return str(model_path)
         return {
             "runtime_model_path": adapter.runtime_model_path,
             "logical_frame_bindings": dict(adapter.logical_frame_bindings),
@@ -1139,19 +1220,8 @@ class RobotGuiMainWindow(QMainWindow):
             model_path = reference.get("model_path")
             if not model_path:
                 return None
-            cache_key = ("path", str(Path(model_path).expanduser().resolve()))
-            if cache_key not in self._scene_robot_adapter_cache:
-                self._scene_robot_adapter_cache[cache_key] = (
-                    MuJoCoRobotAdapter.load_model(model_path)
-                )
-            return self._scene_robot_adapter_cache[cache_key]
-        cache_key = (
-            str(model_info.key),
-            str(Path(model_info.model_path).expanduser().resolve()),
-        )
-        if cache_key not in self._scene_robot_adapter_cache:
-            self._scene_robot_adapter_cache[cache_key] = MuJoCoRobotAdapter(model_info)
-        return self._scene_robot_adapter_cache[cache_key]
+            return self.model_resources.get(model_path=model_path)
+        return self.model_resources.get(model_info=model_info)
 
     def robot_actor_model_key(self, actor):
         reference = actor.model_reference or {}
@@ -1166,15 +1236,40 @@ class RobotGuiMainWindow(QMainWindow):
 
         adapter = self.scene_robot_adapter(actor)
         if adapter is None:
-            raise ValueError(f"Robot actor {actor.name!r} has no loadable model.")
+            self.request_scene_robot_load(actor)
+            return None
+        return self.create_robot_actor_session(actor, adapter, model_key=model_key)
+
+    def create_robot_actor_session(
+        self,
+        actor,
+        adapter,
+        model_key=None,
+        trajectory=None,
+        load_scene_timeline=True,
+    ):
+        model_key = str(model_key or self.robot_actor_model_key(actor))
+        key = model_sessions.session_key(actor.id, model_key)
+        existing = self.model_sessions.get(key)
+        if existing is not None:
+            return existing
         backend = BackendInterface(mj_model=adapter.mj_model, adapter=adapter)
         reference = MujocoReferenceFrames(adapter=adapter)
-        viewer_3d = RobotViewer3D(adapter, adapter.load_warning)
+        viewer_3d = RobotViewer3D(
+            adapter,
+            adapter.load_warning,
+            create_canvas=False,
+        )
+        detail_index = viewer_3d.secondary_detail_box.findData(
+            self.shared_scene_canvas.secondary_robot_detail
+        )
+        if detail_index >= 0:
+            viewer_3d.secondary_detail_box.setCurrentIndex(detail_index)
         viewer_2d_skeleton = Stickman2DViewer(adapter)
         self.connect_model_viewer_signals(viewer_3d, viewer_2d_skeleton)
         self.viewer_3d_stack.addWidget(viewer_3d)
         self.viewer_2d_skeleton_stack.addWidget(viewer_2d_skeleton)
-        trajectory = self.scene.tracks.robot_trajectory(actor.id)
+        trajectory = trajectory or self.scene.tracks.robot_trajectory(actor.id)
         session = model_sessions.RobotModelSession(
             adapter=adapter,
             backend=backend,
@@ -1187,10 +1282,11 @@ class RobotGuiMainWindow(QMainWindow):
             model_key=model_key,
             selected_frame=actor.metadata.get("selected_frame"),
         )
-        self.scene.tracks.load_robot_qpos_timeline(
-            actor.id,
-            viewer_3d.state_timeline,
-        )
+        if load_scene_timeline:
+            self.scene.tracks.load_robot_qpos_timeline(
+                actor.id,
+                viewer_3d.state_timeline,
+            )
         current_time = float(self.scene.timeline.current_time)
         if viewer_3d.state_timeline is not None:
             qpos = viewer_3d.state_timeline.ensure_state(current_time)
@@ -1198,6 +1294,52 @@ class RobotGuiMainWindow(QMainWindow):
             viewer_3d.set_robot_state_for_current_time(qpos)
         self.model_sessions[key] = session
         return session
+
+    def request_scene_robot_load(self, actor):
+        if actor is None or actor.kind != "robot":
+            return None
+        if self.scene.actors.get(actor.id) is None:
+            return None
+        model_key = self.robot_actor_model_key(actor)
+        model_info = self.model_registry.get(model_key)
+        if model_info is None:
+            self.on_model_load_failed(
+                model_key,
+                f"Robot actor {actor.name!r} has no registered model.",
+                actor_ids={actor.id},
+            )
+            return None
+
+        adapter = self.model_resources.get(model_info=model_info)
+        if adapter is not None:
+            session = self.create_robot_actor_session(
+                actor, adapter, model_key=model_key
+            )
+            self._pending_scene_robot_loads.pop(actor.id, None)
+            return session
+
+        self._pending_scene_robot_loads[actor.id] = model_key
+        if model_key in self.model_loaders:
+            self._model_loader_actor_ids.setdefault(model_key, set()).add(actor.id)
+            return self.model_loaders[model_key]
+
+        self.begin_render_progress(
+            f"Loading {model_info.display_name}",
+            "Loading robot model data in the background...",
+        )
+        self.statusBar().showMessage(f"Loading {model_info.display_name}…")
+        loader = ModelLoadThread(model_key, model_info, self)
+        loader.loaded.connect(self.on_model_loaded)
+        loader.failed.connect(self.on_model_load_failed)
+        self._background_workers.add(loader)
+        loader.finished.connect(
+            lambda loader=loader: self._background_worker_finished(loader)
+        )
+        loader.finished.connect(loader.deleteLater)
+        self.model_loaders[model_key] = loader
+        self._model_loader_actor_ids[model_key] = {actor.id}
+        loader.start()
+        return loader
 
     def scene_robot_render_states(self):
         states = {}
@@ -1224,6 +1366,7 @@ class RobotGuiMainWindow(QMainWindow):
             if state is None:
                 adapter = self.scene_robot_adapter(actor)
                 if adapter is None:
+                    self.request_scene_robot_load(actor)
                     continue
                 state = adapter.create_state()
                 render_timeline = RobotStateTimeline(adapter)
@@ -1251,6 +1394,9 @@ class RobotGuiMainWindow(QMainWindow):
                 self.status_text.append(
                     f"Could not render robot actor {actor.name}: {exc}"
                 )
+                continue
+            if adapter is None:
+                self.request_scene_robot_load(actor)
                 continue
             if adapter is not None:
                 adapters[actor.id] = adapter
@@ -1390,6 +1536,8 @@ class RobotGuiMainWindow(QMainWindow):
             selected_item = None
             for actor in self.scene.actors:
                 label = actor.name
+                if actor.id in self._pending_scene_robot_loads:
+                    label = f"{label} (loading)"
                 if not actor.visible:
                     label = f"{label} (hidden)"
                 if actor.locked:
@@ -1458,6 +1606,12 @@ class RobotGuiMainWindow(QMainWindow):
         if actor.id != self.editor_robot_actor_id:
             self.sync_current_robot_session()
         session = self.ensure_robot_actor_session(actor)
+        if session is None:
+            self.scene.select_actor(actor.id, frame_id=frame_id)
+            self.refresh_scene_tree()
+            self.statusBar().showMessage(f"Loading {actor.name}…")
+            return None
+        previous_viewer = self.viewer_3d
         self.editor_robot_actor_id = actor.id
         self.scene.metadata["editor_robot_actor_id"] = actor.id
 
@@ -1497,6 +1651,14 @@ class RobotGuiMainWindow(QMainWindow):
             self._syncing_editor_selection = False
 
         self.viewer_3d_stack.setCurrentWidget(self.viewer_3d)
+        if previous_viewer is not self.viewer_3d:
+            previous_viewer.detach_canvas()
+        self.viewer_3d.attach_canvas(
+            self.shared_scene_canvas,
+            scene=self.scene,
+            active_robot_actor_id=actor.id,
+            scene_edit_target=self.scene_edit_target(),
+        )
         self.viewer_2d_skeleton_stack.setCurrentWidget(self.viewer_2d_stickman)
         self.viewer_3d_mujoco.set_model_adapter(session.adapter)
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
@@ -2154,6 +2316,9 @@ class RobotGuiMainWindow(QMainWindow):
                 "show_trajectory_lines": bool(self.controls.show_trajectory_lines()),
                 "smoothing": float(self.controls.corner_smoothing()),
                 "show_playback_ghosts": bool(viewer.show_ghosts.isChecked()),
+                "secondary_robot_detail": str(
+                    viewer.secondary_detail_box.currentData() or "full"
+                ),
                 "frame_slider_value": int(viewer.frame_slider.value()),
                 "trajectory_import_dt": float(viewer.trajectory_import_dt.value()),
             },
@@ -2379,6 +2544,12 @@ class RobotGuiMainWindow(QMainWindow):
             self.viewer_3d.show_ghosts.setChecked(
                 bool(display["show_playback_ghosts"])
             )
+        if "secondary_robot_detail" in display:
+            detail_index = self.viewer_3d.secondary_detail_box.findData(
+                str(display["secondary_robot_detail"])
+            )
+            if detail_index >= 0:
+                self.viewer_3d.secondary_detail_box.setCurrentIndex(detail_index)
         if "frame_slider_value" in display:
             self.viewer_3d.frame_slider.setValue(int(display["frame_slider_value"]))
 
@@ -2668,16 +2839,21 @@ class RobotGuiMainWindow(QMainWindow):
         viewer_3d.trajectory_csv_loaded.connect(self.on_trajectory_csv_loaded)
         viewer_3d.generate_requested.connect(self.on_generate_trajectory)
         viewer_3d.clear_trajectory_requested.connect(self.on_clear_trajectory)
-        viewer_3d.canvas.geometry_progress.connect(
+        viewer_3d.geometry_progress.connect(
             lambda complete, total, viewer=viewer_3d: (
                 self.on_viewer_geometry_progress(viewer, complete, total)
             )
         )
-        viewer_3d.canvas.camera_changed.connect(
+        viewer_3d.camera_changed.connect(
             lambda: self.mark_project_dirty("Camera")
         )
         viewer_3d.show_ghosts.toggled.connect(
             lambda _checked: self.mark_project_dirty("Display settings")
+        )
+        viewer_3d.secondary_detail_box.currentIndexChanged.connect(
+            lambda _index, viewer=viewer_3d: (
+                self.on_secondary_robot_detail_changed(viewer)
+            )
         )
         viewer_3d.frame_slider.valueChanged.connect(
             lambda _value: self.mark_project_dirty("Playback frame")
@@ -2716,6 +2892,24 @@ class RobotGuiMainWindow(QMainWindow):
             )
         )
         viewer_2d_skeleton.target_dragged.connect(self.on_target_dragged)
+
+    def on_secondary_robot_detail_changed(self, source_viewer):
+        """Keep the secondary-detail choice scene-wide across actor editors."""
+        mode = source_viewer.secondary_detail_box.currentData() or "full"
+        seen = set()
+        for session in self.model_sessions.values():
+            viewer = session.viewer_3d
+            if id(viewer) in seen:
+                continue
+            seen.add(id(viewer))
+            index = viewer.secondary_detail_box.findData(mode)
+            if index < 0 or index == viewer.secondary_detail_box.currentIndex():
+                continue
+            blocked = viewer.secondary_detail_box.blockSignals(True)
+            viewer.secondary_detail_box.setCurrentIndex(index)
+            viewer.secondary_detail_box.blockSignals(blocked)
+        self.shared_scene_canvas.set_secondary_robot_detail(mode)
+        self.mark_project_dirty("Display settings")
 
     def capture_history_snapshot(self):
         viewer = self.viewer_3d
@@ -3031,6 +3225,17 @@ class RobotGuiMainWindow(QMainWindow):
         if cached is not None:
             self.activate_model_session(model_key, cached, actor_id=actor_id)
             return
+        pooled_adapter = self.model_resources.get(model_info=model_info)
+        if pooled_adapter is not None:
+            session = self.create_robot_actor_session(
+                actor,
+                pooled_adapter,
+                model_key=model_key,
+                trajectory=Trajectory(),
+                load_scene_timeline=False,
+            )
+            self.activate_model_session(model_key, session, actor_id=actor_id)
+            return
         if model_key in self.model_loaders:
             self._model_loader_actor_ids.setdefault(model_key, set()).add(actor_id)
             return
@@ -3043,6 +3248,10 @@ class RobotGuiMainWindow(QMainWindow):
         loader = ModelLoadThread(model_key, model_info, self)
         loader.loaded.connect(self.on_model_loaded)
         loader.failed.connect(self.on_model_load_failed)
+        self._background_workers.add(loader)
+        loader.finished.connect(
+            lambda loader=loader: self._background_worker_finished(loader)
+        )
         loader.finished.connect(loader.deleteLater)
         self.model_loaders[model_key] = loader
         self._model_loader_actor_ids[model_key] = {actor_id}
@@ -3050,32 +3259,30 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_model_loaded(self, model_key, adapter):
         self.model_loaders.pop(model_key, None)
+        adapter = self.model_resources.register(adapter)
         actor_ids = self._model_loader_actor_ids.pop(
             model_key,
             {self.editor_robot_actor_id},
         )
         created_sessions = {}
+        added_actor_ids = set()
         for actor_id in actor_ids:
             actor = self.scene.actors.get(actor_id)
             if actor is None or actor.kind != "robot":
                 continue
-            backend = BackendInterface(mj_model=adapter.mj_model, adapter=adapter)
-            reference = MujocoReferenceFrames(adapter=adapter)
-            viewer_3d = RobotViewer3D(adapter, adapter.load_warning)
-            viewer_2d_skeleton = Stickman2DViewer(adapter)
-            self.connect_model_viewer_signals(viewer_3d, viewer_2d_skeleton)
-            self.viewer_3d_stack.addWidget(viewer_3d)
-            self.viewer_2d_skeleton_stack.addWidget(viewer_2d_skeleton)
-            session = model_sessions.RobotModelSession(
-                adapter, backend, reference, viewer_3d, viewer_2d_skeleton,
-                Trajectory(), -1,
-                actor_id=actor_id,
-                model_key=model_key,
-                selected_frame=actor.metadata.get("selected_frame"),
+            is_added_actor = actor_id in self._pending_added_robot_ids
+            trajectory = (
+                self.scene.tracks.robot_trajectory(actor_id)
+                if is_added_actor
+                else Trajectory()
             )
-            self.model_sessions[
-                model_sessions.session_key(actor_id, model_key)
-            ] = session
+            session = self.create_robot_actor_session(
+                actor,
+                adapter,
+                model_key=model_key,
+                trajectory=trajectory,
+                load_scene_timeline=is_added_actor,
+            )
             actor.name = adapter.model_name
             actor.model_reference = {
                 "type": "robot_model",
@@ -3083,20 +3290,45 @@ class RobotGuiMainWindow(QMainWindow):
                 "model_name": str(adapter.model_name),
             }
             self.scene.tracks.set_robot_trajectory(actor_id, session.trajectory)
+            self._pending_scene_robot_loads.pop(actor_id, None)
+            if is_added_actor:
+                added_actor_ids.add(actor_id)
+                self._pending_added_robot_ids.discard(actor_id)
             created_sessions[actor_id] = session
         self.finish_model_loading_ui()
         selected_actor_id = self.scene.selection.actor_id
         session = created_sessions.get(selected_actor_id)
         if session is not None:
-            self.activate_model_session(
-                model_key,
-                session,
-                actor_id=selected_actor_id,
-            )
+            if selected_actor_id in added_actor_ids:
+                self.activate_scene_robot_actor(selected_actor_id)
+            else:
+                self.activate_model_session(
+                    model_key,
+                    session,
+                    actor_id=selected_actor_id,
+                )
+        else:
+            self.refresh_display(apply_stickman_frame=False)
+        if added_actor_ids:
+            self.record_history_action("Add robot actor")
 
-    def on_model_load_failed(self, model_key, error):
+    def on_model_load_failed(self, model_key, error, actor_ids=None):
         self.model_loaders.pop(model_key, None)
-        self._model_loader_actor_ids.pop(model_key, None)
+        actor_ids = set(
+            actor_ids
+            or self._model_loader_actor_ids.pop(model_key, None)
+            or ()
+        )
+        removed_added_actor = False
+        for actor_id in actor_ids:
+            self._pending_scene_robot_loads.pop(actor_id, None)
+            if actor_id not in self._pending_added_robot_ids:
+                continue
+            self._pending_added_robot_ids.discard(actor_id)
+            if self.scene.actors.get(actor_id) is not None:
+                self.scene.delete_actor(actor_id)
+                self.discard_robot_actor_sessions(actor_id)
+                removed_added_actor = True
         if (
             self._pending_project_restore is not None
             and self.project_restore_model_key(
@@ -3114,6 +3346,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.model_box.blockSignals(True)
         self.controls.model_box.setCurrentIndex(index)
         self.controls.model_box.blockSignals(False)
+        if removed_added_actor:
+            self.refresh_display(apply_stickman_frame=False)
 
     def on_open_model_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -3163,41 +3397,58 @@ class RobotGuiMainWindow(QMainWindow):
         return self.import_mesh_folder
 
     def import_model_file(self, path):
+        if self.model_importer is not None and self.model_importer.isRunning():
+            self.statusBar().showMessage("A robot model import is already running.")
+            return self.model_importer
+        self._model_import_retry_prompted = False
         mesh_roots = [self.import_mesh_folder] if self.import_mesh_folder else []
+        return self._start_model_import(path, mesh_roots)
+
+    def _start_model_import(self, path, mesh_roots):
         self.begin_render_progress(
             "Importing robot model",
-            f"Copying and preparing {Path(path).name}...",
+            f"Copying and preparing {Path(path).name} in the background...",
         )
-        QApplication.processEvents()
-        try:
-            try:
-                info = import_robot_model(
-                    path, self.model_library_root, mesh_roots=mesh_roots
-                )
-            except RuntimeError:
-                self.finish_render_progress()
-                mesh_folder = self._prompt_for_mesh_folder()
-                if mesh_folder is None:
-                    raise
-                self.begin_render_progress(
-                    "Importing robot model",
-                    f"Copying and preparing {Path(path).name}...",
-                )
-                QApplication.processEvents()
-                info = import_robot_model(
-                    path, self.model_library_root, mesh_roots=[mesh_folder]
-                )
-            info = self.register_model_info(info)
-        except Exception as exc:
-            self.finish_render_progress()
-            message = f"Could not import model: {exc}"
-            self.status_text.setText(message)
-            QMessageBox.warning(self, "Import model failed", message)
-            return
+        importer = ModelImportThread(
+            path,
+            self.model_library_root,
+            mesh_roots=mesh_roots,
+            parent=self,
+        )
+        importer.imported.connect(self.on_model_imported)
+        importer.failed.connect(self.on_model_import_failed)
+        self._background_workers.add(importer)
+        importer.finished.connect(
+            lambda importer=importer: self._background_worker_finished(importer)
+        )
+        importer.finished.connect(importer.deleteLater)
+        self.model_importer = importer
+        importer.start()
+        return importer
+
+    def on_model_imported(self, info):
+        self.model_importer = None
+        self.finish_render_progress()
+        info = self.register_model_info(info)
         self.status_text.append(
             f"Imported {info.display_name} to {info.model_path}"
         )
         self.controls.add_model(info.key, info.display_name, select=True)
+
+    def on_model_import_failed(self, error, can_retry_with_mesh_folder=False):
+        importer = self.model_importer
+        source_path = None if importer is None else importer.source_path
+        self.model_importer = None
+        self.finish_render_progress()
+        if can_retry_with_mesh_folder and not self._model_import_retry_prompted:
+            self._model_import_retry_prompted = True
+            mesh_folder = self._prompt_for_mesh_folder()
+            if mesh_folder is not None and source_path is not None:
+                self._start_model_import(source_path, [mesh_folder])
+                return
+        message = f"Could not import model: {error}"
+        self.status_text.setText(message)
+        QMessageBox.warning(self, "Import model failed", message)
 
     def finish_model_loading_ui(self):
         self.controls.model_box.setEnabled(True)
@@ -3205,6 +3456,7 @@ class RobotGuiMainWindow(QMainWindow):
 
     def activate_model_session(self, model_key, session, actor_id=None):
         previous_model_key = self.model_key
+        previous_viewer = self.viewer_3d
         actor_id = str(actor_id or self.editor_robot_actor_id)
         restoring_project = (
             self._pending_project_restore is not None
@@ -3231,6 +3483,19 @@ class RobotGuiMainWindow(QMainWindow):
         actor.metadata["selected_frame"] = session.selected_frame
         self.scene.select_actor(actor_id, frame_id=session.selected_frame)
         self.viewer_3d_stack.setCurrentWidget(self.viewer_3d)
+        if previous_viewer is not self.viewer_3d:
+            previous_viewer.detach_canvas()
+        active_actor = self.scene.actors.get(actor_id)
+        self.viewer_3d.attach_canvas(
+            self.shared_scene_canvas,
+            scene=self.scene,
+            active_robot_actor_id=actor_id,
+            scene_edit_target=(
+                self.scene_edit_target()
+                if active_actor is not None
+                else None
+            ),
+        )
         self.viewer_2d_skeleton_stack.setCurrentWidget(self.viewer_2d_stickman)
         self.viewer_3d_mujoco.set_model_adapter(session.adapter)
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)

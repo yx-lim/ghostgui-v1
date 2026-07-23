@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
@@ -11,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QDialog
 
 from core.scene import Scene, Transform
 from gui.main_window import RobotGuiMainWindow
+from gui.viewers.robot_canvas_3d import RobotCanvas3D
 
 
 class SceneMainWindowTests(unittest.TestCase):
@@ -81,16 +84,17 @@ class SceneMainWindowTests(unittest.TestCase):
     def test_extra_robot_selection_does_not_corrupt_editor_robot_tracks(self):
         editor_robot_id = self.window.editor_robot_actor_id
         extra = self.window.add_scene_robot(
-            model_key="custom-model",
-            model_name="Custom Robot",
+            model_key=self.window.model_key,
+            model_name=self.window.current_model_display_name(),
         )
+        self.window.activate_scene_robot_actor(editor_robot_id)
         self.window.scene.select_actor(extra.id)
 
         scene = Scene.from_dict(self.window.capture_project_scene())
 
         self.assertEqual(
             scene.actors.require(extra.id).model_reference["model_key"],
-            "custom-model",
+            self.window.model_key,
         )
         self.assertEqual(
             scene.actors.require(editor_robot_id).model_reference["model_key"],
@@ -100,6 +104,98 @@ class SceneMainWindowTests(unittest.TestCase):
             scene.metadata["editor_robot_actor_id"],
             editor_robot_id,
         )
+
+    def test_same_model_actor_reuses_startup_adapter_with_independent_data(self):
+        startup_adapter = self.window.robot_model_3d
+        startup_data = self.window.viewer_3d.committed_state.mj_data
+
+        extra = self.window.add_scene_robot(
+            model_key=self.window.model_key,
+            model_name=self.window.current_model_display_name(),
+        )
+        session = self.window.model_sessions[(extra.id, self.window.model_key)]
+
+        self.assertIs(session.adapter, startup_adapter)
+        self.assertIsNot(session.viewer_3d.committed_state.mj_data, startup_data)
+
+    def test_robot_sessions_rebind_one_shared_opengl_canvas(self):
+        initial_actor_id = self.window.editor_robot_actor_id
+        initial_viewer = self.window.viewer_3d
+        shared_canvas = self.window.shared_scene_canvas
+
+        extra = self.window.add_scene_robot(
+            model_key=self.window.model_key,
+            model_name=self.window.current_model_display_name(),
+        )
+        extra_viewer = self.window.model_sessions[
+            (extra.id, self.window.model_key)
+        ].viewer_3d
+
+        self.assertIs(self.window.viewer_3d, extra_viewer)
+        self.assertIs(extra_viewer.canvas, shared_canvas)
+        self.assertIsNone(initial_viewer.canvas)
+        self.assertEqual(len(self.window.findChildren(RobotCanvas3D)), 1)
+        kind, name = extra_viewer._selected_target()
+        local_position, local_quaternion = extra_viewer.committed_state.get_body_pose(
+            name,
+            kind,
+        )
+        expected_world_pose = extra.world_transform.compose(
+            Transform(
+                position=tuple(local_position),
+                quaternion=tuple(local_quaternion),
+            )
+        )
+        np.testing.assert_allclose(
+            shared_canvas.gizmo.position,
+            expected_world_pose.position,
+        )
+        extra_viewer.secondary_detail_box.setCurrentIndex(
+            extra_viewer.secondary_detail_box.findData("proxy")
+        )
+
+        with patch.object(initial_viewer.quick_actions_panel, "raise_") as raise_bar:
+            self.window.activate_scene_robot_actor(initial_actor_id)
+
+        self.assertIs(initial_viewer.canvas, shared_canvas)
+        self.assertIsNone(extra_viewer.canvas)
+        self.assertEqual(len(self.window.findChildren(RobotCanvas3D)), 1)
+        raise_bar.assert_called()
+        self.assertEqual(
+            initial_viewer.secondary_detail_box.currentData(),
+            "proxy",
+        )
+        self.assertEqual(shared_canvas.secondary_robot_detail, "proxy")
+
+    def test_unknown_added_robot_is_rolled_back_transactionally(self):
+        initial_count = len(self.window.scene.actors.robots())
+
+        actor = self.window.add_scene_robot(
+            model_key="missing-model",
+            model_name="Missing Robot",
+        )
+
+        self.assertIsNone(self.window.scene.actors.get(actor.id))
+        self.assertEqual(len(self.window.scene.actors.robots()), initial_count)
+
+    def test_uncached_added_robot_loads_in_background(self):
+        actor = self.window.add_scene_robot(
+            model_key="go2",
+            model_name="Unitree Go2",
+        )
+
+        loader = self.window.model_loaders.get("go2")
+        self.assertIsNotNone(loader)
+        self.assertEqual(
+            self.window._pending_scene_robot_loads.get(actor.id),
+            "go2",
+        )
+        loader.wait()
+        self.app.processEvents()
+
+        self.assertNotIn(actor.id, self.window._pending_scene_robot_loads)
+        self.assertIn((actor.id, "go2"), self.window.model_sessions)
+        self.assertEqual(self.window.editor_robot_actor_id, actor.id)
 
     def test_add_robot_button_adds_actor_from_model_registry(self):
         label = next(

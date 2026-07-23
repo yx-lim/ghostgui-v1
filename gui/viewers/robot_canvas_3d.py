@@ -9,7 +9,11 @@ The editor shares the same small contract as the 2D side view:
     - target_dragged(x, z)
 """
 
+import ctypes
 import math
+import time
+from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +35,50 @@ from .transform_gizmo import (
 )
 
 TRAJECTORY_LINE_DT = 0.02
+GEOMETRY_TIME_BUDGET_MS = 6.0
+GEOMETRY_FACE_CHUNK_SIZE = 256
+
+
+@dataclass
+class IndexedMeshBuffer:
+    """One context-owned indexed mesh chunk stored in GPU memory."""
+
+    vertex_buffer: int
+    index_buffer: int
+    index_count: int
+
+    def draw(self):
+        stride = 6 * np.dtype(np.float32).itemsize
+        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.vertex_buffer)
+        GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, self.index_buffer)
+        GL.glEnableClientState(GL.GL_VERTEX_ARRAY)
+        GL.glEnableClientState(GL.GL_NORMAL_ARRAY)
+        try:
+            GL.glVertexPointer(3, GL.GL_FLOAT, stride, ctypes.c_void_p(0))
+            GL.glNormalPointer(
+                GL.GL_FLOAT,
+                stride,
+                ctypes.c_void_p(3 * np.dtype(np.float32).itemsize),
+            )
+            GL.glDrawElements(
+                GL.GL_TRIANGLES,
+                self.index_count,
+                GL.GL_UNSIGNED_INT,
+                ctypes.c_void_p(0),
+            )
+        finally:
+            GL.glDisableClientState(GL.GL_NORMAL_ARRAY)
+            GL.glDisableClientState(GL.GL_VERTEX_ARRAY)
+            GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, 0)
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
+
+    def delete(self):
+        for buffer_id in (self.vertex_buffer, self.index_buffer):
+            if buffer_id:
+                GL.glDeleteBuffers(1, [int(buffer_id)])
+        self.vertex_buffer = 0
+        self.index_buffer = 0
+        self.index_count = 0
 
 
 class RobotCanvas3D(QOpenGLWidget):
@@ -100,6 +148,7 @@ class RobotCanvas3D(QOpenGLWidget):
         self.show_ghosts = False
         self.ghost_alpha = 0.18
         self.use_model_colors = True
+        self.secondary_robot_detail = "full"
         self.selected_target_kind = None
         self.selected_target_name = None
         self.selected_body_id = None
@@ -113,11 +162,14 @@ class RobotCanvas3D(QOpenGLWidget):
             (self.target_x, self.target_y, self.target_z)
         )
         self._geometry_build_count = 0
-        self._geometry_queue = []
+        self._geometry_queue = deque()
         self._geometry_total = 0
+        self._geometry_completed = 0
         self._geometry_timer = QTimer(self)
         self._geometry_timer.setInterval(0)
         self._geometry_timer.timeout.connect(self._compile_next_geometry)
+        self._active_geometry_key = None
+        self._cleanup_context = None
 
     def set_robot_state(self, robot_state, ghost_renderer=None):
         self.set_robot_states(robot_state, None, ghost_renderer)
@@ -129,6 +181,7 @@ class RobotCanvas3D(QOpenGLWidget):
         self.preview_state = preview_state
         self.ghost_renderer = ghost_renderer
         if self.isValid():
+            self._bind_active_robot_geometry()
             self._build_robot_geometry()
         self.update()
 
@@ -147,6 +200,17 @@ class RobotCanvas3D(QOpenGLWidget):
 
     def set_use_model_colors(self, enabled):
         self.use_model_colors = bool(enabled)
+        self.update()
+
+    def set_secondary_robot_detail(self, mode):
+        mode = str(mode).lower()
+        if mode not in {"full", "proxy", "skeleton"}:
+            raise ValueError(f"Unknown secondary robot detail mode: {mode}")
+        self.secondary_robot_detail = mode
+        if mode == "full" and self.isValid():
+            self._queue_scene_robot_geometries()
+            if self._geometry_queue and self.isVisible():
+                self._geometry_timer.start()
         self.update()
 
     def set_selected_target(self, kind=None, name=None, owner_body_id=None):
@@ -221,6 +285,8 @@ class RobotCanvas3D(QOpenGLWidget):
             self.gizmo.set_pose(position, quaternion)
 
         self._sync_scene_edit_actor_pose()
+        if self.isValid():
+            self._queue_scene_robot_geometries()
         self.update()
 
     # ============================================================
@@ -242,15 +308,84 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glLightfv(GL.GL_LIGHT0, GL.GL_SPECULAR, (0.5, 0.5, 0.5, 1.0))
         self._quadric = GLU.gluNewQuadric()
         GLU.gluQuadricNormals(self._quadric, GLU.GLU_SMOOTH)
-        # Display lists belong to this OpenGL context. A restored/cached widget
-        # keeps them; a genuinely new context rebuilds them incrementally.
+        context = self.context()
+        if context is not None and context is not self._cleanup_context:
+            context.aboutToBeDestroyed.connect(self.cleanup_gl_resources)
+            self._cleanup_context = context
+        # All GPU objects belong to this context. A genuinely new context
+        # rebuilds them incrementally.
         self._geom_lists = []
         self._mesh_display_lists = {}
         self._scene_mesh_display_lists = {}
         self._scene_robot_geom_lists = {}
         self._scene_robot_mesh_display_lists = {}
-        self._geometry_queue = []
+        self._geometry_queue = deque()
+        self._geometry_total = 0
+        self._geometry_completed = 0
+        self._active_geometry_key = None
+        self._bind_active_robot_geometry()
         self._build_robot_geometry()
+        self._queue_scene_robot_geometries()
+
+    def cleanup_gl_resources(self):
+        """Delete context-owned buffers/lists before the shared context dies."""
+        self._geometry_timer.stop()
+        if not self.isValid():
+            # With no current-capable context Qt/the driver owns the already
+            # orphaned names. Drop Python references without issuing GL calls.
+            self._quadric = None
+            self._geom_lists = []
+            self._mesh_display_lists = {}
+            self._scene_mesh_display_lists = {}
+            self._scene_robot_geom_lists = {}
+            self._scene_robot_mesh_display_lists = {}
+            self._geometry_queue.clear()
+            self._active_geometry_key = None
+            return
+        made_current = False
+        self.makeCurrent()
+        made_current = True
+        try:
+            resources = []
+            seen_buckets = set()
+            all_geometry = [self._geom_lists]
+            all_geometry.extend(self._scene_robot_geom_lists.values())
+            for display_lists in all_geometry:
+                for bucket in display_lists or ():
+                    if not bucket or id(bucket) in seen_buckets:
+                        continue
+                    seen_buckets.add(id(bucket))
+                    resources.extend(bucket if isinstance(bucket, list) else [bucket])
+            seen_resources = set()
+            for resource in resources:
+                if id(resource) in seen_resources:
+                    continue
+                seen_resources.add(id(resource))
+                if isinstance(resource, IndexedMeshBuffer):
+                    resource.delete()
+                elif isinstance(resource, int) and resource:
+                    GL.glDeleteLists(resource, 1)
+            for list_id in set(self._scene_mesh_display_lists.values()):
+                if list_id:
+                    GL.glDeleteLists(list_id, 1)
+            if self._quadric is not None:
+                GLU.gluDeleteQuadric(self._quadric)
+                self._quadric = None
+        finally:
+            if made_current:
+                self.doneCurrent()
+        self._geom_lists = []
+        self._mesh_display_lists = {}
+        self._scene_mesh_display_lists = {}
+        self._scene_robot_geom_lists = {}
+        self._scene_robot_mesh_display_lists = {}
+        self._geometry_queue.clear()
+        self._active_geometry_key = None
+
+    def closeEvent(self, event):
+        if self.isValid():
+            self.cleanup_gl_resources()
+        super().closeEvent(event)
 
     def resizeGL(self, width, height):
         GL.glViewport(0, 0, width, height)
@@ -289,58 +424,274 @@ class RobotCanvas3D(QOpenGLWidget):
         self.draw_transform_gizmo()
 
     def _build_robot_geometry(self):
-        """Queue local geometry so Qt can repaint between expensive meshes."""
+        """Queue local geometry in bounded face chunks."""
         if self.robot_state is None or self._geom_lists:
             return
         model = self.robot_state.mj_model
         self._geom_lists = [None] * model.ngeom
-        render_ids = self.render_geom_ids(model)
-        # Native MJCF models usually use visual group 2; imported URDF visuals
-        # use non-colliding group 1. render_geom_ids handles both conventions.
-        self._geometry_queue = sorted(render_ids)
-        self._geometry_total = len(self._geometry_queue)
-        self.geometry_progress.emit(0, self._geometry_total)
+        adapter = self.robot_state.robot_model
+        cache_key = self._scene_robot_geometry_key(adapter)
+        self._active_geometry_key = cache_key
+        self._scene_robot_geom_lists[cache_key] = self._geom_lists
+        self._scene_robot_mesh_display_lists[cache_key] = self._mesh_display_lists
+        self._queue_model_geometry(
+            model,
+            self._geom_lists,
+            self._mesh_display_lists,
+        )
         if self._geometry_queue:
             self._geometry_timer.start()
+
+    def _bind_active_robot_geometry(self):
+        if self.robot_state is None:
+            self._geom_lists = []
+            self._mesh_display_lists = {}
+            self._active_geometry_key = None
+            return
+        adapter = self.robot_state.robot_model
+        cache_key = self._scene_robot_geometry_key(adapter)
+        if cache_key == self._active_geometry_key:
+            return
+        self._active_geometry_key = cache_key
+        self._geom_lists = self._scene_robot_geom_lists.get(cache_key, [])
+        self._mesh_display_lists = self._scene_robot_mesh_display_lists.get(
+            cache_key,
+            {},
+        )
 
     def _compile_next_geometry(self):
         if not self._geometry_queue:
             self._geometry_timer.stop()
             return
-        if not self.isValid() or self.robot_state is None:
+        if not self.isValid():
             return
-        geom_id = self._geometry_queue.pop(0)
-        model = self.robot_state.mj_model
-        import mujoco
-        mesh_id = (
-            int(model.geom_dataid[geom_id])
-            if int(model.geom_type[geom_id]) == int(mujoco.mjtGeom.mjGEOM_MESH)
-            else None
-        )
-        if mesh_id is not None and mesh_id in self._mesh_display_lists:
-            self._geom_lists[geom_id] = self._mesh_display_lists[mesh_id]
-            self._finish_geometry_item()
+        if not self.isVisible():
+            self._geometry_timer.stop()
             return
+        deadline = time.perf_counter() + GEOMETRY_TIME_BUDGET_MS / 1000.0
         self.makeCurrent()
         try:
-            list_id = GL.glGenLists(1)
-            GL.glNewList(list_id, GL.GL_COMPILE)
-            self._draw_local_geom(model, geom_id)
-            GL.glEndList()
-            self._geom_lists[geom_id] = list_id
-            if mesh_id is not None:
-                self._mesh_display_lists[mesh_id] = list_id
+            first = True
+            while self._geometry_queue and (first or time.perf_counter() < deadline):
+                first = False
+                task = self._pop_next_geometry_task()
+                if task is None:
+                    break
+                model, geom_id, bucket, face_offset, face_count = task
+                if face_offset is not None:
+                    bucket.append(
+                        self._upload_mesh_chunk(
+                            model,
+                            geom_id,
+                            face_offset,
+                            face_count,
+                        )
+                    )
+                else:
+                    list_id = GL.glGenLists(1)
+                    GL.glNewList(list_id, GL.GL_COMPILE)
+                    self._draw_local_geom(model, geom_id)
+                    GL.glEndList()
+                    bucket.append(list_id)
+                self._geometry_completed += 1
         finally:
             self.doneCurrent()
-        self._finish_geometry_item()
+        self._finish_geometry_batch()
 
-    def _finish_geometry_item(self):
-        complete = self._geometry_total - len(self._geometry_queue)
-        self.geometry_progress.emit(complete, self._geometry_total)
+    def _pop_next_geometry_task(self):
+        if self.secondary_robot_detail == "full":
+            return self._geometry_queue.popleft()
+        active_bucket_ids = {
+            id(bucket) for bucket in self._geom_lists if bucket is not None
+        }
+        for index, task in enumerate(self._geometry_queue):
+            if id(task[2]) in active_bucket_ids:
+                self._geometry_queue.rotate(-index)
+                selected = self._geometry_queue.popleft()
+                self._geometry_queue.rotate(index)
+                return selected
+        return None
+
+    def _finish_geometry_batch(self):
+        self.geometry_progress.emit(
+            self._geometry_completed,
+            self._geometry_total,
+        )
         self.update()
         if not self._geometry_queue:
             self._geometry_timer.stop()
             self._geometry_build_count += 1
+        elif self.secondary_robot_detail != "full":
+            active_bucket_ids = {
+                id(bucket) for bucket in self._geom_lists if bucket is not None
+            }
+            if not any(
+                id(task[2]) in active_bucket_ids for task in self._geometry_queue
+            ):
+                self._geometry_timer.stop()
+
+    def _queue_model_geometry(self, model, display_lists, mesh_lists):
+        """Create render buckets and enqueue bounded compilation tasks."""
+        import mujoco
+
+        added = 0
+        for geom_id in sorted(self.render_geom_ids(model)):
+            is_mesh = int(model.geom_type[geom_id]) == int(
+                mujoco.mjtGeom.mjGEOM_MESH
+            )
+            mesh_id = int(model.geom_dataid[geom_id]) if is_mesh else None
+            if mesh_id is not None and mesh_id in mesh_lists:
+                display_lists[geom_id] = mesh_lists[mesh_id]
+                continue
+
+            bucket = []
+            display_lists[geom_id] = bucket
+            if mesh_id is not None:
+                mesh_lists[mesh_id] = bucket
+                face_total = int(model.mesh_facenum[mesh_id])
+                for face_offset in range(0, face_total, GEOMETRY_FACE_CHUNK_SIZE):
+                    face_count = min(
+                        GEOMETRY_FACE_CHUNK_SIZE,
+                        face_total - face_offset,
+                    )
+                    self._geometry_queue.append(
+                        (model, geom_id, bucket, face_offset, face_count)
+                    )
+                    added += 1
+            else:
+                self._geometry_queue.append(
+                    (model, geom_id, bucket, None, None)
+                )
+                added += 1
+
+        self._geometry_total += added
+        if added:
+            self.geometry_progress.emit(
+                self._geometry_completed,
+                self._geometry_total,
+            )
+            if self.isVisible():
+                self._geometry_timer.start()
+        return added
+
+    def _queue_scene_robot_geometries(self):
+        if self.secondary_robot_detail != "full":
+            return
+        local_model_resource = (
+            None if self.robot_state is None else self.robot_state.robot_model
+        )
+        local_key = (
+            None
+            if local_model_resource is None
+            else self._scene_robot_geometry_key(local_model_resource)
+        )
+        for adapter in self.scene_robot_adapters.values():
+            if adapter is None:
+                continue
+            cache_key = self._scene_robot_geometry_key(adapter)
+            if cache_key in self._scene_robot_geom_lists:
+                continue
+            if cache_key == local_key and self._geom_lists:
+                self._scene_robot_geom_lists[cache_key] = self._geom_lists
+                self._scene_robot_mesh_display_lists[cache_key] = (
+                    self._mesh_display_lists
+                )
+                continue
+            model = adapter.mj_model
+            display_lists = [None] * model.ngeom
+            mesh_lists = {}
+            self._scene_robot_geom_lists[cache_key] = display_lists
+            self._scene_robot_mesh_display_lists[cache_key] = mesh_lists
+            self._queue_model_geometry(model, display_lists, mesh_lists)
+
+    @staticmethod
+    def _mesh_chunk_arrays(model, geom_id, face_offset, face_count):
+        """Build compact interleaved vertices/normals plus triangle indices."""
+        mesh_id = int(model.geom_dataid[geom_id])
+        vertex_start = int(model.mesh_vertadr[mesh_id])
+        vertices = model.mesh_vert[
+            vertex_start:vertex_start + int(model.mesh_vertnum[mesh_id])
+        ]
+        normal_start = int(model.mesh_normaladr[mesh_id])
+        normals = model.mesh_normal[
+            normal_start:normal_start + int(model.mesh_normalnum[mesh_id])
+        ]
+        chunk_start = int(model.mesh_faceadr[mesh_id]) + int(face_offset)
+        chunk_stop = chunk_start + int(face_count)
+        faces = model.mesh_face[chunk_start:chunk_stop]
+        face_normals = model.mesh_facenormal[chunk_start:chunk_stop]
+
+        rows = []
+        indices = []
+        lookup = {}
+        for face_index, (face, normal_ids) in enumerate(zip(faces, face_normals)):
+            face_vertices = [vertices[int(vertex_id)] for vertex_id in face]
+            fallback = np.cross(
+                face_vertices[1] - face_vertices[0],
+                face_vertices[2] - face_vertices[0],
+            )
+            norm = float(np.linalg.norm(fallback))
+            fallback = fallback / norm if norm > 1e-12 else np.array((0, 0, 1))
+            for vertex_id, normal_id in zip(face, normal_ids):
+                vertex_id = int(vertex_id)
+                normal_id = int(normal_id)
+                key = (
+                    (vertex_id, normal_id)
+                    if normal_id >= 0
+                    else (vertex_id, -1, face_index)
+                )
+                index = lookup.get(key)
+                if index is None:
+                    normal = normals[normal_id] if normal_id >= 0 else fallback
+                    index = len(rows)
+                    lookup[key] = index
+                    rows.append((*vertices[vertex_id], *normal))
+                indices.append(index)
+        return (
+            np.ascontiguousarray(rows, dtype=np.float32),
+            np.ascontiguousarray(indices, dtype=np.uint32),
+        )
+
+    def _upload_mesh_chunk(self, model, geom_id, face_offset, face_count):
+        interleaved, indices = self._mesh_chunk_arrays(
+            model,
+            geom_id,
+            face_offset,
+            face_count,
+        )
+        vertex_buffer = 0
+        index_buffer = 0
+        try:
+            vertex_buffer = int(GL.glGenBuffers(1))
+            index_buffer = int(GL.glGenBuffers(1))
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, vertex_buffer)
+            GL.glBufferData(
+                GL.GL_ARRAY_BUFFER,
+                interleaved.nbytes,
+                interleaved,
+                GL.GL_STATIC_DRAW,
+            )
+            GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, index_buffer)
+            GL.glBufferData(
+                GL.GL_ELEMENT_ARRAY_BUFFER,
+                indices.nbytes,
+                indices,
+                GL.GL_STATIC_DRAW,
+            )
+        except Exception:
+            for buffer_id in (vertex_buffer, index_buffer):
+                if buffer_id:
+                    GL.glDeleteBuffers(1, [buffer_id])
+            raise
+        finally:
+            GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, 0)
+            GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
+        return IndexedMeshBuffer(vertex_buffer, index_buffer, int(indices.size))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._geometry_queue and self.isValid():
+            self._geometry_timer.start()
 
     @staticmethod
     def render_geom_ids(model):
@@ -359,7 +710,9 @@ class RobotCanvas3D(QOpenGLWidget):
             }
         return visual_ids or set(range(model.ngeom))
 
-    def _draw_local_geom(self, model, geom_id):
+    def _draw_local_geom(
+        self, model, geom_id, face_offset=None, face_count=None
+    ):
         import mujoco
 
         geom_type = int(model.geom_type[geom_id])
@@ -375,12 +728,16 @@ class RobotCanvas3D(QOpenGLWidget):
             normals = model.mesh_normal[
                 normal_start:normal_start + int(model.mesh_normalnum[mesh_id])
             ]
-            faces = model.mesh_face[
-                face_start:face_start + int(model.mesh_facenum[mesh_id])
-            ]
-            face_normals = model.mesh_facenormal[
-                face_start:face_start + int(model.mesh_facenum[mesh_id])
-            ]
+            local_face_offset = int(face_offset or 0)
+            local_face_count = (
+                int(model.mesh_facenum[mesh_id])
+                if face_count is None
+                else int(face_count)
+            )
+            chunk_start = face_start + local_face_offset
+            chunk_stop = chunk_start + local_face_count
+            faces = model.mesh_face[chunk_start:chunk_stop]
+            face_normals = model.mesh_facenormal[chunk_start:chunk_stop]
             GL.glBegin(GL.GL_TRIANGLES)
             for face, normal_ids in zip(faces, face_normals):
                 fallback_normal = np.cross(
@@ -478,8 +835,8 @@ class RobotCanvas3D(QOpenGLWidget):
         color_override=None,
         selected_body_id=None,
     ):
-        for geom_id, list_id in enumerate(display_lists):
-            if list_id is None:
+        for geom_id, list_ids in enumerate(display_lists):
+            if not list_ids:
                 continue
             selected = (
                 color_override is None
@@ -499,7 +856,14 @@ class RobotCanvas3D(QOpenGLWidget):
                          float(rgba[3]) * alpha_scale)
             GL.glPushMatrix()
             GL.glMultMatrixf(self._transform_matrix(positions[geom_id], rotations[geom_id]))
-            GL.glCallList(list_id)
+            if isinstance(list_ids, int):
+                GL.glCallList(list_ids)
+            else:
+                for resource in list_ids:
+                    if isinstance(resource, IndexedMeshBuffer):
+                        resource.draw()
+                    else:
+                        GL.glCallList(resource)
             GL.glPopMatrix()
 
     def _geom_is_selected_body(self, model, geom_id):
@@ -575,6 +939,8 @@ class RobotCanvas3D(QOpenGLWidget):
             state = self.scene_robot_states.get(actor.id)
             adapter = self.scene_robot_adapters.get(actor.id)
             if state is None:
+                if actor.id != self.active_robot_actor_id:
+                    self._draw_loading_robot_proxy(actor)
                 continue
             robot_model = getattr(state, "robot_model", None)
             if robot_model is None:
@@ -585,6 +951,13 @@ class RobotCanvas3D(QOpenGLWidget):
             data = getattr(state, "mj_data", None)
             if model is None or robot_model is None:
                 continue
+            if actor.id != self.active_robot_actor_id:
+                if self.secondary_robot_detail == "proxy":
+                    self._draw_loading_robot_proxy(actor)
+                    continue
+                if self.secondary_robot_detail == "skeleton":
+                    self._draw_robot_skeleton(actor, model, data)
+                    continue
             display_lists = self._ensure_scene_robot_geometry(robot_model)
             if not display_lists:
                 continue
@@ -603,6 +976,48 @@ class RobotCanvas3D(QOpenGLWidget):
                 )
             finally:
                 GL.glPopMatrix()
+
+    def _draw_robot_skeleton(self, actor, model, data):
+        """Draw body-parent links without requiring any mesh resources."""
+        if data is None:
+            return
+        transform = actor.world_transform
+        GL.glPushMatrix()
+        rotation = self._quaternion_rotation_matrix(transform.quaternion)
+        GL.glMultMatrixf(self._transform_matrix(transform.position, rotation))
+        GL.glDisable(GL.GL_LIGHTING)
+        GL.glColor4f(0.30, 0.78, 1.0, 1.0)
+        GL.glLineWidth(2.0)
+        try:
+            GL.glBegin(GL.GL_LINES)
+            for body_id in range(1, int(model.nbody)):
+                parent_id = int(model.body_parentid[body_id])
+                GL.glVertex3fv(data.xpos[parent_id])
+                GL.glVertex3fv(data.xpos[body_id])
+            GL.glEnd()
+            GL.glPointSize(5.0)
+            GL.glBegin(GL.GL_POINTS)
+            for body_id in range(int(model.nbody)):
+                GL.glVertex3fv(data.xpos[body_id])
+            GL.glEnd()
+        finally:
+            GL.glLineWidth(1.0)
+            GL.glEnable(GL.GL_LIGHTING)
+            GL.glPopMatrix()
+
+    def _draw_loading_robot_proxy(self, actor):
+        """Draw a cheap placeholder while a scene actor's model is loading."""
+        self._begin_transparent_pass()
+        GL.glColor4f(0.25, 0.62, 0.92, 0.34)
+        GL.glPushMatrix()
+        rotation = self._quaternion_rotation_matrix(actor.world_transform.quaternion)
+        GL.glMultMatrixf(
+            self._transform_matrix(actor.world_transform.position, rotation)
+        )
+        GL.glTranslatef(0.0, 0.0, 0.48)
+        self._draw_scene_primitive("box", (0.32, 0.24, 0.96))
+        GL.glPopMatrix()
+        self._end_transparent_pass()
 
     @staticmethod
     def _pop_actor_transform(actor):
@@ -623,32 +1038,11 @@ class RobotCanvas3D(QOpenGLWidget):
         model = adapter.mj_model
         cache_key = self._scene_robot_geometry_key(adapter)
         display_lists = self._scene_robot_geom_lists.get(cache_key)
-        if display_lists is not None and len(display_lists) == model.ngeom:
-            return display_lists
-
-        mesh_lists = {}
-        display_lists = [None] * model.ngeom
-        render_ids = sorted(self.render_geom_ids(model))
-        import mujoco
-        for geom_id in render_ids:
-            mesh_id = (
-                int(model.geom_dataid[geom_id])
-                if int(model.geom_type[geom_id]) == int(mujoco.mjtGeom.mjGEOM_MESH)
-                else None
-            )
-            if mesh_id is not None and mesh_id in mesh_lists:
-                display_lists[geom_id] = mesh_lists[mesh_id]
-                continue
-            list_id = GL.glGenLists(1)
-            GL.glNewList(list_id, GL.GL_COMPILE)
-            self._draw_local_geom(model, geom_id)
-            GL.glEndList()
-            display_lists[geom_id] = list_id
-            if mesh_id is not None:
-                mesh_lists[mesh_id] = list_id
-        self._scene_robot_geom_lists[cache_key] = display_lists
-        self._scene_robot_mesh_display_lists[cache_key] = mesh_lists
-        return display_lists
+        return (
+            display_lists
+            if display_lists is not None and len(display_lists) == model.ngeom
+            else None
+        )
 
     @staticmethod
     def _scene_robot_geometry_key(adapter):

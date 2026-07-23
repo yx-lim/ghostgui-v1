@@ -476,6 +476,10 @@ class RobotModelAdapterTests(unittest.TestCase):
                     return_value=(str(source), ""),
                 ):
                     window.on_open_model_file()
+                importer = window.model_importer
+                if importer is not None:
+                    importer.wait()
+                    self.app.processEvents()
                 loader = window.model_loaders.get("go3")
                 if loader is not None:
                     loader.wait()

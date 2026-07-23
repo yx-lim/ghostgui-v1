@@ -97,8 +97,10 @@ class RobotViewer3D(QWidget):
     accept_timeslice_requested = Signal()
     delete_timeslice_requested = Signal()
     history_action_finished = Signal(str)
+    geometry_progress = Signal(int, int)
+    camera_changed = Signal()
 
-    def __init__(self, robot_model=None, error=None):
+    def __init__(self, robot_model=None, error=None, *, canvas=None, create_canvas=True):
         super().__init__()
         self.robot_model = robot_model
         self.frame_bindings = (
@@ -150,38 +152,161 @@ class RobotViewer3D(QWidget):
         self.root_lock_target = None
         self._last_ik_status = None
         self._syncing_target = False
-        self.canvas = RobotCanvas3D()
-        self.canvas.geometry_progress.connect(self._on_geometry_progress)
-        self.canvas.target_dragged.connect(self.target_dragged.emit)
-        self.canvas.target_transform_dragged.connect(self._on_transform_moved)
-        self.canvas.transform_drag_finished.connect(
-            self._on_transform_drag_finished
+        self.canvas = (
+            canvas
+            if canvas is not None
+            else (RobotCanvas3D() if create_canvas else None)
         )
-        self.canvas.scene_actor_transform_dragged.connect(
-            self.scene_actor_transform_dragged.emit
-        )
-        self.canvas.scene_actor_transform_drag_finished.connect(
-            self.scene_actor_transform_drag_finished.emit
-        )
-        self.canvas.scene_robot_body_double_clicked.connect(
-            self.scene_robot_body_double_clicked.emit
-        )
-        self.canvas.transform_drag_cancel_requested.connect(
-            self._on_transform_cancel_requested
-        )
-        self.canvas.gizmo_mode_changed.connect(self._on_gizmo_mode_changed)
-        self.canvas.body_double_clicked.connect(self._on_body_double_clicked)
+        self._canvas_connections_active = False
         self.last_valid_target_position = None
         self.last_valid_target_quaternion = None
         self.play_timer = QTimer(self)
         self.play_timer.setInterval(33)
         self.play_timer.timeout.connect(self._advance_frame)
         self._build_ui(error)
-        if self.robot_state:
+        if self.canvas is not None:
+            self._connect_canvas()
+        if self.robot_state and self.canvas is not None:
             self.canvas.set_robot_states(
                 self.committed_state, self.preview_state, self.ghost_renderer
             )
             self._set_target_to_selected_pose()
+
+    def _canvas_signal_bindings(self):
+        return (
+            ("geometry_progress", self._handle_geometry_progress),
+            ("camera_changed", self.camera_changed.emit),
+            ("target_dragged", self.target_dragged.emit),
+            ("target_transform_dragged", self._on_transform_moved),
+            ("transform_drag_finished", self._on_transform_drag_finished),
+            ("scene_actor_transform_dragged", self.scene_actor_transform_dragged.emit),
+            (
+                "scene_actor_transform_drag_finished",
+                self.scene_actor_transform_drag_finished.emit,
+            ),
+            (
+                "scene_robot_body_double_clicked",
+                self.scene_robot_body_double_clicked.emit,
+            ),
+            (
+                "transform_drag_cancel_requested",
+                self._on_transform_cancel_requested,
+            ),
+            ("gizmo_mode_changed", self._on_gizmo_mode_changed),
+            ("body_double_clicked", self._on_body_double_clicked),
+        )
+
+    def _handle_geometry_progress(self, completed, total):
+        self._on_geometry_progress(completed, total)
+        self.geometry_progress.emit(int(completed), int(total))
+
+    def _connect_canvas(self):
+        if self.canvas is None or self._canvas_connections_active:
+            return
+        self._active_canvas_bindings = self._canvas_signal_bindings()
+        for signal_name, slot in self._active_canvas_bindings:
+            getattr(self.canvas, signal_name).connect(slot)
+        self._canvas_connections_active = True
+
+    def _disconnect_canvas(self):
+        if self.canvas is None or not self._canvas_connections_active:
+            return
+        for signal_name, slot in self._active_canvas_bindings:
+            try:
+                getattr(self.canvas, signal_name).disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        self._active_canvas_bindings = ()
+        self._canvas_connections_active = False
+
+    def attach_canvas(
+        self,
+        canvas,
+        *,
+        scene=None,
+        active_robot_actor_id=None,
+        scene_edit_target=None,
+    ):
+        """Bind this actor's editor state to the shared scene canvas."""
+        if canvas is None:
+            return
+        if self.canvas is not canvas:
+            self.detach_canvas()
+            self.canvas = canvas
+            if hasattr(self, "_canvas_layout"):
+                if self._canvas_placeholder is not None:
+                    self._canvas_layout.removeWidget(self._canvas_placeholder)
+                    self._canvas_placeholder.hide()
+                self._canvas_layout.addWidget(canvas, 0, 0)
+                # Re-adding the canvas changes QWidget stacking order. Put the
+                # overlay back on top so it cannot be occluded by the canvas.
+                self._canvas_layout.removeWidget(self.quick_actions_panel)
+                self._canvas_layout.addWidget(
+                    self.quick_actions_panel,
+                    0,
+                    0,
+                    alignment=(
+                        Qt.AlignmentFlag.AlignTop
+                        | Qt.AlignmentFlag.AlignRight
+                    ),
+                )
+                self.quick_actions_panel.raise_()
+            canvas.show()
+        self._connect_canvas()
+        # The target pose is model-local. Update the canvas's actor context
+        # before positioning the gizmo so it is transformed by the newly
+        # active robot rather than the previously active actor.
+        if scene is not None:
+            canvas.scene = scene
+        if active_robot_actor_id is not None:
+            canvas.active_robot_actor_id = str(active_robot_actor_id)
+        canvas.scene_edit_target = (
+            dict(scene_edit_target)
+            if isinstance(scene_edit_target, dict)
+            else None
+        )
+        canvas.set_robot_states(
+            self.committed_state, self.preview_state, self.ghost_renderer
+        )
+        canvas.set_use_model_colors(self.model_colors_box.isChecked())
+        canvas.set_secondary_robot_detail(
+            self.secondary_detail_box.currentData() or "full"
+        )
+        canvas.set_preview_alpha(self.preview_alpha.value())
+        canvas.set_preview_visible(self.preview_active)
+        canvas.set_ghost_options(self.show_ghosts.isChecked(), self.ghost_alpha.value())
+        self._set_target_to_selected_pose()
+        canvas.update()
+
+    def detach_canvas(self):
+        """Release the shared canvas while preserving this actor's editor state."""
+        if self.canvas is None:
+            return None
+        canvas = self.canvas
+        self.play_timer.stop()
+        self._disconnect_canvas()
+        if hasattr(self, "_canvas_layout"):
+            self._canvas_layout.removeWidget(canvas)
+            if self._canvas_placeholder is not None:
+                self._canvas_layout.addWidget(self._canvas_placeholder, 0, 0)
+                self._canvas_placeholder.show()
+        canvas.hide()
+        self.canvas = None
+        return canvas
+
+    def _set_use_model_colors(self, enabled):
+        if self.canvas is not None:
+            self.canvas.set_use_model_colors(enabled)
+
+    def _set_preview_alpha(self, value):
+        if self.canvas is not None:
+            self.canvas.set_preview_alpha(value)
+
+    def _set_secondary_robot_detail(self, _index=None):
+        if self.canvas is not None:
+            self.canvas.set_secondary_robot_detail(
+                self.secondary_detail_box.currentData() or "full"
+            )
 
     def _build_ui(self, error):
         root = QVBoxLayout(self)
@@ -199,14 +324,26 @@ class RobotViewer3D(QWidget):
 
         self.model_colors_box = QCheckBox("Use model colors")
         self.model_colors_box.setChecked(True)
-        self.model_colors_box.toggled.connect(self.canvas.set_use_model_colors)
+        self.model_colors_box.toggled.connect(self._set_use_model_colors)
         display_panel = QWidget()
         self.display_layout = QVBoxLayout(display_panel)
         self.display_layout.setContentsMargins(0, 0, 0, 0)
         self.display_layout.addWidget(self.model_colors_box)
+        self.secondary_detail_box = QComboBox()
+        _compact_combo(self.secondary_detail_box, minimum_chars=12)
+        self.secondary_detail_box.addItem("Full secondary robots", "full")
+        self.secondary_detail_box.addItem("Proxy boxes", "proxy")
+        self.secondary_detail_box.addItem("Skeletons", "skeleton")
+        self.secondary_detail_box.setToolTip(
+            "Reduce mesh work for robots that are not currently being edited."
+        )
+        self.secondary_detail_box.currentIndexChanged.connect(
+            self._set_secondary_robot_detail
+        )
         self.show_ghosts = QCheckBox("Show playback poses")
         self.show_ghosts.toggled.connect(self._sync_playback_pose_ghosts)
         self.display_layout.addWidget(self.show_ghosts)
+        self.display_layout.addWidget(self.secondary_detail_box)
         self.display_context_panel = display_panel
         if self.robot_model:
             texture_warnings = self.robot_model.get_visual_texture_warnings()
@@ -308,7 +445,7 @@ class RobotViewer3D(QWidget):
         self.preview_alpha.setRange(0.1, 1.0)
         self.preview_alpha.setSingleStep(0.05)
         self.preview_alpha.setValue(0.65)
-        self.preview_alpha.valueChanged.connect(self.canvas.set_preview_alpha)
+        self.preview_alpha.valueChanged.connect(self._set_preview_alpha)
         self.plan_preview_button.clicked.connect(self.plan_preview)
         self.accept_preview_button.clicked.connect(self.accept_preview)
         self.cancel_preview_button.clicked.connect(self.cancel_preview)
@@ -426,11 +563,16 @@ class RobotViewer3D(QWidget):
 
     def _build_canvas_workspace(self):
         self.canvas_workspace = QWidget()
-        layout = QGridLayout(self.canvas_workspace)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(self.canvas, 0, 0)
-        layout.addWidget(
+        self._canvas_layout = QGridLayout(self.canvas_workspace)
+        self._canvas_layout.setContentsMargins(0, 0, 0, 0)
+        self._canvas_layout.setSpacing(0)
+        self._canvas_placeholder = QWidget(self.canvas_workspace)
+        if self.canvas is not None:
+            self._canvas_layout.addWidget(self.canvas, 0, 0)
+            self._canvas_placeholder.hide()
+        else:
+            self._canvas_layout.addWidget(self._canvas_placeholder, 0, 0)
+        self._canvas_layout.addWidget(
             self._build_quick_actions_panel(),
             0,
             0,
@@ -912,6 +1054,8 @@ class RobotViewer3D(QWidget):
     ):
         # The live gizmo owns its quaternion while editing. Ordinary status
         # refreshes must not reset an in-progress ring rotation from controls.
+        if self.canvas is None:
+            return
         self.canvas.update_scene(
             trajectory,
             None,
@@ -930,6 +1074,8 @@ class RobotViewer3D(QWidget):
             binding = self.frame_bindings.get(active_frame.frame_name)
             if binding is not None:
                 self.select_target(*binding, emit=False)
+        if not self.canvas.gizmo.is_dragging:
+            self._set_target_to_selected_pose()
 
     def select_target(self, kind, name, emit=False):
         for index in range(self.target_box.count()):
@@ -955,6 +1101,8 @@ class RobotViewer3D(QWidget):
             self.target_frame_changed.emit(frame_name)
 
     def _set_target_to_selected_pose(self):
+        if self.canvas is None:
+            return
         kind, name = self._selected_target()
         if not name:
             return
@@ -1503,11 +1651,13 @@ class RobotViewer3D(QWidget):
         self.preview_state.set_qpos(qpos)
         self.preview_active = False
         self.clear_pinned_frame_targets()
-        self.canvas.set_preview_visible(False)
+        if self.canvas is not None:
+            self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
         self._set_target_to_selected_pose()
-        self.canvas.update()
+        if self.canvas is not None:
+            self.canvas.update()
 
     def update_current_keyframe_from_robot_state(self, refresh_ghosts=True):
         if not self.state_timeline or not self.robot_state:
@@ -1927,7 +2077,8 @@ class RobotViewer3D(QWidget):
                 )
             )
         )
-        self.canvas.set_ghost_options(visible, self.ghost_alpha.value())
+        if self.canvas is not None:
+            self.canvas.set_ghost_options(visible, self.ghost_alpha.value())
 
     def set_trajectory_frame(self, index):
         if not self.robot_trajectory:
@@ -1946,7 +2097,8 @@ class RobotViewer3D(QWidget):
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
         self.clear_pinned_frame_targets()
-        self.canvas.set_preview_visible(False)
+        if self.canvas is not None:
+            self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
         self._set_target_to_selected_pose()

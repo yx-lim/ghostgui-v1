@@ -81,10 +81,17 @@ targets, lighting, visual meshes, colors, and kinematic tree. Missing or
 unsupported visual assets fail with an explicit path/format message instead of
 silently displaying collision primitives.
 
-Model files are loaded off the GUI thread when switching. Each loaded model
-keeps its own in-memory editor/viewer session, including its OpenGL context, so
-switching back is immediate. OpenGL geometry is compiled incrementally during
-the first 3D display instead of blocking the Qt event loop.
+Model files are loaded off the GUI thread when switching, importing, or adding
+a scene actor. Actors that use the same model path share one immutable MuJoCo
+model while retaining independent pose, timeline, and IK state. Each loaded
+actor keeps its own in-memory editor session, so switching back is immediate,
+but every session is rebound to one shared scene canvas instead of allocating a
+new OpenGL widget/context. Mesh chunks are uploaded as shared indexed GPU
+vertex/index buffers under a small per-tick time budget, while simple MuJoCo
+primitives keep their compact display lists. The 3D display panel can render
+secondary robots as full visuals, proxy boxes, or kinematic skeletons; editing
+a robot always restores its full visual model. Context-owned buffers and lists
+are explicitly released when the shared canvas closes.
 
 User-imported URDF models are converted once into a versioned, content-addressed
 cache under `~/.cache/ghostgui/models/` (override with
