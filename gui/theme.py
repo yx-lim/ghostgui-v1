@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QTimer, Qt
-from PySide6.QtGui import QFont, QPalette
+from PySide6.QtGui import QFont, QIcon, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
 
 
@@ -97,6 +97,11 @@ THEME_ASSET_DIR = Path(__file__).resolve().parent / "assets" / "theme"
 
 def _icon_url(theme: Theme, name: str) -> str:
     return (THEME_ASSET_DIR / f"{name}-{theme.icon_variant}.svg").as_posix()
+
+
+def theme_icon(name: str, widget: QWidget | None = None) -> QIcon:
+    """Return the light/dark SVG icon matching the active application palette."""
+    return QIcon(_icon_url(current_theme(widget), name))
 
 
 def _palette_for(widget: QWidget | None = None) -> QPalette | None:
@@ -271,9 +276,9 @@ def application_stylesheet(widget: QWidget | None = None) -> str:
             border: none;
         }}
     """
+        + _menu_stylesheet(theme)
         + _section_stylesheet(theme)
         + _toolbar_stylesheet(theme)
-        + _quick_actions_stylesheet(theme)
         + _render_progress_stylesheet(theme)
         + _tutorial_card_stylesheet(theme)
         + _help_button_stylesheet(theme)
@@ -367,63 +372,90 @@ def section_stylesheet(widget: QWidget | None = None) -> str:
     return _section_stylesheet(current_theme(widget))
 
 
-def _toolbar_stylesheet(theme: Theme) -> str:
+def _menu_stylesheet(theme: Theme) -> str:
     return f"""
-        QToolBar#appToolbar {{
+        QMenuBar#appMenuBar {{
+            color: {theme.text};
             background: {theme.sidebar_bg};
             border: none;
             border-bottom: 1px solid {theme.border};
-            spacing: 6px;
-            padding: 4px 6px;
+            padding: 1px 4px;
         }}
-        QToolBar#appToolbar::separator {{
+        QMenuBar#appMenuBar::item {{
+            background: transparent;
+            padding: 3px 7px;
+        }}
+        QMenuBar#appMenuBar::item:selected,
+        QMenuBar#appMenuBar::item:pressed {{
+            color: {theme.text};
+            background: {theme.panel_hover_bg};
+        }}
+        QMenu {{
+            color: {theme.text};
+            background: {theme.panel_bg};
+            border: 1px solid {theme.border};
+            padding: 3px;
+        }}
+        QMenu::item {{
+            padding: 4px 26px 4px 22px;
+        }}
+        QMenu::item:selected {{
+            color: {theme.section_header_hover_text};
+            background: {theme.section_header_hover_bg};
+        }}
+        QMenu::item:disabled {{
+            color: {theme.disabled_text};
+        }}
+        QMenu::separator {{
+            background: {theme.border};
+            height: 1px;
+            margin: 4px 6px;
+        }}
+    """
+
+
+def _toolbar_stylesheet(theme: Theme) -> str:
+    return f"""
+        QToolBar#workflowToolbar {{
+            background: {theme.sidebar_bg};
+            border: none;
+            border-bottom: 1px solid {theme.border};
+            spacing: 2px;
+            padding: 3px 5px;
+        }}
+        QToolBar#workflowToolbar::separator {{
             background: {theme.border};
             width: 1px;
             margin: 4px 3px;
         }}
-        QToolBar#appToolbar QToolButton {{
+        QToolBar#workflowToolbar QToolButton {{
             color: {theme.text};
-            background: {theme.elevated_bg};
-            border: 1px solid {theme.border};
-            border-radius: 4px;
-            padding: 4px 8px;
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            padding: 3px 5px;
         }}
-        QToolBar#appToolbar QToolButton:hover {{
+        QToolBar#workflowToolbar QToolButton:hover {{
             color: {theme.section_header_hover_text};
             background: {theme.section_header_hover_bg};
             border-color: {theme.focus_border};
         }}
-        QLabel#toolbarLabel {{
-            color: {theme.muted_text};
-        }}
-        QLabel#projectNameLabel {{
+        QToolBar#workflowToolbar QToolButton:pressed,
+        QToolBar#workflowToolbar QToolButton:checked {{
             color: {theme.text};
+            background: {theme.section_header_active_bg};
+            border-color: {theme.focus_border};
         }}
-        QWidget#toolbarViewPanel, QWidget#projectMenuPanel,
-        QWidget#robotMenuPanel {{
-            background: {theme.panel_bg};
-            color: {theme.text};
-            min-width: 230px;
+        QToolBar#workflowToolbar QToolButton:disabled {{
+            color: {theme.disabled_text};
+            background: transparent;
+            border-color: transparent;
         }}
     """
 
 
 def toolbar_stylesheet(widget: QWidget | None = None) -> str:
     return _toolbar_stylesheet(current_theme(widget))
-
-
-def _quick_actions_stylesheet(theme: Theme) -> str:
-    return f"""
-        QWidget#viewerQuickActions {{
-            background: {theme.quick_panel_bg};
-            border: 1px solid {theme.quick_panel_border};
-            border-radius: 6px;
-        }}
-    """
-
-
-def quick_actions_stylesheet(widget: QWidget | None = None) -> str:
-    return _quick_actions_stylesheet(current_theme(widget))
 
 
 def _render_progress_stylesheet(theme: Theme) -> str:

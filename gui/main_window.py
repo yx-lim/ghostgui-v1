@@ -17,8 +17,8 @@ from pathlib import Path
 
 import numpy as np
 
-from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -34,11 +34,8 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QInputDialog,
     QMessageBox,
-    QComboBox,
-    QMenu,
     QToolBar,
     QToolButton,
-    QWidgetAction,
 )
 
 from core.trajectory import (
@@ -66,7 +63,7 @@ from core.models import MujocoReferenceFrames
 from .app_sidebars import AppLeftSidebar, AppRightSidebar
 from .help import HelpCenterDialog
 from .project_browser import ProjectBrowserDialog
-from .theme import ensure_application_theme
+from .theme import ensure_application_theme, theme_icon
 from .tutorial import TutorialManager
 from core.models import MuJoCoRobotAdapter, ROBOT_MODELS
 from application.model_importer import (
@@ -330,10 +327,9 @@ class RobotGuiMainWindow(QMainWindow):
         self._last_history_snapshot = None
         self.viewer_tabs = self.build_viewer_tabs()
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
-        self.project_panel = self.build_project_panel()
         self.help_dialog = None
-        self.help_button = self.build_help_button()
-        self.app_toolbar = self.build_app_toolbar()
+        self.build_menu_bar()
+        self.app_toolbar = self.build_workflow_toolbar()
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.app_toolbar)
         self.refresh_recent_projects()
         self.status_panel = self.build_status_panel()
@@ -352,7 +348,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.right_sidebar.setMaximumWidth(RIGHT_SIDEBAR_WIDTH)
 
         self.connect_signals()
-        self.install_history_shortcuts()
+        self.sync_workflow_toolbar()
         self.autosave_timer = QTimer(self)
         self.autosave_timer.setInterval(PROJECT_AUTOSAVE_INTERVAL_MS)
         self.autosave_timer.timeout.connect(self.on_autosave_timer)
@@ -411,149 +407,90 @@ class RobotGuiMainWindow(QMainWindow):
         return info
 
     # ============================================================
-    # Build project controls
+    # Application menus and workflow toolbar
     # ============================================================
 
-    def build_project_panel(self):
-        panel = QWidget()
-        panel.setObjectName("projectMenuPanel")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+    def build_menu_bar(self):
+        menu_bar = self.menuBar()
+        menu_bar.clear()
+        menu_bar.setObjectName("appMenuBar")
+        menu_bar.setNativeMenuBar(False)
 
-        self.project_name_label = QLabel("No project open")
-        self.project_name_label.setObjectName("projectNameLabel")
-        self.project_name_label.setMinimumWidth(180)
-        self.project_name_label.setMaximumWidth(240)
-        self.project_name_label.setWordWrap(True)
-        layout.addWidget(self.project_name_label)
-
-        self.recent_projects_box = QComboBox()
-        self.recent_projects_box.setObjectName("recentProjectsCombo")
-        self.recent_projects_box.setMinimumWidth(180)
-        self.recent_projects_box.setMaximumWidth(240)
-        self.recent_projects_box.setToolTip("Open a recently used GhostGUI project.")
-        self.recent_projects_box.activated.connect(self.on_recent_project_selected)
-        layout.addWidget(self.recent_projects_box)
-        return panel
-
-    def build_toolbar_dropdown(self, text, object_name):
-        button = QToolButton()
-        button.setObjectName(object_name)
-        button.setText(text)
-        button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        menu = QMenu(text, button)
-        button.setMenu(menu)
-        return button, menu
-
-    def build_robot_menu_panel(self):
-        panel = QWidget()
-        panel.setObjectName("robotMenuPanel")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
-        self.controls.model_box.setMinimumWidth(180)
-        self.controls.model_box.setMaximumWidth(240)
-        layout.addWidget(self.controls.model_box)
-        return panel
-
-    def build_app_toolbar(self):
-        toolbar = QToolBar("App", self)
-        toolbar.setObjectName("appToolbar")
-        toolbar.setMovable(False)
-        toolbar.setFloatable(False)
-        toolbar.setAllowedAreas(Qt.ToolBarArea.TopToolBarArea)
-        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-
-        self.project_toolbar_button, self.project_toolbar_menu = (
-            self.build_toolbar_dropdown("Project", "projectToolbarButton")
-        )
-        self.new_project_action = self.project_toolbar_menu.addAction("New")
+        self.file_menu = menu_bar.addMenu("&File")
+        self.new_project_action = QAction("&New Project…", self)
         self.new_project_action.setObjectName("newProjectAction")
+        self.new_project_action.setShortcut(QKeySequence.StandardKey.New)
         self.new_project_action.setToolTip("Create a GhostGUI project folder.")
-        self.new_project_action.triggered.connect(
-            lambda checked=False: self.on_new_project()
-        )
-        self.open_project_action = self.project_toolbar_menu.addAction("Open")
+        self.new_project_action.triggered.connect(self.on_new_project)
+        self.file_menu.addAction(self.new_project_action)
+
+        self.open_project_action = QAction("&Open Project…", self)
         self.open_project_action.setObjectName("openProjectAction")
+        self.open_project_action.setShortcut(QKeySequence.StandardKey.Open)
         self.open_project_action.setToolTip("Show GhostGUI project previews.")
-        self.open_project_action.triggered.connect(
-            lambda checked=False: self.on_open_project()
-        )
-        self.save_project_action = self.project_toolbar_menu.addAction("Save")
+        self.open_project_action.triggered.connect(self.on_open_project)
+        self.file_menu.addAction(self.open_project_action)
+
+        self.recent_projects_menu = self.file_menu.addMenu("Open &Recent")
+        self.recent_projects_menu.setObjectName("recentProjectsMenu")
+        self.recent_projects_menu.aboutToShow.connect(self.refresh_recent_projects)
+
+        self.file_menu.addSeparator()
+        self.save_project_action = QAction("&Save", self)
         self.save_project_action.setObjectName("saveProjectAction")
+        self.save_project_action.setShortcut(QKeySequence.StandardKey.Save)
         self.save_project_action.setToolTip("Save the current GhostGUI project.")
-        self.save_project_action.triggered.connect(
-            lambda checked=False: self.on_save_project()
-        )
-        self.project_toolbar_menu.addSeparator()
-        self.project_panel_action = QWidgetAction(self.project_toolbar_menu)
-        self.project_panel_action.setDefaultWidget(self.project_panel)
-        self.project_toolbar_menu.addAction(self.project_panel_action)
-        self.project_toolbar_button.setToolTip("No GhostGUI project is open.")
-        toolbar.addWidget(self.project_toolbar_button)
-        toolbar.addSeparator()
+        self.save_project_action.triggered.connect(self.on_save_project)
+        self.file_menu.addAction(self.save_project_action)
 
-        if hasattr(self.controls, "model_box"):
-            self.robot_toolbar_button, self.robot_toolbar_menu = (
-                self.build_toolbar_dropdown("Robot", "robotToolbarButton")
+        self.file_menu.addSeparator()
+        self.import_menu = self.file_menu.addMenu("&Import")
+        self.import_menu.setObjectName("importMenu")
+        self.import_actions = {}
+        for label, action_key in (
+            ("Robot Model…", "model"),
+            ("Qpos…", "qpos"),
+            ("Trajectory…", "trajectory"),
+        ):
+            action = QAction(label, self)
+            action.setObjectName(f"import{action_key.title()}Action")
+            action.setData(action_key)
+            action.triggered.connect(
+                lambda checked=False, key=action_key: (
+                    self.on_setup_import_requested(key)
+                )
             )
-            self.robot_menu_panel = self.build_robot_menu_panel()
-            self.robot_panel_action = QWidgetAction(self.robot_toolbar_menu)
-            self.robot_panel_action.setDefaultWidget(self.robot_menu_panel)
-            self.robot_toolbar_menu.addAction(self.robot_panel_action)
-            toolbar.addWidget(self.robot_toolbar_button)
-            toolbar.addSeparator()
+            self.import_menu.addAction(action)
+            self.import_actions[action_key] = action
 
-        self.import_toolbar_button, self.import_toolbar_menu = (
-            self.build_toolbar_dropdown("Import", "importToolbarButton")
-        )
-        if hasattr(self.controls, "import_action_box"):
-            self.import_actions = {}
-            for label, action_key in (
-                ("Model", "model"),
-                ("Qpos", "qpos"),
-                ("Trajectory", "trajectory"),
-            ):
-                action = self.import_toolbar_menu.addAction(label)
-                action.setObjectName(f"import{label}Action")
-                action.setData(action_key)
-                action.triggered.connect(
-                    lambda checked=False, key=action_key: (
-                        self.on_setup_import_requested(key)
-                    )
+        self.export_menu = self.file_menu.addMenu("&Export")
+        self.export_menu.setObjectName("exportMenu")
+        self.export_actions = {}
+        for label, action_key in (
+            ("Qpos…", "qpos"),
+            ("Trajectory…", "trajectory"),
+        ):
+            action = QAction(label, self)
+            action.setObjectName(f"export{action_key.title()}Action")
+            action.setData(action_key)
+            action.triggered.connect(
+                lambda checked=False, key=action_key: (
+                    self.on_setup_export_requested(key)
                 )
-                self.import_actions[action_key] = action
-            toolbar.addWidget(self.import_toolbar_button)
+            )
+            self.export_menu.addAction(action)
+            self.export_actions[action_key] = action
 
-        self.export_toolbar_button, self.export_toolbar_menu = (
-            self.build_toolbar_dropdown("Export", "exportToolbarButton")
-        )
-        if hasattr(self.controls, "export_action_box"):
-            self.export_actions = {}
-            for label, action_key in (
-                ("Qpos", "qpos"),
-                ("Trajectory", "trajectory"),
-            ):
-                action = self.export_toolbar_menu.addAction(label)
-                action.setObjectName(f"export{label}Action")
-                action.setData(action_key)
-                action.triggered.connect(
-                    lambda checked=False, key=action_key: (
-                        self.on_setup_export_requested(key)
-                    )
-                )
-                self.export_actions[action_key] = action
-            toolbar.addWidget(self.export_toolbar_button)
-            toolbar.addSeparator()
+        self.robot_menu = menu_bar.addMenu("&Robot")
+        self.robot_menu.setObjectName("robotMenu")
+        self.robot_menu.aboutToShow.connect(self.refresh_robot_menu)
+        self.refresh_robot_menu()
 
-        self.view_toolbar_button, self.view_toolbar_menu = (
-            self.build_toolbar_dropdown("View", "viewToolbarButton")
-        )
+        self.view_menu = menu_bar.addMenu("&View")
+        self.view_menu.setObjectName("viewMenu")
         self.view_action_group = QActionGroup(self)
         self.view_action_group.setExclusive(True)
         self.view_actions = []
-
         for index in range(self.viewer_tabs.count()):
             action = QAction(self.viewer_tabs.tabText(index), self)
             action.setCheckable(True)
@@ -564,25 +501,295 @@ class RobotGuiMainWindow(QMainWindow):
                 )
             )
             self.view_action_group.addAction(action)
-            self.view_toolbar_menu.addAction(action)
+            self.view_menu.addAction(action)
             self.view_actions.append(action)
+        self.view_menu.addSeparator()
 
-        self.view_toolbar_menu.addSeparator()
-        self.controls.view_panel.setObjectName("toolbarViewPanel")
-        self.view_panel_action = QWidgetAction(self.view_toolbar_menu)
-        self.view_panel_action.setDefaultWidget(self.controls.view_panel)
-        self.view_toolbar_menu.addAction(self.view_panel_action)
-        self.viewer_tabs.currentChanged.connect(self.sync_view_toolbar_actions)
-        self.sync_view_toolbar_actions(self.viewer_tabs.currentIndex())
+        self.model_colors_action = QAction("Use Model Colors", self)
+        self.model_colors_action.setCheckable(True)
+        self.model_colors_action.toggled.connect(
+            lambda checked: self.viewer_3d.model_colors_box.setChecked(checked)
+        )
+        self.view_menu.addAction(self.model_colors_action)
 
-        toolbar.addWidget(self.view_toolbar_button)
+        self.show_keyframes_action = QAction("Show Keyframes", self)
+        self.show_keyframes_action.setCheckable(True)
+        self.show_keyframes_action.toggled.connect(
+            self.controls.show_keyframes_box.setChecked
+        )
+        self.controls.show_keyframes_box.toggled.connect(
+            self.show_keyframes_action.setChecked
+        )
+        self.view_menu.addAction(self.show_keyframes_action)
+
+        self.show_trajectory_lines_action = QAction("Show Trajectory Lines", self)
+        self.show_trajectory_lines_action.setCheckable(True)
+        self.show_trajectory_lines_action.toggled.connect(
+            self.controls.show_lines_box.setChecked
+        )
+        self.controls.show_lines_box.toggled.connect(
+            self.show_trajectory_lines_action.setChecked
+        )
+        self.view_menu.addAction(self.show_trajectory_lines_action)
+
+        self.show_playback_poses_action = QAction("Show Playback Poses", self)
+        self.show_playback_poses_action.setCheckable(True)
+        self.show_playback_poses_action.toggled.connect(
+            lambda checked: self.viewer_3d.show_ghosts.setChecked(checked)
+        )
+        self.view_menu.addAction(self.show_playback_poses_action)
+
+        self.viewer_tabs.currentChanged.connect(self.sync_view_actions)
+        self.sync_view_actions(self.viewer_tabs.currentIndex())
+        self.sync_display_actions()
+
+        self.help_menu = menu_bar.addMenu("&Help")
+        self.help_menu.setObjectName("helpMenu")
+        self.help_center_action = QAction("&Help Center…", self)
+        self.help_center_action.setObjectName("helpCenterAction")
+        self.help_center_action.setShortcut(QKeySequence(Qt.Key.Key_F1))
+        self.help_center_action.triggered.connect(self.show_help_center)
+        self.help_menu.addAction(self.help_center_action)
+        self.start_tutorial_action = QAction(
+            "Start First Motion &Tutorial", self
+        )
+        self.start_tutorial_action.setObjectName("startTutorialAction")
+        self.start_tutorial_action.triggered.connect(
+            self.start_first_motion_tutorial
+        )
+        self.help_menu.addAction(self.start_tutorial_action)
+
+    def _toolbar_action(self, toolbar, text, icon_name, object_name, tooltip):
+        action = QAction(theme_icon(icon_name, self), text, self)
+        action.setObjectName(f"{object_name}Action")
+        action.setToolTip(tooltip)
+        toolbar.addAction(action)
+        button = toolbar.widgetForAction(action)
+        if button is not None:
+            button.setObjectName(object_name)
+        self._toolbar_icon_actions[action] = icon_name
+        return action
+
+    def build_workflow_toolbar(self):
+        toolbar = QToolBar("Workflow", self)
+        toolbar.setObjectName("workflowToolbar")
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
+        toolbar.setAllowedAreas(Qt.ToolBarArea.TopToolBarArea)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        toolbar.setIconSize(QSize(16, 16))
+        font = toolbar.font()
+        if font.pointSizeF() > 0:
+            font.setPointSizeF(max(6.0, font.pointSizeF() - 2.0))
+        elif font.pixelSize() > 0:
+            font.setPixelSize(max(8, font.pixelSize() - 2))
+        toolbar.setFont(font)
+
+        self._toolbar_icon_actions = {}
+        self.preview_action = self._toolbar_action(
+            toolbar,
+            "Preview",
+            "preview",
+            "planPreviewButton",
+            "Plan/check the path from the committed pose to the orange preview.",
+        )
+        self.preview_action.triggered.connect(
+            lambda checked=False: self.viewer_3d.plan_preview()
+        )
+        self.slice_action = self._toolbar_action(
+            toolbar,
+            "Slice",
+            "slice",
+            "sliceButton",
+            "Accept the current pose at this time and advance the timeline.",
+        )
+        self.slice_action.triggered.connect(
+            lambda checked=False: self.viewer_3d.accept_timeslice()
+        )
+        self.generate_action = self._toolbar_action(
+            toolbar,
+            "Generate",
+            "generate",
+            "quickGenerateButton",
+            "Generate a sampled trajectory from saved timeline states.",
+        )
+        self.generate_action.triggered.connect(
+            lambda checked=False: self.viewer_3d.generate_requested.emit()
+        )
+
         toolbar.addSeparator()
-        toolbar.addWidget(self.help_button)
+        self.playback_action = self._toolbar_action(
+            toolbar,
+            "Play",
+            "play",
+            "playbackToolbarButton",
+            "Play or pause the active trajectory.",
+        )
+        self.playback_action.triggered.connect(
+            lambda checked=False: self.viewer_3d.toggle_playback()
+        )
+        self.reset_action = self._toolbar_action(
+            toolbar,
+            "Reset",
+            "reset",
+            "resetToolbarButton",
+            "Reset the active time to the model home pose.",
+        )
+        self.reset_action.triggered.connect(
+            lambda checked=False: self.viewer_3d.reset_robot_pose()
+        )
+        self.clear_action = self._toolbar_action(
+            toolbar,
+            "Clear",
+            "clear",
+            "clearToolbarButton",
+            "Clear the editable trajectory.",
+        )
+        self.clear_action.triggered.connect(
+            lambda checked=False: self.viewer_3d.clear_trajectory_requested.emit()
+        )
+
+        toolbar.addSeparator()
+        self.gizmo_action_group = QActionGroup(self)
+        self.gizmo_action_group.setExclusive(True)
+        self.move_action = self._toolbar_action(
+            toolbar,
+            "Move",
+            "move",
+            "moveToolButton",
+            "Use the translation handles on the 3D transform gizmo (T).",
+        )
+        self.move_action.setCheckable(True)
+        self.move_action.triggered.connect(
+            lambda checked=False: self.set_gizmo_mode("translate")
+        )
+        self.gizmo_action_group.addAction(self.move_action)
+        self.rotate_action = self._toolbar_action(
+            toolbar,
+            "Rotate",
+            "rotate",
+            "rotateToolButton",
+            "Use the rotation rings on the 3D transform gizmo (R).",
+        )
+        self.rotate_action.setCheckable(True)
+        self.rotate_action.triggered.connect(
+            lambda checked=False: self.set_gizmo_mode("rotate")
+        )
+        self.gizmo_action_group.addAction(self.rotate_action)
+
+        toolbar.addSeparator()
+        self.undo_action = self._toolbar_action(
+            toolbar,
+            "Undo",
+            "undo",
+            "undoToolbarButton",
+            "Undo the last edit (Ctrl+Z).",
+        )
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.undo_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.undo_action.triggered.connect(self.undo_last_action)
+        self.redo_action = self._toolbar_action(
+            toolbar,
+            "Redo",
+            "redo",
+            "redoToolbarButton",
+            "Redo the last undone edit (Ctrl+Shift+Z).",
+        )
+        self.redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        self.redo_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.redo_action.triggered.connect(self.redo_last_action)
         return toolbar
 
-    def sync_view_toolbar_actions(self, active_index):
+    def refresh_toolbar_icons(self):
+        for action, icon_name in getattr(self, "_toolbar_icon_actions", {}).items():
+            if (
+                action is getattr(self, "playback_action", None)
+                and self.viewer_3d.play_timer.isActive()
+            ):
+                icon_name = "pause"
+            action.setIcon(theme_icon(icon_name, self))
+
+    def sync_view_actions(self, active_index):
         for index, action in enumerate(getattr(self, "view_actions", [])):
             action.setChecked(index == active_index)
+        self.sync_workflow_toolbar()
+
+    def sync_display_actions(self):
+        viewer = self.viewer_3d
+        self.model_colors_action.setChecked(viewer.model_colors_box.isChecked())
+        self.show_keyframes_action.setChecked(
+            self.controls.show_keyframes_box.isChecked()
+        )
+        self.show_trajectory_lines_action.setChecked(
+            self.controls.show_lines_box.isChecked()
+        )
+        self.show_playback_poses_action.setChecked(viewer.show_ghosts.isChecked())
+
+    def refresh_robot_menu(self):
+        if not hasattr(self, "robot_menu"):
+            return
+        old_group = getattr(self, "robot_action_group", None)
+        self.robot_menu.clear()
+        self.robot_action_group = QActionGroup(self)
+        self.robot_action_group.setExclusive(True)
+        self.robot_actions = {}
+        for key, info in self.model_registry.items():
+            action = QAction(info.display_name, self.robot_action_group)
+            action.setCheckable(True)
+            action.setChecked(key == self.model_key)
+            action.setData(key)
+            action.triggered.connect(
+                lambda checked=False, model_key=key: (
+                    self.select_robot_from_menu(model_key)
+                )
+            )
+            self.robot_menu.addAction(action)
+            self.robot_actions[key] = action
+        if old_group is not None:
+            old_group.deleteLater()
+
+    def select_robot_from_menu(self, model_key):
+        index = self.controls.model_box.findData(model_key)
+        if index >= 0:
+            self.controls.model_box.setCurrentIndex(index)
+        else:
+            self.on_model_changed(model_key)
+
+    def sync_robot_menu(self):
+        for key, action in getattr(self, "robot_actions", {}).items():
+            action.setChecked(key == self.model_key)
+
+    def set_gizmo_mode(self, mode):
+        self.viewer_3d.canvas.set_gizmo_mode(mode)
+
+    def sync_workflow_toolbar(self):
+        if not hasattr(self, "preview_action"):
+            return
+        viewer = self.viewer_3d
+        has_robot = viewer.robot_state is not None
+        for action in (
+            self.preview_action,
+            self.slice_action,
+            self.generate_action,
+            self.playback_action,
+            self.reset_action,
+            self.clear_action,
+        ):
+            action.setEnabled(has_robot)
+        transform_enabled = (
+            has_robot
+            and self.viewer_tabs.currentWidget() is self.viewer_3d_stack
+        )
+        self.move_action.setEnabled(transform_enabled)
+        self.rotate_action.setEnabled(transform_enabled)
+        mode = viewer.canvas.gizmo.mode
+        self.move_action.setChecked(mode == "translate")
+        self.rotate_action.setChecked(mode == "rotate")
+        playing = viewer.play_timer.isActive()
+        self.playback_action.setText("Pause" if playing else "Play")
+        self.playback_action.setIcon(theme_icon("pause" if playing else "play", self))
+        self.undo_action.setEnabled(bool(self.undo_stack))
+        self.redo_action.setEnabled(bool(self.redo_stack))
 
     # ============================================================
     # Build right status/debug panel
@@ -683,11 +890,17 @@ class RobotGuiMainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_render_progress_overlay_geometry()
-        self.position_help_button()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (
+            QEvent.Type.ApplicationPaletteChange,
+            QEvent.Type.PaletteChange,
+        ):
+            QTimer.singleShot(0, self.refresh_toolbar_icons)
 
     def showEvent(self, event):
         super().showEvent(event)
-        self.position_help_button()
         QTimer.singleShot(
             INITIAL_RENDER_PROGRESS_DELAY_MS,
             self.prepare_pending_initial_render_progress,
@@ -839,25 +1052,6 @@ class RobotGuiMainWindow(QMainWindow):
         return details
 
     def update_project_panel(self):
-        if self.current_project is None:
-            self.project_name_label.setText("No project open")
-            self.project_name_label.setToolTip("No GhostGUI project is open.")
-            project_button = getattr(self, "project_toolbar_button", None)
-            if project_button is not None:
-                project_button.setToolTip("No GhostGUI project is open.")
-            self.update_project_chrome()
-            return
-        name = self.current_project.project_name
-        if self.project_dirty:
-            name = f"{name} *"
-        lines = [str(self.current_project.root_dir)]
-        if self.project_dirty:
-            lines.append("Unsaved changes")
-        self.project_name_label.setText(name)
-        self.project_name_label.setToolTip("\n".join(lines))
-        project_button = getattr(self, "project_toolbar_button", None)
-        if project_button is not None:
-            project_button.setToolTip("\n".join(lines))
         self.update_project_chrome()
 
     def recent_project_display_name(self, entry):
@@ -871,23 +1065,31 @@ class RobotGuiMainWindow(QMainWindow):
         return project_name
 
     def refresh_recent_projects(self):
-        if not hasattr(self, "recent_projects_box"):
+        if not hasattr(self, "recent_projects_menu"):
             return
         entries = load_recent_projects()
-        box = self.recent_projects_box
-        was_blocked = box.blockSignals(True)
-        try:
-            box.clear()
-            box.addItem("Recent projects...", "")
-            for entry in entries:
-                path = entry["path"]
-                box.addItem(self.recent_project_display_name(entry), path)
-                index = box.count() - 1
-                box.setItemData(index, path, Qt.ItemDataRole.ToolTipRole)
-            box.setCurrentIndex(0)
-            box.setEnabled(bool(entries))
-        finally:
-            box.blockSignals(was_blocked)
+        self.recent_projects_menu.clear()
+        if not entries:
+            empty_action = self.recent_projects_menu.addAction(
+                "No recent projects"
+            )
+            empty_action.setEnabled(False)
+            return
+        for entry in entries:
+            path = entry["path"]
+            action = self.recent_projects_menu.addAction(
+                self.recent_project_display_name(entry)
+            )
+            action.setData(path)
+            action.setToolTip(path)
+            action.triggered.connect(
+                lambda checked=False, project_path=path: (
+                    self.open_project_path(
+                        project_path,
+                        source="recent_projects",
+                    )
+                )
+            )
 
     def remember_current_project(self):
         if self.current_project is None:
@@ -898,13 +1100,6 @@ class RobotGuiMainWindow(QMainWindow):
         except OSError as exc:
             if hasattr(self, "status_text"):
                 self.status_text.append(f"Could not update recent projects: {exc}")
-
-    def on_recent_project_selected(self, index):
-        path = self.recent_projects_box.itemData(index)
-        self.recent_projects_box.setCurrentIndex(0)
-        if not path:
-            return
-        self.open_project_path(path, source="recent_projects")
 
     def build_project_browser_dialog(self):
         return ProjectBrowserDialog(load_project_browser_previews(), parent=self)
@@ -1336,6 +1531,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.undo_stack.clear()
         self.redo_stack.clear()
         self._refresh_history_baseline()
+        self.sync_workflow_toolbar()
         source = "autosaved project" if autosave else "project"
         message = f"Opened {source}: {project.root_dir}"
         self.status_text.setText(message)
@@ -1390,28 +1586,6 @@ class RobotGuiMainWindow(QMainWindow):
         active_view_index = int(workspace.get("active_view_index", 0))
         if 0 <= active_view_index < self.viewer_tabs.count():
             self.viewer_tabs.setCurrentIndex(active_view_index)
-
-    def build_help_button(self):
-        button = QToolButton()
-        button.setObjectName("helpButton")
-        button.setText("Help")
-        button.setToolTip("Open GhostGUI help center")
-        button.setMinimumWidth(54)
-        button.setFixedHeight(28)
-        button.clicked.connect(self.show_help_center)
-        return button
-
-    def position_help_button(self):
-        button = getattr(self, "help_button", None)
-        if button is None:
-            return
-        if button.parentWidget() is not self:
-            return
-        margin = 10
-        x = max(margin, self.width() - button.width() - margin)
-        y = margin
-        button.move(x, y)
-        button.raise_()
 
     def show_help_center(self):
         if self.help_dialog is None:
@@ -1613,15 +1787,6 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_2d.target_dragged.connect(self.on_target_dragged)
         self.connect_model_viewer_signals(self.viewer_3d, self.viewer_2d_stickman)
 
-    def install_history_shortcuts(self):
-        self.undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self)
-        self.undo_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
-        self.undo_shortcut.activated.connect(self.undo_last_action)
-
-        self.redo_shortcut = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
-        self.redo_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
-        self.redo_shortcut.activated.connect(self.redo_last_action)
-
     def connect_model_viewer_signals(self, viewer_3d, viewer_2d_skeleton):
         viewer_3d.target_dragged.connect(self.on_target_dragged)
         viewer_3d.target_pose_dragged.connect(self.on_target_pose_dragged)
@@ -1643,6 +1808,26 @@ class RobotGuiMainWindow(QMainWindow):
         )
         viewer_3d.show_ghosts.toggled.connect(
             lambda _checked: self.mark_project_dirty("Display settings")
+        )
+        viewer_3d.show_ghosts.toggled.connect(
+            lambda checked, viewer=viewer_3d: (
+                self.on_viewer_playback_poses_changed(viewer, checked)
+            )
+        )
+        viewer_3d.model_colors_box.toggled.connect(
+            lambda checked, viewer=viewer_3d: (
+                self.on_viewer_model_colors_changed(viewer, checked)
+            )
+        )
+        viewer_3d.playback_state_changed.connect(
+            lambda _playing, viewer=viewer_3d: (
+                self.on_viewer_playback_state_changed(viewer)
+            )
+        )
+        viewer_3d.canvas.gizmo_mode_changed.connect(
+            lambda _mode, viewer=viewer_3d: (
+                self.on_viewer_gizmo_mode_changed(viewer)
+            )
         )
         viewer_3d.frame_slider.valueChanged.connect(
             lambda _value: self.mark_project_dirty("Playback frame")
@@ -1681,6 +1866,22 @@ class RobotGuiMainWindow(QMainWindow):
             )
         )
         viewer_2d_skeleton.target_dragged.connect(self.on_target_dragged)
+
+    def on_viewer_playback_poses_changed(self, viewer, checked):
+        if viewer is self.viewer_3d:
+            self.show_playback_poses_action.setChecked(bool(checked))
+
+    def on_viewer_model_colors_changed(self, viewer, checked):
+        if viewer is self.viewer_3d:
+            self.model_colors_action.setChecked(bool(checked))
+
+    def on_viewer_playback_state_changed(self, viewer):
+        if viewer is self.viewer_3d:
+            self.sync_workflow_toolbar()
+
+    def on_viewer_gizmo_mode_changed(self, viewer):
+        if viewer is self.viewer_3d:
+            self.sync_workflow_toolbar()
 
     def capture_history_snapshot(self):
         viewer = self.viewer_3d
@@ -1767,13 +1968,11 @@ class RobotGuiMainWindow(QMainWindow):
                 viewer.frame_slider.setValue(snapshot.frame_slider_value)
                 self.set_editor_timeline_duration(snapshot.timeline_duration)
                 show_ghosts_blocked = viewer.show_ghosts.blockSignals(True)
-                quick_ghosts_blocked = viewer.quick_show_ghosts.blockSignals(True)
                 try:
                     viewer.show_ghosts.setChecked(snapshot.show_ghosts)
-                    viewer.quick_show_ghosts.setChecked(snapshot.show_ghosts)
                 finally:
                     viewer.show_ghosts.blockSignals(show_ghosts_blocked)
-                    viewer.quick_show_ghosts.blockSignals(quick_ghosts_blocked)
+                self.show_playback_poses_action.setChecked(snapshot.show_ghosts)
                 viewer.ghost_trajectory = [
                     qpos.copy() for qpos in snapshot.ghost_trajectory
                 ]
@@ -1830,6 +2029,7 @@ class RobotGuiMainWindow(QMainWindow):
         self._last_history_snapshot = after
         self.statusBar().showMessage(f"{description}; Ctrl+Z can undo.", 3000)
         self.mark_project_dirty(description)
+        self.sync_workflow_toolbar()
         return True
 
     def undo_last_action(self):
@@ -1843,6 +2043,7 @@ class RobotGuiMainWindow(QMainWindow):
         self._last_history_snapshot = entry.snapshot
         self.statusBar().showMessage(f"Undid {entry.description}.", 3000)
         self.mark_project_dirty(f"Undo {entry.description}")
+        self.sync_workflow_toolbar()
 
     def redo_last_action(self):
         if not self.redo_stack:
@@ -1855,6 +2056,7 @@ class RobotGuiMainWindow(QMainWindow):
         self._last_history_snapshot = entry.snapshot
         self.statusBar().showMessage(f"Redid {entry.description}.", 3000)
         self.mark_project_dirty(f"Redo {entry.description}")
+        self.sync_workflow_toolbar()
 
     def on_viewer_history_action_finished(self, description):
         self.record_history_action(description)
@@ -1955,6 +2157,7 @@ class RobotGuiMainWindow(QMainWindow):
             return
         if model_key in self.model_loaders:
             return
+        self.robot_menu.setEnabled(False)
         self.begin_render_progress(
             f"Loading {model_info.display_name}",
             "Loading robot model data...",
@@ -2088,9 +2291,12 @@ class RobotGuiMainWindow(QMainWindow):
             f"Imported {info.display_name} to {info.model_path}"
         )
         self.controls.add_model(info.key, info.display_name, select=True)
+        self.refresh_robot_menu()
 
     def finish_model_loading_ui(self):
         self.controls.model_box.setEnabled(True)
+        self.robot_menu.setEnabled(True)
+        self.sync_robot_menu()
         self.statusBar().clearMessage()
 
     def activate_model_session(self, model_key, session):
@@ -2128,6 +2334,9 @@ class RobotGuiMainWindow(QMainWindow):
         self.undo_stack.clear()
         self.redo_stack.clear()
         self._refresh_history_baseline()
+        self.sync_robot_menu()
+        self.sync_display_actions()
+        self.sync_workflow_toolbar()
         if previous_model_key != model_key and not restoring_project:
             self.mark_project_dirty("Change robot model")
         self.restore_pending_project_if_ready()

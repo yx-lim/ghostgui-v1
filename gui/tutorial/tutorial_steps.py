@@ -28,9 +28,9 @@ FIRST_MOTION_TUTORIAL = [
         title="Choose A Robot",
         body=(
             "The robot model controls the available joints, frames, geometry, "
-            "and home pose. Open the Robot dropdown to choose the active model."
+            "and home pose. Open the Robot menu to choose the active model."
         ),
-        target="robotToolbarButton",
+        target="appMenuBar",
         before_show="expand_setup",
     ),
     TutorialStep(
@@ -52,7 +52,7 @@ FIRST_MOTION_TUTORIAL = [
             "orange robot shows the temporary IK preview before it is saved. "
             "Press T for translate, R for rotate, or E/Esc to cancel a drag."
         ),
-        target="viewerQuickActions",
+        target="workflowToolbar",
         before_show="show_3d_view",
     ),
     TutorialStep(
@@ -90,10 +90,10 @@ FIRST_MOTION_TUTORIAL = [
         id="export",
         title="Export The Result",
         body=(
-            "Use the Export dropdown to save the current committed qpos or timed "
+            "Use File > Export to save the current committed qpos or timed "
             "trajectory rows. Unsaved orange previews are not exported."
         ),
-        target="exportToolbarButton",
+        target="appMenuBar",
         before_show="expand_setup",
     ),
 ]

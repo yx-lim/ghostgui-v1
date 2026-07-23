@@ -84,6 +84,7 @@ class RobotViewer3D(QWidget):
     accept_timeslice_requested = Signal()
     delete_timeslice_requested = Signal()
     history_action_finished = Signal(str)
+    playback_state_changed = Signal(bool)
 
     def __init__(self, robot_model=None, error=None):
         super().__init__()
@@ -371,7 +372,6 @@ class RobotViewer3D(QWidget):
         root.addWidget(self._build_timeslice_editor())
 
         enabled = self.robot_state is not None
-        self.quick_reset_button.setEnabled(enabled)
         self.load_qpos_button.setEnabled(enabled)
         self.load_trajectory_button.setEnabled(enabled)
         self.trajectory_import_dt.setEnabled(enabled)
@@ -380,7 +380,6 @@ class RobotViewer3D(QWidget):
         self.selection_context_panel.setEnabled(enabled)
         self.timeslice_context_panel.setEnabled(enabled)
         preview_group.setEnabled(enabled)
-        self.quick_actions_panel.setEnabled(enabled)
         self.timeslice_editor.setEnabled(enabled)
 
     def _build_canvas_workspace(self):
@@ -389,79 +388,7 @@ class RobotViewer3D(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.canvas, 0, 0)
-        layout.addWidget(
-            self._build_quick_actions_panel(),
-            0,
-            0,
-            alignment=Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
-        )
         return self.canvas_workspace
-
-    def _build_quick_actions_panel(self):
-        self.quick_actions_panel = QWidget()
-        self.quick_actions_panel.setObjectName("viewerQuickActions")
-        layout = QHBoxLayout(self.quick_actions_panel)
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(4)
-
-        self.quick_plan_preview_button = QPushButton("Preview")
-        self.quick_accept_timeslice_button = QPushButton("Slice")
-        self.quick_generate_button = QPushButton("Generate")
-        self.quick_play_button = QPushButton("Play")
-        self.quick_reset_button = QPushButton("Reset")
-        self.quick_clear_button = QPushButton("Clear")
-        self.quick_show_ghosts = QCheckBox("Playback")
-        self.quick_show_ghosts.setChecked(self.show_ghosts.isChecked())
-
-        self.quick_plan_preview_button.setObjectName("planPreviewButton")
-        self.quick_plan_preview_button.setToolTip(
-            "Plan/check the path from the committed pose to the orange preview."
-        )
-        self.quick_accept_timeslice_button.setObjectName("sliceButton")
-        self.quick_accept_timeslice_button.setToolTip(
-            "Accept the current preview, save it at this time, and advance the timeline."
-        )
-        self.quick_generate_button.setObjectName("quickGenerateButton")
-        self.quick_generate_button.setToolTip(
-            "Generate a sampled trajectory from saved timeline states."
-        )
-        self.quick_play_button.setObjectName("quickPlayButton")
-        self.quick_play_button.setToolTip("Play or pause the active trajectory.")
-        self.quick_reset_button.setObjectName("quickResetButton")
-        self.quick_reset_button.setToolTip("Reset the active time to the model home pose.")
-        self.quick_clear_button.setObjectName("quickClearButton")
-        self.quick_clear_button.setToolTip("Clear the editable trajectory.")
-        self.quick_show_ghosts.setObjectName("playbackVisibilityToggle")
-        self.quick_show_ghosts.setToolTip("Show or hide trajectory playback ghosts.")
-
-        for button in (
-            self.quick_plan_preview_button,
-            self.quick_accept_timeslice_button,
-            self.quick_generate_button,
-            self.quick_play_button,
-            self.quick_reset_button,
-            self.quick_clear_button,
-        ):
-            button.setMinimumWidth(0)
-            button.setMaximumWidth(82)
-
-        self.quick_plan_preview_button.clicked.connect(self.plan_preview)
-        self.quick_accept_timeslice_button.clicked.connect(self.accept_timeslice)
-        self.quick_generate_button.clicked.connect(self.generate_requested.emit)
-        self.quick_play_button.clicked.connect(self.toggle_playback)
-        self.quick_reset_button.clicked.connect(self.reset_robot_pose)
-        self.quick_clear_button.clicked.connect(self.clear_trajectory_requested.emit)
-        self.quick_show_ghosts.toggled.connect(self.show_ghosts.setChecked)
-        self.show_ghosts.toggled.connect(self.quick_show_ghosts.setChecked)
-
-        layout.addWidget(self.quick_plan_preview_button)
-        layout.addWidget(self.quick_accept_timeslice_button)
-        layout.addWidget(self.quick_generate_button)
-        layout.addWidget(self.quick_play_button)
-        layout.addWidget(self.quick_reset_button)
-        layout.addWidget(self.quick_clear_button)
-        layout.addWidget(self.quick_show_ghosts)
-        return self.quick_actions_panel
 
     def _build_timeslice_editor(self):
         self.timeslice_editor = QWidget()
@@ -1812,15 +1739,15 @@ class RobotViewer3D(QWidget):
         elif self.robot_trajectory:
             self.play_timer.start()
             self._set_playback_button_text("Pause")
+            self.playback_state_changed.emit(True)
 
     def pause_playback(self):
         self.play_timer.stop()
         self._set_playback_button_text("Play")
+        self.playback_state_changed.emit(False)
 
     def _set_playback_button_text(self, text):
         self.play_button.setText(text)
-        if hasattr(self, "quick_play_button"):
-            self.quick_play_button.setText(text)
 
     def _advance_frame(self):
         if not self.robot_trajectory:

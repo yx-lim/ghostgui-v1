@@ -1024,19 +1024,20 @@ class RobotCanvas3D(QOpenGLWidget):
         if emit_cancelled:
             self.transform_drag_cancel_requested.emit()
 
+    def set_gizmo_mode(self, mode):
+        """Set the transform interaction mode and keep external controls in sync."""
+        self.gizmo.set_mode(mode)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.gizmo_mode_changed.emit(mode)
+        self.update()
+
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_T:
-            self.gizmo.set_mode("translate")
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-            self.gizmo_mode_changed.emit("translate")
-            self.update()
+            self.set_gizmo_mode("translate")
             event.accept()
             return
         if event.key() == Qt.Key.Key_R:
-            self.gizmo.set_mode("rotate")
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-            self.gizmo_mode_changed.emit("rotate")
-            self.update()
+            self.set_gizmo_mode("rotate")
             event.accept()
             return
         if event.key() in (Qt.Key.Key_E, Qt.Key.Key_Escape):

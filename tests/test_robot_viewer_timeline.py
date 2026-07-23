@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QLabel,
     QMessageBox,
-    QComboBox,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -788,37 +787,72 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertFalse(np.allclose(self.viewer.committed_state.get_qpos(), stale_qpos))
 
-    def test_viewer_quick_actions_mirror_common_controls(self):
-        self.assertIs(self.viewer.quick_actions_panel.parent(), self.viewer.canvas_workspace)
-        self.assertEqual(self.viewer.quick_plan_preview_button.text(), "Preview")
-        self.assertEqual(self.viewer.quick_show_ghosts.text(), "Playback")
+    def test_workflow_toolbar_mirrors_common_controls(self):
+        toolbar = self.window.findChild(QToolBar, "workflowToolbar")
+        self.assertIs(toolbar, self.window.app_toolbar)
+        self.assertFalse(hasattr(self.viewer, "quick_actions_panel"))
+        self.assertEqual(
+            toolbar.toolButtonStyle(),
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon,
+        )
+        if self.window.font().pointSizeF() > 0:
+            self.assertAlmostEqual(
+                toolbar.font().pointSizeF(),
+                max(6.0, self.window.font().pointSizeF() - 2.0),
+            )
+
+        actions = [action for action in toolbar.actions() if not action.isSeparator()]
+        self.assertEqual(
+            [action.text() for action in actions],
+            [
+                "Preview",
+                "Slice",
+                "Generate",
+                "Play",
+                "Reset",
+                "Clear",
+                "Move",
+                "Rotate",
+                "Undo",
+                "Redo",
+            ],
+        )
+        for action in actions:
+            self.assertFalse(action.icon().isNull(), action.text())
 
         generated = []
         self.viewer.generate_requested.connect(lambda: generated.append(True))
-        self.viewer.quick_generate_button.click()
+        self.window.generate_action.trigger()
         self.assertEqual(generated, [True])
 
         cleared = []
         self.viewer.clear_trajectory_requested.connect(lambda: cleared.append(True))
-        self.viewer.quick_clear_button.click()
+        self.window.clear_action.trigger()
         self.assertEqual(cleared, [True])
 
-        self.viewer.quick_show_ghosts.setChecked(True)
+        self.window.show_playback_poses_action.setChecked(True)
         self.assertTrue(self.viewer.show_ghosts.isChecked())
         self.viewer.show_ghosts.setChecked(False)
-        self.assertFalse(self.viewer.quick_show_ghosts.isChecked())
+        self.assertFalse(self.window.show_playback_poses_action.isChecked())
+
+        self.window.rotate_action.trigger()
+        self.assertEqual(self.viewer.canvas.gizmo.mode, "rotate")
+        self.assertTrue(self.window.rotate_action.isChecked())
+        self.viewer.canvas.set_gizmo_mode("translate")
+        self.assertTrue(self.window.move_action.isChecked())
+        self.assertFalse(self.window.rotate_action.isChecked())
 
         first = self.viewer.robot_model.home_qpos.copy()
         second = first.copy()
         second[-1] += 0.05
         self.viewer.set_robot_trajectory([first, second])
-        self.viewer.quick_play_button.click()
+        self.window.playback_action.trigger()
         self.assertTrue(self.viewer.play_timer.isActive())
-        self.assertEqual(self.viewer.quick_play_button.text(), "Pause")
+        self.assertEqual(self.window.playback_action.text(), "Pause")
         self.assertEqual(self.viewer.play_button.text(), "Pause")
-        self.viewer.quick_play_button.click()
+        self.window.playback_action.trigger()
         self.assertFalse(self.viewer.play_timer.isActive())
-        self.assertEqual(self.viewer.quick_play_button.text(), "Play")
+        self.assertEqual(self.window.playback_action.text(), "Play")
         self.assertEqual(self.viewer.play_button.text(), "Play")
 
         before = self.viewer.committed_state.get_qpos()
@@ -828,7 +862,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.preview_state.get_joint_value(joint_name) + 0.05,
         )
         preview = self.viewer.preview_state.get_qpos()
-        self.viewer.quick_plan_preview_button.click()
+        self.window.preview_action.trigger()
         self.assertEqual(len(self.viewer.robot_trajectory), 2)
         np.testing.assert_allclose(self.viewer.robot_trajectory[0], first)
         np.testing.assert_allclose(self.viewer.robot_trajectory[-1], second)
@@ -946,12 +980,12 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 section.content.isVisible(),
                 expected_visible[section.title],
             )
-        self.assertEqual(self.window.menuBar().actions(), [])
-        toolbar = self.window.findChild(QToolBar, "appToolbar")
+        self.assertEqual(
+            [action.text().replace("&", "") for action in self.window.menuBar().actions()],
+            ["File", "Robot", "View", "Help"],
+        )
+        toolbar = self.window.findChild(QToolBar, "workflowToolbar")
         self.assertIs(toolbar, self.window.app_toolbar)
-        help_button = self.window.findChild(QToolButton, "helpButton")
-        self.assertIsNotNone(help_button)
-        self.assertEqual(help_button.text(), "Help")
         self.assertFalse(hasattr(self.window, "workflow_toolbar"))
         self.assertTrue(self.window.viewer_tabs.tabBar().isHidden())
         toolbar_buttons = {
@@ -959,49 +993,52 @@ class RobotViewerTimelineTests(unittest.TestCase):
             for button in self.window.app_toolbar.findChildren(QToolButton)
             if button.objectName()
         }
-        self.assertEqual(toolbar_buttons["projectToolbarButton"], "Project")
-        self.assertEqual(toolbar_buttons["robotToolbarButton"], "Robot")
-        self.assertEqual(toolbar_buttons["importToolbarButton"], "Import")
-        self.assertEqual(toolbar_buttons["exportToolbarButton"], "Export")
-        self.assertEqual(toolbar_buttons["viewToolbarButton"], "View")
-        self.assertEqual(toolbar_buttons["helpButton"], "Help")
+        self.assertEqual(toolbar_buttons["planPreviewButton"], "Preview")
+        self.assertEqual(toolbar_buttons["sliceButton"], "Slice")
+        self.assertEqual(toolbar_buttons["quickGenerateButton"], "Generate")
+        self.assertEqual(toolbar_buttons["playbackToolbarButton"], "Play")
+        self.assertEqual(toolbar_buttons["resetToolbarButton"], "Reset")
+        self.assertEqual(toolbar_buttons["clearToolbarButton"], "Clear")
+        self.assertEqual(toolbar_buttons["moveToolButton"], "Move")
+        self.assertEqual(toolbar_buttons["rotateToolButton"], "Rotate")
+        self.assertEqual(toolbar_buttons["undoToolbarButton"], "Undo")
+        self.assertEqual(toolbar_buttons["redoToolbarButton"], "Redo")
         project_action_texts = [
             action.text()
-            for action in self.window.project_toolbar_menu.actions()
+            for action in self.window.file_menu.actions()
             if action.text()
         ]
-        self.assertEqual(project_action_texts, ["New", "Open", "Save"])
-        recent_projects_box = self.window.project_panel.findChild(
-            QComboBox, "recentProjectsCombo"
+        self.assertEqual(
+            [text.replace("&", "") for text in project_action_texts],
+            [
+                "New Project…",
+                "Open Project…",
+                "Open Recent",
+                "Save",
+                "Import",
+                "Export",
+            ],
         )
-        self.assertIsNotNone(recent_projects_box)
-        self.assertEqual(recent_projects_box.count(), 1)
-        self.assertFalse(recent_projects_box.isEnabled())
-        self.assertIs(
-            self.window.project_toolbar_button.menu(),
-            self.window.project_toolbar_menu,
+        self.assertFalse(hasattr(self.window, "save_as_action"))
+        self.assertEqual(len(self.window.recent_projects_menu.actions()), 1)
+        self.assertEqual(
+            self.window.recent_projects_menu.actions()[0].text(),
+            "No recent projects",
         )
-        self.assertIs(self.window.project_panel.parent(), self.window.project_toolbar_menu)
-        self.assertIs(
-            self.window.robot_toolbar_button.menu(),
-            self.window.robot_toolbar_menu,
+        self.assertFalse(
+            self.window.recent_projects_menu.actions()[0].isEnabled()
         )
-        self.assertIs(self.window.controls.model_box.parent(), self.window.robot_menu_panel)
-        self.assertIs(
-            self.window.import_toolbar_button.menu(),
-            self.window.import_toolbar_menu,
-        )
-        self.assertIs(
-            self.window.export_toolbar_button.menu(),
-            self.window.export_toolbar_menu,
+        self.assertIn(self.window.model_key, self.window.robot_actions)
+        self.assertTrue(
+            self.window.robot_actions[self.window.model_key].isChecked()
         )
         self.assertEqual(
-            [action.text() for action in self.window.import_toolbar_menu.actions()],
-            ["Model", "Qpos", "Trajectory"],
+            [action.text() for action in self.window.import_menu.actions()],
+            ["Robot Model…", "Qpos…", "Trajectory…"],
         )
         self.assertEqual(
-            [action.text() for action in self.window.export_toolbar_menu.actions()],
-            ["Qpos", "Trajectory"],
+            [action.text() for action in self.window.export_menu.actions()],
+            ["Qpos…", "Trajectory…"],
         )
         self.assertEqual(self.window.viewer_tabs.tabText(0), "3D Pose")
         self.assertIs(
@@ -1011,10 +1048,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             [action.text() for action in self.window.view_actions],
             ["3D Pose", "2D Side View", "2D Skeleton", "Simulation"],
         )
-        self.assertIs(
-            self.window.controls.view_panel.parent(),
-            self.window.view_toolbar_menu,
-        )
+        self.assertIsNone(self.window.controls.view_panel.parent())
 
         self.assertTrue(
             self.window.model_source_label.text().startswith("Model source:")
@@ -1177,13 +1211,11 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.timeslice_action_row.itemAt(1).widget(),
             self.viewer.delete_timeslice_button,
         )
-        self.assertIs(
-            self.viewer.quick_clear_button.parent(), self.viewer.quick_actions_panel
-        )
-        quick_layout = self.viewer.quick_actions_panel.layout()
+        self.assertFalse(hasattr(self.viewer, "quick_clear_button"))
+        toolbar_actions = self.window.app_toolbar.actions()
         self.assertLess(
-            quick_layout.indexOf(self.viewer.quick_reset_button),
-            quick_layout.indexOf(self.viewer.quick_clear_button),
+            toolbar_actions.index(self.window.reset_action),
+            toolbar_actions.index(self.window.clear_action),
         )
         for section in self.window.left_sidebar_content.sections:
             section.set_expanded(True)
@@ -1440,11 +1472,15 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.assertEqual(entries[0]["project_name"], "recent_one")
             self.assertEqual(Path(entries[0]["path"]), project.root_dir)
 
-            recent_box = self.window.recent_projects_box
-            self.assertTrue(recent_box.isEnabled())
-            self.assertEqual(recent_box.count(), 2)
-            self.assertEqual(recent_box.itemData(1), str(project.root_dir))
-            self.assertEqual(recent_box.itemText(1), "recent_one")
+            self.window.refresh_recent_projects()
+            recent_actions = [
+                action
+                for action in self.window.recent_projects_menu.actions()
+                if action.isEnabled()
+            ]
+            self.assertEqual(len(recent_actions), 1)
+            self.assertEqual(recent_actions[0].data(), str(project.root_dir))
+            self.assertEqual(recent_actions[0].text(), "recent_one")
 
             self.window.current_project = None
 
@@ -1576,11 +1612,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
             project = self.window.create_project_at(project_root, "dirty_test")
             self.assertFalse(self.window.project_dirty)
-            self.assertNotIn("Unsaved changes", self.window.project_name_label.text())
-            self.assertNotIn(
-                "Unsaved changes",
-                self.window.project_name_label.toolTip(),
-            )
+            self.assertFalse(self.window.windowTitle().endswith("*"))
 
             self.window.controls.frame_box.setCurrentText("left_hand")
             self.window.controls.set_position_values(
@@ -1592,11 +1624,6 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.on_add_keyframe()
 
             self.assertTrue(self.window.project_dirty)
-            self.assertTrue(self.window.project_name_label.text().endswith("*"))
-            self.assertIn(
-                "Unsaved changes",
-                self.window.project_name_label.toolTip(),
-            )
             self.assertTrue(self.window.windowTitle().endswith("*"))
 
             self.assertTrue(
@@ -1607,11 +1634,6 @@ class RobotViewerTimelineTests(unittest.TestCase):
             )
 
             self.assertFalse(self.window.project_dirty)
-            self.assertNotIn("Unsaved changes", self.window.project_name_label.text())
-            self.assertNotIn(
-                "Unsaved changes",
-                self.window.project_name_label.toolTip(),
-            )
             self.assertFalse(self.window.windowTitle().endswith("*"))
             events = project.read_session_log()
             self.assertEqual(events[-1]["event"], "project_saved")
@@ -1828,9 +1850,14 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.trajectory.clear()
             self.window.controls.frame_box.setCurrentText("pelvis")
 
-            self.window.on_recent_project_selected(1)
+            self.window.refresh_recent_projects()
+            recent_action = next(
+                action
+                for action in self.window.recent_projects_menu.actions()
+                if action.data() == str(project.root_dir)
+            )
+            recent_action.trigger()
 
-            self.assertEqual(self.window.recent_projects_box.currentIndex(), 0)
             self.assertEqual(self.window.current_project.root_dir, project.root_dir)
             self.assertEqual(len(self.window.trajectory.frames), 1)
             frame = self.window.trajectory.frames[0]
@@ -2020,10 +2047,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.current_project = None
 
     def test_help_center_opens_without_written_guide_button(self):
-        help_button = self.window.findChild(QToolButton, "helpButton")
-        self.assertIsNotNone(help_button)
-
-        help_button.click()
+        self.window.help_center_action.trigger()
         self.app.processEvents()
 
         self.assertIsNotNone(self.window.help_dialog)
@@ -2051,8 +2075,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.window.show()
         self.app.processEvents()
 
-        help_button = self.window.findChild(QToolButton, "helpButton")
-        help_button.click()
+        self.window.help_center_action.trigger()
         self.app.processEvents()
 
         start_button = self.window.help_dialog.findChild(
@@ -2084,7 +2107,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertFalse(manager.overlay.target_rect.isNull())
         self.assertIn("Choose A Robot", manager.card.title_label.text())
         self.assertTrue(self.window.app_toolbar.isVisible())
-        self.assertTrue(self.window.robot_toolbar_button.isVisible())
+        self.assertTrue(self.window.menuBar().isVisible())
+        self.assertIn(self.window.robot_menu.menuAction(), self.window.menuBar().actions())
         self.assertTrue(back_button.isEnabled())
 
         back_button.click()
