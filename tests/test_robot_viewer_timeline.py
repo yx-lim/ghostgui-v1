@@ -2167,9 +2167,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
             controls.x_slider: "X [m]",
             controls.y_slider: "Y [m]",
             controls.z_slider: "Z [m]",
-            controls.roll_slider: "Roll [rad]",
-            controls.pitch_slider: "Pitch [rad]",
-            controls.yaw_slider: "Yaw [rad]",
+            controls.roll_slider: "Roll [°]",
+            controls.pitch_slider: "Pitch [°]",
+            controls.yaw_slider: "Yaw [°]",
         }
 
         for slider, label in expected.items():
@@ -2177,7 +2177,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 self.assertEqual(slider.label.text(), label)
                 self.assertNotIn(":", slider.label.text())
                 self.assertLessEqual(slider.label.maximumWidth(), 86)
-                self.assertGreaterEqual(slider.input.maximumWidth(), 76)
+                self.assertFalse(slider.slider.editor.isVisible())
+                self.assertGreaterEqual(slider.slider.minimumHeight(), 24)
 
     def test_corner_smoothing_slider_uses_fraction_scale(self):
         controls = self.window.controls
@@ -2187,10 +2188,14 @@ class RobotViewerTimelineTests(unittest.TestCase):
             controls.corner_smoothing_slider.label.minimumWidth(),
             controls.corner_smoothing_slider.label.sizeHint().width(),
         )
-        self.assertEqual(controls.corner_smoothing_slider.slider.maximum(), 100)
-        self.assertAlmostEqual(controls.corner_smoothing_slider.input.maximum(), 1.0)
         self.assertAlmostEqual(
-            controls.corner_smoothing_slider.input.singleStep(), 0.01
+            controls.corner_smoothing_slider.slider.logical_maximum(), 1.0
+        )
+        self.assertAlmostEqual(
+            controls.corner_smoothing_slider.slider.logical_single_step(), 0.01
+        )
+        self.assertEqual(
+            controls.corner_smoothing_slider.slider.format_value(), "0%"
         )
         self.assertGreaterEqual(controls.corner_smoothing_slider.minimumWidth(), 232)
         self.assertAlmostEqual(controls.corner_smoothing(), 0.0)

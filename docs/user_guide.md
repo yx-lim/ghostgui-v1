@@ -45,7 +45,7 @@ IK. This is the usual export target.
 
 ## First Motion Workflow
 
-1. Choose a robot in the app toolbar.
+1. Choose a robot from the **Robot** menu.
 2. Select a **Target robot frame**, such as `left_hand`.
 3. Move the target with the 3D transform gizmo or the pose sliders.
 4. Inspect the orange preview robot.
@@ -53,7 +53,7 @@ IK. This is the usual export target.
 6. Click **Slice** to commit the preview and save it at the current time.
 7. Move to another time, adjust the frame again, and click **Slice** again.
 8. Click **Generate** or **Generate / Simulate**.
-9. Use **Export -> Trajectory** in the app toolbar to save timed qpos rows.
+9. Use **File -> Export -> Trajectory** to save timed qpos rows.
 
 The beginner workflow is:
 
@@ -63,7 +63,7 @@ select frame -> move target -> orange preview -> Slice -> Generate -> Export
 
 ## GUI Sections
 
-### App Toolbar
+### Menu Bar
 
 Create/open/save projects, choose the active robot model, import or export data,
 switch views, and open help. Import supports models, qpos poses, and
@@ -80,7 +80,7 @@ orientation controls update the same preview system used by the 3D gizmo.
 Manage the editable timeline. The active time determines where the next slice is
 stored. Saved slices become the source material for generated trajectories.
 
-### 3D Quick Toolbar
+### Workflow Toolbar
 
 **Preview** plans/checks the current orange preview path.
 
@@ -88,13 +88,15 @@ stored. Saved slices become the source material for generated trajectories.
 
 **Generate** creates a sampled robot trajectory from saved timeline states.
 
-**Play** plays the active generated or editable timeline.
+**Play/Pause** controls the active generated or editable timeline.
 
 **Reset** returns the active time to the model home pose.
 
 **Clear** clears the editable trajectory.
 
-**Playback** toggles trajectory ghost or playback visibility.
+**Move/Rotate** select the active transform gizmo.
+
+**Undo/Redo** navigate recorded editing history.
 
 ### Right Sidebar
 
@@ -113,6 +115,18 @@ detailed messages.
 **T** switches the 3D transform gizmo to translate mode.
 
 **R** switches the 3D transform gizmo to rotate mode.
+
+### Inline Value Sliders
+
+Drag a filled slider for continuous live adjustment.
+
+Click its left or right half to decrease or increase by one logical step.
+
+Use the arrow keys for one step, Page Up/Down for ten steps, and Home/End for
+the minimum or maximum.
+
+Press Enter or F2, or double-click the displayed value, to type directly.
+Enter commits the typed value and Esc cancels it.
 
 **E** or **Esc** cancels the current transform drag.
 
@@ -138,9 +152,9 @@ detailed messages.
 
 ## Import And Export
 
-Use toolbar **Import** for model, qpos, or trajectory input.
+Use **File -> Import** for model, qpos, or trajectory input.
 
-Use toolbar **Export** for:
+Use **File -> Export** for:
 
 - **Qpos**: the current committed pose as one headerless qpos row.
 - **Trajectory**: timed qpos rows from the generated trajectory or editable

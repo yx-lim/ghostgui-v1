@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.trajectory import TargetFrame
+from .widgets.inline_value_slider import InlineValueSlider
 
 
 class LabeledSlider(QWidget):
@@ -120,6 +121,79 @@ class LabeledSlider(QWidget):
         self._syncing = False
 
         self.value_changed.emit(self.value())
+
+
+class InlineLabeledSlider(QWidget):
+    """Static field label plus one inline-editable numeric slider."""
+
+    value_changed = Signal(float)
+    interaction_finished = Signal()
+
+    def __init__(
+        self,
+        name,
+        min_value,
+        max_value,
+        initial_value,
+        *,
+        single_step,
+        decimals=2,
+        suffix="",
+        display_scale=1.0,
+    ):
+        super().__init__()
+        self.name = name
+        self._syncing = False
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        self.label = QLabel(name)
+        self.label.setMinimumWidth(64)
+        self.label.setMaximumWidth(86)
+        self.slider = InlineValueSlider(
+            min_value,
+            max_value,
+            initial_value,
+            single_step=single_step,
+            decimals=decimals,
+            suffix=suffix,
+            display_scale=display_scale,
+        )
+        self.slider.setAccessibleName(name)
+        self.slider.setAccessibleDescription(
+            "Drag to adjust, click the left or right half to step, "
+            "or press Enter or F2 to type a value."
+        )
+        self.slider.logical_value_changed.connect(self._on_value_changed)
+        self.slider.interaction_finished.connect(
+            self.interaction_finished.emit
+        )
+
+        layout.addWidget(self.label)
+        layout.addWidget(self.slider, stretch=1)
+
+    def value(self):
+        return self.slider.logical_value()
+
+    def set_value(self, value):
+        self._syncing = True
+        try:
+            self.slider.set_logical_value(value)
+        finally:
+            self._syncing = False
+
+    def set_range(self, min_value, max_value):
+        self._syncing = True
+        try:
+            self.slider.set_logical_range(min_value, max_value)
+        finally:
+            self._syncing = False
+
+    def _on_value_changed(self, value):
+        if not self._syncing:
+            self.value_changed.emit(float(value))
 
 
 class NoWheelComboBox(QComboBox):
@@ -316,52 +390,67 @@ class TrajectoryControlPanel(QGroupBox):
         self.time_slider.setObjectName("timeControl")
         self.time_slider.setToolTip("Choose the active time for editing and slicing.")
 
-        self.x_slider = LabeledSlider(
+        self.x_slider = InlineLabeledSlider(
             "X [m]",
-            min_value=-2000,
-            max_value=2000,
-            initial_value=0,
-            scale=1000,
+            min_value=-2.0,
+            max_value=2.0,
+            initial_value=0.0,
+            single_step=0.001,
+            decimals=3,
+            suffix="m",
         )
 
-        self.y_slider = LabeledSlider(
+        self.y_slider = InlineLabeledSlider(
             "Y [m]",
-            min_value=-1000,
-            max_value=1000,
-            initial_value=0,
-            scale=1000,
+            min_value=-1.0,
+            max_value=1.0,
+            initial_value=0.0,
+            single_step=0.001,
+            decimals=3,
+            suffix="m",
         )
 
-        self.z_slider = LabeledSlider(
+        self.z_slider = InlineLabeledSlider(
             "Z [m]",
-            min_value=0,
-            max_value=2000,
-            initial_value=900,
-            scale=1000,
+            min_value=0.0,
+            max_value=2.0,
+            initial_value=0.9,
+            single_step=0.001,
+            decimals=3,
+            suffix="m",
         )
 
-        self.roll_slider = LabeledSlider(
-            "Roll [rad]",
-            min_value=-314,
-            max_value=314,
-            initial_value=0,
-            scale=100,
+        self.roll_slider = InlineLabeledSlider(
+            "Roll [°]",
+            min_value=-3.14,
+            max_value=3.14,
+            initial_value=0.0,
+            single_step=math.pi / 180.0,
+            decimals=1,
+            suffix="°",
+            display_scale=180.0 / math.pi,
         )
 
-        self.pitch_slider = LabeledSlider(
-            "Pitch [rad]",
-            min_value=-157,
-            max_value=157,
-            initial_value=0,
-            scale=100,
+        self.pitch_slider = InlineLabeledSlider(
+            "Pitch [°]",
+            min_value=-1.57,
+            max_value=1.57,
+            initial_value=0.0,
+            single_step=math.pi / 180.0,
+            decimals=1,
+            suffix="°",
+            display_scale=180.0 / math.pi,
         )
 
-        self.yaw_slider = LabeledSlider(
-            "Yaw [rad]",
-            min_value=-314,
-            max_value=314,
-            initial_value=0,
-            scale=100,
+        self.yaw_slider = InlineLabeledSlider(
+            "Yaw [°]",
+            min_value=-3.14,
+            max_value=3.14,
+            initial_value=0.0,
+            single_step=math.pi / 180.0,
+            decimals=1,
+            suffix="°",
+            display_scale=180.0 / math.pi,
         )
 
         transform_layout.addWidget(self.x_slider)
@@ -403,16 +492,18 @@ class TrajectoryControlPanel(QGroupBox):
         self.show_lines_box.toggled.connect(self.trajectory_lines_changed.emit)
         self.view_layout.addWidget(self.show_lines_box)
 
-        self.corner_smoothing_slider = LabeledSlider(
+        self.corner_smoothing_slider = InlineLabeledSlider(
             "Smoothing",
-            min_value=0,
-            max_value=100,
-            initial_value=0,
-            scale=100,
+            min_value=0.0,
+            max_value=1.0,
+            initial_value=0.0,
+            single_step=0.01,
+            decimals=0,
+            suffix="%",
+            display_scale=100.0,
         )
         smoothing_label_width = self.corner_smoothing_slider.label.sizeHint().width()
         self.corner_smoothing_slider.label.setMinimumWidth(smoothing_label_width + 8)
-        self.corner_smoothing_slider.input.setMaximumWidth(58)
         self.corner_smoothing_slider.setMinimumWidth(232)
         self.corner_smoothing_slider.setMaximumWidth(240)
 

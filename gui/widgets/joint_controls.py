@@ -1,7 +1,11 @@
 """Joint and IK influence controls."""
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QLabel, QHBoxLayout, QSlider, QVBoxLayout, QWidget
+import math
+
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+from .inline_value_slider import InlineValueSlider
 
 
 class JointControl(QWidget):
@@ -12,41 +16,39 @@ class JointControl(QWidget):
         self.name = name
         self.lo, self.hi = limits if limits is not None else (-3.14159, 3.14159)
         self._syncing = False
-        self.slider = QSlider(Qt.Orientation.Horizontal)
-        self.slider.setRange(0, 2000)
-        self.value_label = QLabel()
-        self.value_label.setMinimumWidth(56)
+        self.slider = InlineValueSlider(
+            self.lo,
+            self.hi,
+            value,
+            single_step=math.pi / 180.0,
+            decimals=1,
+            suffix="°",
+            display_scale=180.0 / math.pi,
+        )
+        self.slider.setAccessibleName(name)
+        self.slider.setAccessibleDescription(
+            "Joint angle in degrees. Drag to adjust, click a side to step "
+            "one degree, or press Enter or F2 to type a value."
+        )
         name_label = QLabel(name)
         name_label.setWordWrap(True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        value_row = QHBoxLayout()
-        value_row.addWidget(self.slider, 1)
-        value_row.addWidget(self.value_label)
         layout.addWidget(name_label)
-        layout.addLayout(value_row)
-        self.slider.valueChanged.connect(self._changed)
+        layout.addWidget(self.slider)
+        self.slider.logical_value_changed.connect(self._changed)
         self.set_value(value)
 
-    def _to_value(self, raw):
-        return self.lo + (self.hi - self.lo) * raw / 2000.0
-
-    def _to_raw(self, value):
-        if self.hi <= self.lo:
-            return 0
-        return round((value - self.lo) * 2000.0 / (self.hi - self.lo))
-
-    def _changed(self, raw):
-        value = self._to_value(raw)
-        self.value_label.setText(f"{value:+.3f} rad")
+    def _changed(self, value):
         if not self._syncing:
-            self.value_changed.emit(self.name, value)
+            self.value_changed.emit(self.name, float(value))
 
     def set_value(self, value):
         self._syncing = True
-        self.slider.setValue(max(0, min(2000, self._to_raw(value))))
-        self._syncing = False
-        self.value_label.setText(f"{float(value):+.3f} rad")
+        try:
+            self.slider.set_logical_value(value)
+        finally:
+            self._syncing = False
 
 
 class IKInfluenceControl(QWidget):
@@ -56,30 +58,34 @@ class IKInfluenceControl(QWidget):
         super().__init__()
         self.name = name
         self._syncing = False
-        self.slider = QSlider(Qt.Orientation.Horizontal)
-        self.slider.setRange(0, 300)
-        self.value_label = QLabel()
-        self.value_label.setMinimumWidth(38)
+        self.slider = InlineValueSlider(
+            0.0,
+            3.0,
+            value,
+            single_step=0.01,
+            decimals=2,
+        )
+        self.slider.setAccessibleName(f"{name} IK influence")
+        self.slider.setAccessibleDescription(
+            "Joint IK influence. Drag to adjust, click a side to step by "
+            "0.01, or press Enter or F2 to type a value."
+        )
         name_label = QLabel(name)
         name_label.setWordWrap(True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        value_row = QHBoxLayout()
-        value_row.addWidget(self.slider, 1)
-        value_row.addWidget(self.value_label)
         layout.addWidget(name_label)
-        layout.addLayout(value_row)
-        self.slider.valueChanged.connect(self._changed)
+        layout.addWidget(self.slider)
+        self.slider.logical_value_changed.connect(self._changed)
         self.set_value(value)
 
-    def _changed(self, raw):
-        value = raw / 100.0
-        self.value_label.setText(f"{value:.2f}")
+    def _changed(self, value):
         if not self._syncing:
-            self.value_changed.emit(self.name, value)
+            self.value_changed.emit(self.name, float(value))
 
     def set_value(self, value):
         self._syncing = True
-        self.slider.setValue(round(max(0.0, min(3.0, float(value))) * 100.0))
-        self._syncing = False
-        self.value_label.setText(f"{float(value):.2f}")
+        try:
+            self.slider.set_logical_value(value)
+        finally:
+            self._syncing = False

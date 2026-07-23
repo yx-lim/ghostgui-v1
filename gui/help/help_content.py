@@ -43,9 +43,9 @@ move target -> orange preview -> Slice -> committed time slice -> Generate -> Ex
         """
 # Controls Map
 
-## App Toolbar
+## Menu Bar
 
-Create/open/save projects, choose the robot model, import qpos or trajectory data, export qpos rows or timed trajectories, switch views, and open help.
+Create/open/save projects, choose the robot model, import or export data, switch views, and open help.
 
 ## Target / Pose
 
@@ -55,15 +55,16 @@ Choose the active target frame and edit its target position/orientation. These c
 
 Set the active time, capture committed robot states, generate trajectories, and manage the editable timeline.
 
-## 3D Quick Toolbar
+## Workflow Toolbar
 
 - **Preview** plans/checks the path from the committed pose to the orange preview.
 - **Slice** accepts the current preview and stores it at the active time.
 - **Generate** samples the saved slices into a robot trajectory.
-- **Play** plays the current generated or editable timeline.
+- **Play/Pause** controls the current generated or editable timeline.
 - **Reset** returns the active time to the model home pose.
 - **Clear** clears the editable trajectory.
-- **Playback** toggles trajectory ghost/playback visibility.
+- **Move/Rotate** select the active transform gizmo.
+- **Undo/Redo** navigate recorded editing history.
 
 ## Right Sidebar
 
@@ -115,6 +116,15 @@ A sampled sequence built from saved slices/keyframes and IK. This is the data yo
 - **Shift + drag** gives finer gizmo movement.
 - **Ctrl + drag** snaps gizmo movement.
 
+## Inline Value Sliders
+
+- **Drag** for continuous live adjustment.
+- **Click the left/right half** to decrease/increase by one logical step.
+- **Arrow keys** decrease or increase; **Page Up/Down** moves ten steps.
+- **Home/End** selects the minimum or maximum.
+- **Enter**, **F2**, or double-click the displayed number to type a value.
+- **Enter** commits typed input; **Esc** cancels it.
+
 ## History
 
 - **Ctrl+Z** undoes the last recorded action.
@@ -133,7 +143,7 @@ A sampled sequence built from saved slices/keyframes and IK. This is the data yo
         """
 # Export Format
 
-Use the toolbar **Export** control to choose what to save.
+Use **File > Export** to choose what to save.
 
 - **Qpos** saves the current committed pose as one headerless qpos row.
 - **Trajectory** saves timed qpos rows from the generated trajectory, or from the editable timeline when no generated trajectory is active.
