@@ -90,7 +90,10 @@ expanded widths and collapsed states are remembered between sessions.
 ### Time Slices
 
 Manage the editable timeline. The active time determines where the next slice is
-stored. Saved slices become the source material for generated trajectories.
+stored. The single Time slider drives both live scrubbing and playback; the
+robot is sampled immediately while dragging, and the derived frame appears as a
+readout beside the time. Releasing the slider commits the selected edit time
+once. Saved slices become the source material for generated trajectories.
 
 ### Workflow Toolbar
 

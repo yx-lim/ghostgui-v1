@@ -61,7 +61,7 @@ Drag either divider to resize its sidebar between 200 and 400 pixels. Use the di
 
 ## Time Slices
 
-Set the active time, capture committed robot states, generate trajectories, and manage the editable timeline.
+Use the single Time slider to scrub the robot live or follow time-based playback. The frame readout is derived from the trajectory, and releasing the slider commits the selected edit time once. Capture committed robot states, generate trajectories, and manage the editable timeline here.
 
 ## Workflow Toolbar
 

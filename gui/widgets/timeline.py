@@ -10,11 +10,14 @@ class TimesliceSlider(QSlider):
 
     marker_activated = Signal(float)
     time_activated = Signal(float)
+    WHEEL_STEP_RAW = 2
+    WHEEL_NOTCH_ANGLE = 120
 
     def __init__(self, orientation, parent=None):
         super().__init__(orientation, parent)
         self.defined_times = set()
         self.marker_snap_pixels = 10
+        self._wheel_angle_remainder = 0
 
     def set_defined_times(self, times):
         self.defined_times = {round(float(time), 6) for time in times}
@@ -63,9 +66,14 @@ class TimesliceSlider(QSlider):
 
     def wheelEvent(self, event):
         previous = self.value()
-        super().wheelEvent(event)
+        self._wheel_angle_remainder += event.angleDelta().y()
+        notches = int(self._wheel_angle_remainder / self.WHEEL_NOTCH_ANGLE)
+        if notches:
+            self._wheel_angle_remainder -= notches * self.WHEEL_NOTCH_ANGLE
+            self.setValue(previous + notches * self.WHEEL_STEP_RAW)
         if self.value() != previous:
             self.time_activated.emit(self.value() / 100.0)
+        event.accept()
 
     def activate_time_at_pixel(self, x):
         if self.defined_times:

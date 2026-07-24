@@ -102,7 +102,6 @@ class GuiHistorySnapshot:
     robot_trajectory_times: tuple
     ghost_trajectory: tuple
     ghost_source: str | None
-    frame_slider_value: int
     show_ghosts: bool
     timeline_duration: float
 
@@ -1526,7 +1525,6 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.show_lines_box.setChecked(True)
             self.controls.corner_smoothing_slider.set_value(0.0)
             viewer.show_ghosts.setChecked(False)
-            viewer.frame_slider.setValue(0)
             if self.controls.table.currentRow() >= 0:
                 self.controls.table.clearSelection()
             self.set_current_frame_to_model_reference(
@@ -1676,7 +1674,6 @@ class RobotGuiMainWindow(QMainWindow):
                 "show_trajectory_lines": bool(self.controls.show_trajectory_lines()),
                 "smoothing": float(self.controls.corner_smoothing()),
                 "show_playback_ghosts": bool(viewer.show_ghosts.isChecked()),
-                "frame_slider_value": int(viewer.frame_slider.value()),
                 "trajectory_import_dt": float(viewer.trajectory_import_dt.value()),
             },
         }
@@ -1882,8 +1879,6 @@ class RobotGuiMainWindow(QMainWindow):
             self.viewer_3d.show_ghosts.setChecked(
                 bool(display["show_playback_ghosts"])
             )
-        if "frame_slider_value" in display:
-            self.viewer_3d.frame_slider.setValue(int(display["frame_slider_value"]))
 
         target = workspace.get("target_selection", {})
         target_kind = target.get("kind")
@@ -2164,11 +2159,11 @@ class RobotGuiMainWindow(QMainWindow):
                 self.on_viewer_gizmo_mode_changed(viewer)
             )
         )
-        viewer_3d.frame_slider.valueChanged.connect(
-            lambda _value: self.mark_project_dirty("Playback frame")
-        )
         viewer_3d.trajectory_import_dt.valueChanged.connect(
             lambda _value: self.mark_project_dirty("Import time step")
+        )
+        viewer_3d.timeslice_preview_time_changed.connect(
+            self.on_viewer_timeslice_preview_time_changed
         )
         viewer_3d.timeslice_time_changed.connect(
             self.on_viewer_timeslice_time_changed
@@ -2262,7 +2257,6 @@ class RobotGuiMainWindow(QMainWindow):
             robot_trajectory_times=tuple(float(t) for t in viewer.robot_trajectory_times),
             ghost_trajectory=tuple(qpos.copy() for qpos in viewer.ghost_trajectory),
             ghost_source=viewer.ghost_source,
-            frame_slider_value=int(viewer.frame_slider.value()),
             show_ghosts=bool(viewer.show_ghosts.isChecked()),
             timeline_duration=float(viewer.timeline_duration),
         )
@@ -2307,7 +2301,6 @@ class RobotGuiMainWindow(QMainWindow):
                     )
                 else:
                     viewer.clear_robot_trajectory()
-                viewer.frame_slider.setValue(snapshot.frame_slider_value)
                 self.set_editor_timeline_duration(snapshot.timeline_duration)
                 show_ghosts_blocked = viewer.show_ghosts.blockSignals(True)
                 try:
@@ -2332,7 +2325,9 @@ class RobotGuiMainWindow(QMainWindow):
                     viewer.current_time = viewer.state_timeline.time_key(
                         snapshot.current_time
                     )
+                    viewer.display_time = viewer.current_time
                     viewer._set_timeslice_widgets(viewer.current_time)
+                    viewer._update_frame_readout(viewer.current_time)
                     viewer._update_timeline_label()
 
                 if snapshot.committed_qpos is not None:
@@ -2340,6 +2335,7 @@ class RobotGuiMainWindow(QMainWindow):
                 if snapshot.preview_qpos is not None:
                     viewer.preview_state.set_qpos(snapshot.preview_qpos)
                 viewer.preview_active = snapshot.preview_active
+                viewer._use_editor_canvas_states()
                 viewer.canvas.set_preview_visible(snapshot.preview_active)
                 viewer._sync_joint_controls()
                 viewer._set_target_to_selected_pose()
@@ -2781,6 +2777,10 @@ class RobotGuiMainWindow(QMainWindow):
         """Keep the sidebar time editor in sync with the viewer-bottom scrubber."""
         self.controls.time_slider.set_value(time)
         self.on_time_changed(time)
+
+    def on_viewer_timeslice_preview_time_changed(self, time):
+        """Mirror live playback time without creating an editable qpos state."""
+        self.controls.time_slider.set_value(time)
 
     def on_viewer_timeline_duration_changed(self, duration):
         self.set_sidebar_timeline_duration(duration)

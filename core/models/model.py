@@ -573,6 +573,17 @@ class RobotStateTimeline:
         if existing is not None:
             return existing.copy()
 
+        qpos = self.sample_state(key, fallback_qpos=fallback_qpos)
+        self.states[key] = qpos.copy()
+        return qpos
+
+    def sample_state(self, time, fallback_qpos=None):
+        """Interpolate a timeline pose without inserting a new editable state."""
+        key = self.time_key(time)
+        existing = self.states.get(key)
+        if existing is not None:
+            return existing.copy()
+
         times = sorted(self.states)
         lower = max((value for value in times if value < key), default=None)
         upper = min((value for value in times if value > key), default=None)
@@ -587,7 +598,6 @@ class RobotStateTimeline:
             qpos = np.asarray(fallback_qpos, dtype=float).copy()
         else:
             qpos = self.robot_model.home_qpos.copy()
-        self.states[key] = qpos.copy()
         return qpos
 
     def _interpolate(self, start, end, fraction):

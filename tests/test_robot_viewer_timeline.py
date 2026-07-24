@@ -128,10 +128,14 @@ class RobotViewerTimelineTests(unittest.TestCase):
         ):
             np.testing.assert_allclose(actual, expected)
 
-        self.viewer._advance_frame()
-        np.testing.assert_allclose(self.viewer.robot_state.get_qpos(), second)
-        self.viewer._advance_frame()
-        np.testing.assert_allclose(self.viewer.robot_state.get_qpos(), first)
+        self.viewer._advance_playback(elapsed=0.8)
+        np.testing.assert_allclose(
+            self.viewer.playback_state.get_qpos(), second
+        )
+        np.testing.assert_allclose(
+            self.viewer.robot_state.get_qpos(),
+            self.viewer.robot_model.home_qpos,
+        )
         np.testing.assert_allclose(
             self.viewer.state_timeline.get_state(0.2),
             self.viewer.robot_model.home_qpos,
@@ -491,6 +495,114 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.2)
         self.assertAlmostEqual(self.viewer.timeslice_time_input.value(), 0.2)
 
+    def test_timeslice_scrubber_samples_live_without_creating_intermediate_states(self):
+        first = self.viewer.robot_model.home_qpos.copy()
+        second = first.copy()
+        second[-1] += 0.20
+        self.viewer.set_robot_trajectory(
+            [first, second],
+            times=[0.0, 1.0],
+        )
+        initial_times = self.viewer.state_timeline.times()
+
+        self.viewer._preview_timeslice_slider_value(50)
+
+        self.assertEqual(self.viewer.get_current_time(), 0.0)
+        self.assertEqual(self.viewer.state_timeline.times(), initial_times)
+        self.assertAlmostEqual(self.viewer.display_time, 0.5)
+        self.assertAlmostEqual(self.viewer.timeslice_time_input.value(), 0.5)
+        self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.5)
+        self.assertAlmostEqual(
+            self.viewer.playback_state.get_qpos()[-1],
+            first[-1] + 0.10,
+        )
+        self.assertEqual(
+            self.viewer.timeslice_frame_readout.text(),
+            "Frame 1 / 2",
+        )
+
+        self.viewer._emit_timeslice_slider_time()
+
+        self.assertEqual(self.viewer.get_current_time(), 0.5)
+        self.assertIn(0.5, self.viewer.state_timeline.times())
+        self.assertAlmostEqual(
+            self.viewer.committed_state.get_qpos()[-1],
+            first[-1] + 0.10,
+        )
+        kind, name = self.viewer._selected_target()
+        position, quaternion = self.viewer.committed_state.get_body_pose(
+            name, kind
+        )
+        roll, pitch, yaw = quat_to_rpy(quaternion)
+        np.testing.assert_allclose(
+            [
+                self.window.controls.x_slider.value(),
+                self.window.controls.y_slider.value(),
+                self.window.controls.z_slider.value(),
+            ],
+            position,
+            atol=1e-3,
+        )
+        np.testing.assert_allclose(
+            [
+                self.window.controls.roll_slider.value(),
+                self.window.controls.pitch_slider.value(),
+                self.window.controls.yaw_slider.value(),
+            ],
+            [roll, pitch, yaw],
+            atol=np.deg2rad(0.11),
+        )
+
+    def test_playback_advances_elapsed_time_and_interpolates_irregular_frames(self):
+        first = self.viewer.robot_model.home_qpos.copy()
+        second = first.copy()
+        second[-1] += 0.24
+        self.viewer.set_robot_trajectory(
+            [first, second],
+            times=[0.2, 0.8],
+        )
+
+        self.viewer.preview_trajectory_time(0.2)
+        self.viewer._advance_playback(elapsed=0.15)
+
+        self.assertAlmostEqual(self.viewer.display_time, 0.35)
+        self.assertAlmostEqual(
+            self.viewer.playback_state.get_qpos()[-1],
+            first[-1] + 0.06,
+        )
+        self.assertEqual(self.viewer.timeslice_slider.value(), 35)
+        self.assertEqual(
+            self.viewer.timeslice_frame_readout.text(),
+            "Frame 1 / 2",
+        )
+
+    def test_live_scrub_render_updates_are_coalesced(self):
+        first = self.viewer.robot_model.home_qpos.copy()
+        second = first.copy()
+        second[-1] += 0.20
+        self.viewer.set_robot_trajectory(
+            [first, second],
+            times=[0.0, 1.0],
+        )
+
+        self.viewer._preview_timeslice_slider_value(25)
+        first_rendered_value = self.viewer.playback_state.get_qpos()[-1]
+        self.viewer._preview_timeslice_slider_value(75)
+
+        self.assertAlmostEqual(
+            self.viewer.playback_state.get_qpos()[-1],
+            first_rendered_value,
+        )
+        self.assertAlmostEqual(self.viewer.timeslice_time_input.value(), 0.75)
+
+        self.viewer._flush_pending_scrub_preview()
+
+        self.assertAlmostEqual(self.viewer.display_time, 0.75)
+        self.assertAlmostEqual(
+            self.viewer.playback_state.get_qpos()[-1],
+            first[-1] + 0.15,
+        )
+
     def test_timeslice_wheel_scroll_updates_active_time(self):
         self.assertEqual(self.viewer.get_current_time(), 0.0)
 
@@ -506,10 +618,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.viewer.timeslice_slider.wheelEvent(event)
 
-        self.assertEqual(self.viewer.timeslice_slider.value(), 3)
-        self.assertAlmostEqual(self.viewer.get_current_time(), 0.03)
-        self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.03)
-        self.assertAlmostEqual(self.viewer.timeslice_time_input.value(), 0.03)
+        self.assertEqual(self.viewer.timeslice_slider.value(), 2)
+        self.assertAlmostEqual(self.viewer.get_current_time(), 0.02)
+        self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.02)
+        self.assertAlmostEqual(self.viewer.timeslice_time_input.value(), 0.02)
 
     def test_timeslice_bar_uses_single_compact_time_display(self):
         self.assertEqual(self.viewer.timeslice_label.text(), "Time")
@@ -520,8 +632,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(self.viewer.timeslice_duration_label.text(), "Max time")
         self.assertEqual(self.viewer.timeslice_duration_input.suffix(), " s")
         self.assertAlmostEqual(self.viewer.timeslice_duration_input.value(), 5.0)
+        self.assertEqual(self.viewer.timeslice_frame_readout.text(), "Frame —")
+        self.assertFalse(hasattr(self.viewer, "frame_slider"))
         self.assertFalse(hasattr(self.viewer, "timeslice_time_label"))
-        self.assertEqual(self.viewer.accept_timeslice_button.text(), "Accept Slice")
+        self.assertFalse(hasattr(self.viewer, "accept_timeslice_button"))
         self.assertEqual(self.viewer.delete_timeslice_button.text(), "Delete Slice")
 
     def test_timeline_duration_updates_bottom_and_sidebar_time_ranges(self):
@@ -1257,7 +1371,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.controls.display_context_widget().parent(),
             self.window.controls.display_context_stack,
         )
-        self.assertIs(self.viewer.frame_slider.parent(), self.viewer.timeslice_timeline_group)
+        self.assertFalse(hasattr(self.viewer, "frame_slider"))
+        self.assertFalse(hasattr(self.viewer, "timeslice_frame_row"))
         self.assertIs(
             self.viewer.timeslice_layout.itemAt(0).widget(),
             self.viewer.timeslice_timeline_group,
@@ -1271,17 +1386,14 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.timeslice_scrubber_layout.itemAt(0).layout(),
             self.viewer.timeslice_time_row,
         )
-        self.assertIs(
-            self.viewer.timeslice_scrubber_layout.itemAt(1).layout(),
-            self.viewer.timeslice_frame_row,
-        )
+        self.assertEqual(self.viewer.timeslice_scrubber_layout.count(), 1)
         self.assertIs(
             self.viewer.timeslice_timeline_layout.itemAt(1).layout(),
             self.viewer.timeslice_action_row,
         )
         self.assertIs(
-            self.viewer.timeslice_frame_row.itemAt(1).widget(),
-            self.viewer.frame_slider,
+            self.viewer.timeslice_time_row.itemAt(3).widget(),
+            self.viewer.timeslice_frame_readout,
         )
         self.assertIs(
             self.window.controls.corner_smoothing_slider.parent(),
@@ -1311,12 +1423,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertIs(
             self.viewer.timeslice_action_row.itemAt(0).widget(),
-            self.viewer.accept_timeslice_button,
-        )
-        self.assertIs(
-            self.viewer.timeslice_action_row.itemAt(1).widget(),
             self.viewer.delete_timeslice_button,
         )
+        self.assertEqual(self.viewer.timeslice_action_row.count(), 1)
         self.assertFalse(hasattr(self.viewer, "quick_clear_button"))
         toolbar_actions = self.window.app_toolbar.actions()
         self.assertLess(

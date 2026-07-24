@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import csv
+from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 
 import numpy as np
 
@@ -23,7 +25,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSlider,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -82,6 +83,7 @@ class RobotViewer3D(QWidget):
     generate_requested = Signal()
     clear_trajectory_requested = Signal()
     timeslice_time_changed = Signal(float)
+    timeslice_preview_time_changed = Signal(float)
     timeline_duration_changed = Signal(float)
     accept_timeslice_requested = Signal()
     delete_timeslice_requested = Signal()
@@ -102,8 +104,10 @@ class RobotViewer3D(QWidget):
         # Compatibility alias: external readers historically used robot_state.
         # It now always means the timeline-backed committed state.
         self.robot_state = self.committed_state
+        self.playback_state = robot_model.create_state() if robot_model else None
         self.preview_active = False
         self.current_time = 0.0
+        self.display_time = 0.0
         self.timeline_duration = 5.0
         self.state_timeline = (
             RobotStateTimeline(robot_model, initial_qpos=self.robot_state.get_qpos())
@@ -139,6 +143,9 @@ class RobotViewer3D(QWidget):
         self.root_lock_target = None
         self._last_ik_status = None
         self._syncing_target = False
+        self._playback_last_tick = None
+        self._resume_playback_after_scrub = False
+        self._pending_scrub_preview_time = None
         self.canvas = RobotCanvas3D()
         self.canvas.geometry_progress.connect(self._on_geometry_progress)
         self.canvas.target_dragged.connect(self.target_dragged.emit)
@@ -155,7 +162,13 @@ class RobotViewer3D(QWidget):
         self.last_valid_target_quaternion = None
         self.play_timer = QTimer(self)
         self.play_timer.setInterval(33)
-        self.play_timer.timeout.connect(self._advance_frame)
+        self.play_timer.timeout.connect(self._advance_playback)
+        self.scrub_preview_timer = QTimer(self)
+        self.scrub_preview_timer.setSingleShot(True)
+        self.scrub_preview_timer.setInterval(16)
+        self.scrub_preview_timer.timeout.connect(
+            self._flush_pending_scrub_preview
+        )
         self._build_ui(error)
         if self.robot_state:
             self.canvas.set_robot_states(
@@ -311,9 +324,6 @@ class RobotViewer3D(QWidget):
         self.generate_button.clicked.connect(self.generate_demo_trajectory)
         self.play_button = QPushButton("Play")
         self.play_button.clicked.connect(self.toggle_playback)
-        self.frame_slider = QSlider(Qt.Orientation.Horizontal)
-        self.frame_slider.setRange(0, 0)
-        self.frame_slider.valueChanged.connect(self.set_trajectory_frame)
         self.ghost_stride = QSpinBox()
         _compact_spinbox(self.ghost_stride)
         self.ghost_stride.setRange(1, 100)
@@ -411,6 +421,9 @@ class RobotViewer3D(QWidget):
         self.timeslice_slider.sliderMoved.connect(
             self._preview_timeslice_slider_value
         )
+        self.timeslice_slider.sliderPressed.connect(
+            self._begin_timeslice_scrub
+        )
         self.timeslice_slider.sliderReleased.connect(
             self._emit_timeslice_slider_time
         )
@@ -424,9 +437,13 @@ class RobotViewer3D(QWidget):
         self.timeslice_time_input.editingFinished.connect(
             self._emit_timeslice_input_time
         )
+        self.timeslice_frame_readout = QLabel("Frame —")
+        self.timeslice_frame_readout.setMinimumWidth(82)
+        self.timeslice_frame_readout.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.timeslice_frame_readout.setAccessibleName("Playback frame")
 
-        self.accept_timeslice_button = QPushButton("Accept Slice")
-        self.accept_timeslice_button.clicked.connect(self.accept_timeslice)
         self.delete_timeslice_button = QPushButton("Delete Slice")
         self.delete_timeslice_button.clicked.connect(self.delete_timeslice)
         self.timeslice_step_label = QLabel("Slice step size")
@@ -456,13 +473,7 @@ class RobotViewer3D(QWidget):
         self.timeslice_time_row.addWidget(self.timeslice_label)
         self.timeslice_time_row.addWidget(self.timeslice_slider, stretch=1)
         self.timeslice_time_row.addWidget(self.timeslice_time_input)
-
-        self.timeslice_frame_row = QHBoxLayout()
-        self.timeslice_frame_row.setContentsMargins(0, 0, 0, 0)
-        self.timeslice_frame_row.setSpacing(8)
-        self.timeslice_frame_label = QLabel("Frame")
-        self.timeslice_frame_row.addWidget(self.timeslice_frame_label)
-        self.timeslice_frame_row.addWidget(self.frame_slider, stretch=1)
+        self.timeslice_time_row.addWidget(self.timeslice_frame_readout)
 
         self.timeslice_context_layout.addRow(
             self.timeslice_step_label, self.timeslice_step_input
@@ -479,11 +490,9 @@ class RobotViewer3D(QWidget):
         self.timeslice_scrubber_layout.setContentsMargins(0, 0, 0, 0)
         self.timeslice_scrubber_layout.setSpacing(3)
         self.timeslice_scrubber_layout.addLayout(self.timeslice_time_row)
-        self.timeslice_scrubber_layout.addLayout(self.timeslice_frame_row)
         self.timeslice_action_row = QVBoxLayout()
         self.timeslice_action_row.setContentsMargins(0, 0, 0, 0)
         self.timeslice_action_row.setSpacing(4)
-        self.timeslice_action_row.addWidget(self.accept_timeslice_button)
         self.timeslice_action_row.addWidget(self.delete_timeslice_button)
         self.timeslice_timeline_layout.addLayout(
             self.timeslice_scrubber_layout, stretch=1
@@ -546,21 +555,60 @@ class RobotViewer3D(QWidget):
 
     def _preview_timeslice_slider_value(self, raw_value):
         time = raw_value / 100.0
+        if not self.scrub_preview_timer.isActive():
+            self.preview_trajectory_time(time, emit_time_signal=True)
+            self.scrub_preview_timer.start()
+            return
+
+        self._pending_scrub_preview_time = time
         was_blocked = self.timeslice_time_input.blockSignals(True)
         self.timeslice_time_input.setValue(time)
         self.timeslice_time_input.blockSignals(was_blocked)
 
+    def _flush_pending_scrub_preview(self):
+        time = self._pending_scrub_preview_time
+        self._pending_scrub_preview_time = None
+        if time is None:
+            return
+        self.preview_trajectory_time(time, emit_time_signal=True)
+        self.scrub_preview_timer.start()
+
+    def _begin_timeslice_scrub(self):
+        self.scrub_preview_timer.stop()
+        self._pending_scrub_preview_time = None
+        self._resume_playback_after_scrub = self.play_timer.isActive()
+        if self._resume_playback_after_scrub:
+            self.pause_playback(commit_time=False)
+
     def _emit_timeslice_slider_time(self):
-        self.timeslice_time_changed.emit(self.timeslice_slider.value() / 100.0)
+        time = self.timeslice_slider.value() / 100.0
+        self.scrub_preview_timer.stop()
+        self._pending_scrub_preview_time = None
+        self.preview_trajectory_time(time, emit_time_signal=True)
+        self.timeslice_time_changed.emit(time)
+        resume_playback = self._resume_playback_after_scrub
+        self._resume_playback_after_scrub = False
+        if resume_playback:
+            self.start_playback()
 
     def _emit_timeslice_marker_time(self, time):
+        was_playing = self.play_timer.isActive()
+        if was_playing:
+            self.pause_playback(commit_time=False)
         self._set_timeslice_widgets(time)
         self.timeslice_time_changed.emit(float(time))
+        if was_playing:
+            self.start_playback()
 
     def _emit_timeslice_input_time(self):
         time = self.timeslice_time_input.value()
+        was_playing = self.play_timer.isActive()
+        if was_playing:
+            self.pause_playback(commit_time=False)
         self._set_timeslice_widgets(time)
         self.timeslice_time_changed.emit(time)
+        if was_playing:
+            self.start_playback()
 
     def timeslice_step(self):
         return float(self.timeslice_step_input.value())
@@ -585,7 +633,9 @@ class RobotViewer3D(QWidget):
                 self.current_time = self.state_timeline.time_key(duration)
             else:
                 self.current_time = duration
-        self._set_timeslice_widgets(self.current_time)
+        self.display_time = min(self.display_time, duration)
+        self._set_timeslice_widgets(self.display_time)
+        self._update_frame_readout(self.display_time)
         if emit_signal:
             self.timeline_duration_changed.emit(duration)
 
@@ -897,8 +947,9 @@ class RobotViewer3D(QWidget):
             f"Preview FK: {name} = {value:+.3f} rad; Accept Preview to commit"
         )
 
-    def _sync_joint_controls(self):
-        state = self.preview_state if self.preview_active else self.committed_state
+    def _sync_joint_controls(self, state=None):
+        if state is None:
+            state = self.preview_state if self.preview_active else self.committed_state
         for name, control in self.joint_controls.items():
             control.set_value(state.get_joint_value(name))
 
@@ -1292,6 +1343,118 @@ class RobotViewer3D(QWidget):
     def get_current_time(self):
         return self.current_time
 
+    def _trajectory_sample(self, time):
+        """Return an interpolated playback qpos and its nearest frame index."""
+        if not self.robot_trajectory:
+            return None, None
+
+        times = self.robot_trajectory_times
+        if len(times) != len(self.robot_trajectory):
+            times = [float(index) for index in range(len(self.robot_trajectory))]
+
+        time = float(time)
+        if len(times) == 1 or time <= times[0]:
+            return self.robot_trajectory[0].copy(), 0
+        if time >= times[-1]:
+            last = len(self.robot_trajectory) - 1
+            return self.robot_trajectory[last].copy(), last
+
+        upper = bisect_right(times, time)
+        lower = max(0, upper - 1)
+        upper = min(len(times) - 1, upper)
+        lower_time = times[lower]
+        upper_time = times[upper]
+        if upper_time <= lower_time:
+            return self.robot_trajectory[upper].copy(), upper
+
+        fraction = (time - lower_time) / (upper_time - lower_time)
+        qpos = self.state_timeline._interpolate(
+            self.robot_trajectory[lower],
+            self.robot_trajectory[upper],
+            fraction,
+        )
+        nearest = (
+            lower
+            if time - lower_time <= upper_time - time
+            else upper
+        )
+        return qpos, nearest
+
+    def _update_frame_readout(self, time=None, frame_index=None):
+        if not self.robot_trajectory:
+            self.timeslice_frame_readout.setText("Frame —")
+            return
+        if frame_index is None:
+            _qpos, frame_index = self._trajectory_sample(
+                self.display_time if time is None else time
+            )
+        self.timeslice_frame_readout.setText(
+            f"Frame {int(frame_index) + 1} / {len(self.robot_trajectory)}"
+        )
+
+    def _set_canvas_target_from_state(self, state):
+        kind, name = self._selected_target()
+        if not name:
+            return
+        try:
+            position, quaternion = state.get_body_pose(name, kind)
+        except KeyError:
+            return
+        self.canvas.set_target_pose(position, quaternion)
+
+    def _emit_selected_target_pose(self):
+        if (
+            self.last_valid_target_position is None
+            or self.last_valid_target_quaternion is None
+        ):
+            return
+        roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
+        self.target_pose_dragged.emit(
+            *map(float, self.last_valid_target_position),
+            roll,
+            pitch,
+            yaw,
+        )
+
+    def _use_editor_canvas_states(self):
+        if not self.robot_state:
+            return
+        self.canvas.set_robot_states(
+            self.committed_state, self.preview_state, self.ghost_renderer
+        )
+        self.canvas.set_preview_visible(self.preview_active)
+
+    def preview_trajectory_time(self, time, emit_time_signal=False):
+        """Display a timeline pose without creating an editable qpos state."""
+        if not self.robot_state:
+            return None
+        time = max(0.0, min(float(time), self.timeline_duration))
+        self.display_time = time
+        self._set_timeslice_widgets(time)
+
+        qpos, frame_index = self._trajectory_sample(time)
+        if qpos is None and self.state_timeline:
+            qpos = self.state_timeline.sample_state(
+                time,
+                fallback_qpos=self.committed_state.get_qpos(),
+            )
+
+        if qpos is not None and self.playback_state is not None:
+            self.playback_state.set_qpos(qpos)
+            self.canvas.set_robot_states(
+                self.playback_state, self.preview_state, self.ghost_renderer
+            )
+            self.canvas.set_preview_visible(False)
+            self._sync_joint_controls(state=self.playback_state)
+            self._set_canvas_target_from_state(self.playback_state)
+            self.canvas.update()
+
+        self._update_frame_readout(time, frame_index)
+        self._update_timeline_label(time)
+        if emit_time_signal:
+            self.timeslice_preview_time_changed.emit(time)
+        return None if qpos is None else qpos.copy()
+
     def get_current_keyframe(self):
         if not self.state_timeline:
             return None
@@ -1308,6 +1471,7 @@ class RobotViewer3D(QWidget):
     def set_robot_state_for_current_time(self, qpos):
         if not self.robot_state:
             return
+        self._use_editor_canvas_states()
         self.committed_state.set_qpos(qpos)
         self.preview_state.set_qpos(qpos)
         self.preview_active = False
@@ -1330,10 +1494,22 @@ class RobotViewer3D(QWidget):
     def set_current_time(self, time):
         if not self.state_timeline:
             return
+        self.scrub_preview_timer.stop()
+        self._pending_scrub_preview_time = None
+        time = max(0.0, min(float(time), self.timeline_duration))
         self.current_time = self.state_timeline.time_key(time)
+        self.display_time = self.current_time
         self._set_timeslice_widgets(self.current_time)
-        qpos = self.ensure_keyframe_at_current_time()
+        qpos, _frame_index = self._trajectory_sample(self.current_time)
+        if qpos is not None:
+            # Releasing the unified scrubber commits exactly the pose that was
+            # shown during live trajectory sampling.
+            self.state_timeline.set_state(self.current_time, qpos)
+        else:
+            qpos = self.ensure_keyframe_at_current_time()
         self.set_robot_state_for_current_time(qpos)
+        self._emit_selected_target_pose()
+        self._update_frame_readout(self.current_time)
         self._refresh_timeline_trajectory()
         self._update_timeline_label()
         self.status_label.setText(
@@ -1348,7 +1524,7 @@ class RobotViewer3D(QWidget):
         # timer is active, pause first so its next tick cannot overwrite the
         # just-reset editing frame, and cancel any in-progress gizmo gesture.
         was_playing = self.play_timer.isActive()
-        self.pause_playback()
+        self.pause_playback(commit_time=was_playing)
         self.canvas.cancel_transform_drag()
         self.committed_state.reset_to_default()
         self.preview_state.set_qpos(self.committed_state.get_qpos())
@@ -1505,7 +1681,9 @@ class RobotViewer3D(QWidget):
                 self.state_timeline.set_state(time, qpos)
             self.set_defined_timeslices(times)
             self.current_time = self.state_timeline.time_key(times[0])
+            self.display_time = self.current_time
             self._set_timeslice_widgets(self.current_time)
+            self._update_frame_readout(self.current_time)
             self._update_timeline_label()
         duration = times[-1] if times else 0.0
         self.status_label.setText(
@@ -1581,10 +1759,11 @@ class RobotViewer3D(QWidget):
         # the overlay from preview/playback into keyframe ghosts.
         self._update_timeline_label()
 
-    def _update_timeline_label(self):
+    def _update_timeline_label(self, display_time=None):
         count = len(self.state_timeline.states) if self.state_timeline else 0
+        time = self.current_time if display_time is None else float(display_time)
         self.timeline_state_label.setText(
-            f"3D state time: {self.current_time:.2f} s ({count} keyframes)"
+            f"3D state time: {time:.2f} s ({count} keyframes)"
         )
 
     def _update_root_pose_label(self):
@@ -1604,6 +1783,8 @@ class RobotViewer3D(QWidget):
     def set_robot_trajectory(self, qposes, times=None, activate_first_frame=True):
         if not self.robot_state:
             return
+        self.scrub_preview_timer.stop()
+        self._pending_scrub_preview_time = None
         valid = []
         valid_times = []
         times = list(times) if times is not None else None
@@ -1617,30 +1798,39 @@ class RobotViewer3D(QWidget):
                 continue
         if times is None or len(valid_times) != len(valid):
             valid_times = [float(index) for index in range(len(valid))]
+        elif any(
+            earlier > later
+            for earlier, later in zip(valid_times, valid_times[1:])
+        ):
+            ordered = sorted(zip(valid_times, valid), key=lambda item: item[0])
+            valid_times = [item[0] for item in ordered]
+            valid = [item[1] for item in ordered]
         self.robot_trajectory = valid
         self.robot_trajectory_times = valid_times
         if valid_times:
             self.set_timeline_duration(max(self.timeline_duration, max(valid_times)))
-        signals_were_blocked = self.frame_slider.blockSignals(
-            not activate_first_frame
-        )
-        self.frame_slider.setRange(0, max(0, len(valid) - 1))
-        self.frame_slider.setValue(0)
-        self.frame_slider.blockSignals(signals_were_blocked)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_playback_pose_ghosts()
         if valid and activate_first_frame:
-            self.set_trajectory_frame(0)
+            self.set_current_time(valid_times[0])
             self.status_label.setText(f"Loaded {len(valid)} robot trajectory states.")
+        else:
+            self._update_frame_readout(self.display_time)
 
     def clear_robot_trajectory(self):
         self.pause_playback()
+        self.scrub_preview_timer.stop()
+        self._pending_scrub_preview_time = None
         self.robot_trajectory = []
         self.robot_trajectory_times = []
         self.ghost_trajectory = []
         self.ghost_source = None
-        self.frame_slider.setRange(0, 0)
-        self.frame_slider.setValue(0)
+        self.display_time = self.current_time
+        self._set_timeslice_widgets(self.display_time)
+        self._update_frame_readout()
+        self._use_editor_canvas_states()
+        self._sync_joint_controls()
+        self._set_target_to_selected_pose()
         if self.ghost_renderer:
             self.ghost_renderer.clear()
         self._update_ghost_options()
@@ -1656,6 +1846,7 @@ class RobotViewer3D(QWidget):
         )
         if reset_time is not None:
             self.current_time = self.state_timeline.time_key(reset_time)
+            self.display_time = self.current_time
             self._set_timeslice_widgets(self.current_time)
         self.state_timeline.reset(self.current_time, qpos)
         self.set_robot_state_for_current_time(qpos)
@@ -1692,7 +1883,10 @@ class RobotViewer3D(QWidget):
         joint = self.robot_model.joints[name]
         lo, hi = joint.limits or (-1.0, 1.0)
         target[joint.qpos_address] = max(lo, min(hi, start[joint.qpos_address] + 0.35))
-        self.set_robot_trajectory(interpolate_qpos(start, target, 60))
+        qposes = interpolate_qpos(start, target, 60)
+        frame_period = self.play_timer.interval() / 1000.0
+        times = [index * frame_period for index in range(len(qposes))]
+        self.set_robot_trajectory(qposes, times=times)
         self.history_action_finished.emit("Demo trajectory")
 
     def _rebuild_ghosts(self):
@@ -1737,36 +1931,71 @@ class RobotViewer3D(QWidget):
         self.canvas.set_ghost_options(visible, self.ghost_alpha.value())
 
     def set_trajectory_frame(self, index):
+        """Compatibility entry point that selects a trajectory frame by time."""
         if not self.robot_trajectory:
             return
         index = max(0, min(len(self.robot_trajectory) - 1, int(index)))
-        self.committed_state.set_qpos(self.robot_trajectory[index])
-        self.preview_state.set_qpos(self.committed_state.get_qpos())
-        self.preview_active = False
-        self.canvas.set_preview_visible(False)
-        self._clear_ghost_overlay(source="preview_path")
-        self._sync_joint_controls()
-        self._set_target_to_selected_pose()
+        self.set_current_time(self.robot_trajectory_times[index])
 
     def toggle_playback(self):
         if self.play_timer.isActive():
-            self.pause_playback()
-        elif self.robot_trajectory:
-            self.play_timer.start()
-            self._set_playback_button_text("Pause")
-            self.playback_state_changed.emit(True)
+            self.pause_playback(commit_time=True)
+        else:
+            self.start_playback()
 
-    def pause_playback(self):
+    def start_playback(self):
+        if not self.robot_trajectory:
+            return
+        start_time = self.robot_trajectory_times[0]
+        end_time = self.robot_trajectory_times[-1]
+        if end_time <= start_time:
+            self.preview_trajectory_time(start_time, emit_time_signal=True)
+            return
+        if self.display_time < start_time or self.display_time >= end_time:
+            self.preview_trajectory_time(start_time, emit_time_signal=True)
+        self._playback_last_tick = monotonic()
+        self.play_timer.start()
+        self._set_playback_button_text("Pause")
+        self.playback_state_changed.emit(True)
+
+    def pause_playback(self, commit_time=False):
         self.play_timer.stop()
+        self._playback_last_tick = None
         self._set_playback_button_text("Play")
         self.playback_state_changed.emit(False)
+        if commit_time and abs(self.display_time - self.current_time) > 1e-9:
+            self.timeslice_time_changed.emit(self.display_time)
 
     def _set_playback_button_text(self, text):
         self.play_button.setText(text)
 
-    def _advance_frame(self):
+    def _advance_playback(self, elapsed=None):
         if not self.robot_trajectory:
-            self.toggle_playback()
+            self.pause_playback()
             return
-        next_frame = (self.frame_slider.value() + 1) % len(self.robot_trajectory)
-        self.frame_slider.setValue(next_frame)
+        start_time = self.robot_trajectory_times[0]
+        end_time = self.robot_trajectory_times[-1]
+        if end_time <= start_time:
+            self.preview_trajectory_time(start_time, emit_time_signal=True)
+            self.pause_playback(commit_time=True)
+            return
+
+        if elapsed is None:
+            now = monotonic()
+            if self._playback_last_tick is None:
+                elapsed = self.play_timer.interval() / 1000.0
+            else:
+                elapsed = max(0.0, now - self._playback_last_tick)
+            self._playback_last_tick = now
+        else:
+            elapsed = max(0.0, float(elapsed))
+
+        next_time = self.display_time + elapsed
+        duration = end_time - start_time
+        if next_time > end_time:
+            next_time = start_time + ((next_time - start_time) % duration)
+        self.preview_trajectory_time(next_time, emit_time_signal=True)
+
+    def _advance_frame(self):
+        """Backward-compatible alias for elapsed-time playback advancement."""
+        self._advance_playback()
