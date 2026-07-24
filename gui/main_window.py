@@ -2807,7 +2807,10 @@ class RobotGuiMainWindow(QMainWindow):
         self.set_sidebar_timeline_duration(duration)
 
     def on_accept_timeslice_requested(self):
-        if self.viewer_3d.preview_active and not self.viewer_3d.accept_preview():
+        if (
+            self.viewer_3d.preview_active
+            and not self.viewer_3d.accept_preview(emit_pose_finished=False)
+        ):
             return
 
         count = self.define_timeslice_from_committed_pose()

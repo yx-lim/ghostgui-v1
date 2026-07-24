@@ -728,6 +728,41 @@ class RobotViewerTimelineTests(unittest.TestCase):
                     atol=1e-9,
                 )
 
+    def test_accept_slice_uses_visible_playback_time_without_duplicate_keyframe(self):
+        first = self.viewer.robot_model.home_qpos.copy()
+        second = first.copy()
+        second[-1] += 0.10
+        self.viewer.set_robot_trajectory(
+            [first, second],
+            times=[0.0, 1.0],
+        )
+        self.viewer.start_playback()
+        self.viewer.preview_trajectory_time(0.6, emit_time_signal=True)
+
+        name = self.viewer.preview_state.get_joint_names()[-1]
+        self.viewer._joint_changed(
+            name, self.viewer.preview_state.get_joint_value(name) + 0.05
+        )
+        preview_qpos = self.viewer.preview_state.get_qpos()
+
+        self.assertAlmostEqual(self.viewer.get_current_time(), 0.0)
+        self.assertAlmostEqual(self.viewer.display_time, 0.6)
+        self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.6)
+
+        self.viewer.accept_timeslice()
+
+        self.assertFalse(self.viewer.play_timer.isActive())
+        self.assertFalse(self.viewer.preview_active)
+        self.assertEqual(self.viewer.timeslice_slider.defined_times, {0.6})
+        self.assertEqual(
+            {round(frame.time, 6) for frame in self.window.trajectory.frames},
+            {0.6},
+        )
+        np.testing.assert_allclose(
+            self.viewer.state_timeline.get_state(0.6),
+            preview_qpos,
+        )
+
     def test_accept_slice_auto_advance_uses_step_control(self):
         self.viewer.timeslice_step_input.setValue(0.25)
         self.window.controls.time_slider.set_value(0.2)
@@ -818,14 +853,13 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(activated, [])
         self.assertEqual(self.viewer.get_current_time(), 0.2)
 
-    def test_timeslice_markers_use_requested_dimensions_and_current_guide(self):
+    def test_timeslice_markers_use_requested_dimensions(self):
         slider = self.viewer.timeslice_slider
         slider.resize(500, 40)
         x = slider._time_to_pixel(0.2)
 
         normal_marker = slider._marker_rect(x, current=False)
         current_marker = slider._marker_rect(x, current=True)
-        guide_top, guide_bottom = slider._current_guide_bounds()
 
         self.assertEqual(
             (normal_marker.width(), normal_marker.height()),
@@ -834,34 +868,6 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(
             (current_marker.width(), current_marker.height()),
             (2, 10),
-        )
-        self.assertEqual(guide_bottom - guide_top + 1, 40)
-        self.assertGreaterEqual(slider.minimumHeight(), 40)
-
-    def test_current_time_guide_is_always_visible_and_highlights_slices(self):
-        slider = self.viewer.timeslice_slider
-        slider.resize(500, 40)
-        slider.setRange(0, 100)
-        slider.set_defined_times([])
-        slider.setValue(20)
-
-        self.assertFalse(slider._current_value_is_defined())
-        self.assertEqual(
-            slider._current_guide_color(),
-            QColor(*slider.GUIDE_COLOR),
-        )
-
-        slider.set_defined_times([0.4])
-        self.assertEqual(
-            slider._current_guide_color(),
-            QColor(*slider.GUIDE_COLOR),
-        )
-
-        slider.setValue(40)
-        self.assertTrue(slider._current_value_is_defined())
-        self.assertEqual(
-            slider._current_guide_color(),
-            QColor(*slider.DEFINED_GUIDE_COLOR),
         )
 
     def test_delete_slice_removes_defined_marker_and_logical_targets(self):

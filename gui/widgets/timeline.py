@@ -1,7 +1,7 @@
 """Timeline widgets for trajectory editing."""
 
 from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QSlider, QStyle, QStyleOptionSlider
 
 
@@ -16,16 +16,12 @@ class TimesliceSlider(QSlider):
     MARKER_HEIGHT = 6
     CURRENT_MARKER_WIDTH = 2
     CURRENT_MARKER_HEIGHT = 10
-    CURRENT_GUIDE_HEIGHT = 40
-    GUIDE_COLOR = (72, 72, 72)
-    DEFINED_GUIDE_COLOR = (15, 158, 255)
 
     def __init__(self, orientation, parent=None):
         super().__init__(orientation, parent)
         self.defined_times = set()
         self.marker_snap_pixels = 10
         self._wheel_angle_remainder = 0
-        self.setMinimumHeight(self.CURRENT_GUIDE_HEIGHT)
 
     def set_defined_times(self, times):
         self.defined_times = {round(float(time), 6) for time in times}
@@ -47,10 +43,6 @@ class TimesliceSlider(QSlider):
 
         painter = QPainter(self)
         current_raw = self.value()
-        guide_top, guide_bottom = self._current_guide_bounds()
-        guide_x = self._handle_rect().center().x()
-        painter.setPen(QPen(self._current_guide_color(), 1))
-        painter.drawLine(guide_x, guide_top, guide_x, guide_bottom)
 
         for time in sorted(self.defined_times):
             x = self._time_to_pixel(time)
@@ -58,21 +50,6 @@ class TimesliceSlider(QSlider):
             current = abs(raw_value - current_raw) <= 1
             color = QColor(21, 116, 214) if not current else QColor(15, 158, 255)
             painter.fillRect(self._marker_rect(x, current), color)
-
-    def _current_value_is_defined(self):
-        current_raw = self.value()
-        return any(
-            abs(self._time_to_raw(time) - current_raw) <= 1
-            for time in self.defined_times
-        )
-
-    def _current_guide_color(self):
-        rgb = (
-            self.DEFINED_GUIDE_COLOR
-            if self._current_value_is_defined()
-            else self.GUIDE_COLOR
-        )
-        return QColor(*rgb)
 
     def _marker_rect(self, x, current):
         width = (
@@ -90,12 +67,6 @@ class TimesliceSlider(QSlider):
             max(0, self.height() - height),
         )
         return QRect(int(x) - width // 2, top, width, height)
-
-    def _current_guide_bounds(self):
-        height = min(self.CURRENT_GUIDE_HEIGHT, self.height())
-        center = self._groove_rect().center().y()
-        top = max(0, min(self.height() - height, center - height // 2))
-        return top, top + height - 1
 
     def mousePressEvent(self, event):
         if (

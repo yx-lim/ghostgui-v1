@@ -646,8 +646,31 @@ class RobotViewer3D(QWidget):
         return raw_time / 100.0
 
     def accept_timeslice(self):
-        if self.preview_active and not self.accept_preview():
-            return
+        # Playback and live scrubbing intentionally move display_time without
+        # creating an editable state. Slice must first choose one authoritative
+        # time so its qpos state and logical-target snapshot cannot be written
+        # at two different positions on the timeline.
+        slice_time = max(0.0, min(float(self.display_time), self.timeline_duration))
+        if self.state_timeline is not None:
+            slice_time = self.state_timeline.time_key(slice_time)
+
+        if self.play_timer.isActive():
+            self.pause_playback(commit_time=False)
+
+        if self.preview_active:
+            # Preserve the active preview while moving it to the visible time.
+            # Calling set_current_time() here would discard that preview.
+            self.current_time = slice_time
+            self.display_time = slice_time
+            self._set_timeslice_widgets(slice_time)
+            self.timeslice_preview_time_changed.emit(slice_time)
+            if not self.accept_preview(emit_pose_finished=False):
+                return
+        elif abs(slice_time - self.current_time) > 1e-9:
+            # With no edit preview to preserve, load the visible trajectory pose
+            # as the committed state before taking the logical-target snapshot.
+            self.timeslice_time_changed.emit(slice_time)
+
         self.accept_timeslice_requested.emit()
 
     def delete_timeslice(self):
@@ -1271,7 +1294,7 @@ class RobotViewer3D(QWidget):
         )
         self.history_action_finished.emit("Plan preview")
 
-    def accept_preview(self):
+    def accept_preview(self, *, emit_pose_finished=True):
         if not self.preview_active:
             self.status_label.setText("No preview changes to accept.")
             return False
@@ -1304,7 +1327,7 @@ class RobotViewer3D(QWidget):
         self.status_label.setText(
             f"Accepted preview into committed keyframe at t={self.current_time:.2f} s"
         )
-        if self.last_valid_target_position is not None:
+        if emit_pose_finished and self.last_valid_target_position is not None:
             roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
             self.target_pose_drag_finished.emit(
                 *map(float, self.last_valid_target_position), roll, pitch, yaw
