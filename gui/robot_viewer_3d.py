@@ -298,6 +298,17 @@ class RobotViewer3D(QWidget):
         self.timeslice_context_layout.addRow(
             self.collision_substeps_label, self.collision_substeps
         )
+        self.playback_speed = QDoubleSpinBox()
+        _compact_spinbox(self.playback_speed)
+        self.playback_speed.setRange(0.10, 4.00)
+        self.playback_speed.setDecimals(2)
+        self.playback_speed.setSingleStep(0.25)
+        self.playback_speed.setValue(1.00)
+        self.playback_speed.setSuffix("×")
+        self.playback_speed_label = QLabel("Playback speed")
+        self.timeslice_context_layout.addRow(
+            self.playback_speed_label, self.playback_speed
+        )
         self.generate_button = QPushButton("Demo trajectory")
         self.generate_button.clicked.connect(self.generate_demo_trajectory)
         self.play_button = QPushButton("Play")
@@ -1978,6 +1989,7 @@ class RobotViewer3D(QWidget):
         else:
             elapsed = max(0.0, float(elapsed))
 
+        elapsed *= self.playback_speed.value()
         next_time = self.display_time + elapsed
         duration = end_time - start_time
         if next_time > end_time:

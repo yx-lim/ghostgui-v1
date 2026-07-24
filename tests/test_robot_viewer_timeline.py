@@ -576,6 +576,26 @@ class RobotViewerTimelineTests(unittest.TestCase):
             "Frame 1 / 2",
         )
 
+    def test_playback_speed_scales_elapsed_time_without_changing_timer_rate(self):
+        first = self.viewer.robot_model.home_qpos.copy()
+        second = first.copy()
+        second[-1] += 0.24
+        self.viewer.set_robot_trajectory(
+            [first, second],
+            times=[0.2, 0.8],
+        )
+        self.viewer.preview_trajectory_time(0.2)
+        self.viewer.playback_speed.setValue(2.0)
+
+        self.viewer._advance_playback(elapsed=0.15)
+
+        self.assertAlmostEqual(self.viewer.display_time, 0.5)
+        self.assertAlmostEqual(
+            self.viewer.playback_state.get_qpos()[-1],
+            first[-1] + 0.12,
+        )
+        self.assertEqual(self.viewer.play_timer.interval(), 33)
+
     def test_live_scrub_render_updates_are_coalesced(self):
         first = self.viewer.robot_model.home_qpos.copy()
         second = first.copy()
@@ -981,6 +1001,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 "Clear",
                 "Move",
                 "Rotate",
+                "Gizmo",
                 "Undo",
                 "Redo",
             ],
@@ -1009,6 +1030,17 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.viewer.canvas.set_gizmo_mode("translate")
         self.assertTrue(self.window.move_action.isChecked())
         self.assertFalse(self.window.rotate_action.isChecked())
+        self.assertTrue(self.window.gizmo_visibility_action.isChecked())
+        self.assertTrue(self.viewer.canvas.transform_gizmo_visible)
+        self.window.gizmo_visibility_action.trigger()
+        self.assertFalse(self.window.gizmo_visibility_action.isChecked())
+        self.assertFalse(self.viewer.canvas.transform_gizmo_visible)
+        self.assertFalse(self.viewer.canvas.transform_gizmo_interactive)
+        self.assertFalse(self.window.move_action.isEnabled())
+        self.assertFalse(self.window.rotate_action.isEnabled())
+        self.window.gizmo_visibility_action.trigger()
+        self.assertTrue(self.viewer.canvas.transform_gizmo_visible)
+        self.assertTrue(self.viewer.canvas.transform_gizmo_interactive)
 
         first = self.viewer.robot_model.home_qpos.copy()
         second = first.copy()
@@ -1053,6 +1085,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertTrue(controls.editing_mode_bar.expanding())
         self.assertEqual(controls.editing_mode(), "end_effector")
+        self.assertTrue(self.viewer.canvas.transform_gizmo_visible)
+        self.assertTrue(self.window.gizmo_visibility_action.isEnabled())
         self.assertIs(
             controls.editing_mode_stack.currentWidget(),
             controls.end_effector_page,
@@ -1080,9 +1114,23 @@ class RobotViewerTimelineTests(unittest.TestCase):
             controls.editing_mode_stack.currentWidget(),
             controls.joint_editor_stack,
         )
+        self.assertTrue(self.viewer.canvas.transform_gizmo_visible)
+        self.assertTrue(self.viewer.canvas.transform_gizmo_interactive)
+        self.assertTrue(self.window.gizmo_visibility_action.isEnabled())
+        self.assertTrue(self.window.gizmo_visibility_action.isChecked())
+        self.assertTrue(self.window.move_action.isEnabled())
+        self.assertTrue(self.window.rotate_action.isEnabled())
+        self.window.rotate_action.trigger()
+        self.assertEqual(self.viewer.canvas.gizmo.mode, "rotate")
+
+        self.window.gizmo_visibility_action.trigger()
+        self.assertFalse(self.viewer.canvas.transform_gizmo_visible)
         self.assertFalse(self.viewer.canvas.transform_gizmo_interactive)
         self.assertFalse(self.window.move_action.isEnabled())
         self.assertFalse(self.window.rotate_action.isEnabled())
+        self.window.gizmo_visibility_action.trigger()
+        self.assertTrue(self.viewer.canvas.transform_gizmo_visible)
+        self.assertTrue(self.viewer.canvas.transform_gizmo_interactive)
 
         joint_name = self.viewer.preview_state.get_joint_names()[-1]
         self.viewer._joint_changed(
@@ -1106,7 +1154,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
         controls.set_editing_mode("end_effector")
         self.app.processEvents()
+        self.assertTrue(self.viewer.canvas.transform_gizmo_visible)
         self.assertTrue(self.viewer.canvas.transform_gizmo_interactive)
+        self.assertTrue(self.window.gizmo_visibility_action.isEnabled())
         self.assertTrue(self.window.move_action.isEnabled())
         self.assertTrue(self.window.rotate_action.isEnabled())
 
@@ -1266,6 +1316,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(toolbar_buttons["clearToolbarButton"], "Clear")
         self.assertEqual(toolbar_buttons["moveToolButton"], "Move")
         self.assertEqual(toolbar_buttons["rotateToolButton"], "Rotate")
+        self.assertEqual(toolbar_buttons["gizmoVisibilityButton"], "Gizmo")
         self.assertEqual(toolbar_buttons["undoToolbarButton"], "Undo")
         self.assertEqual(toolbar_buttons["redoToolbarButton"], "Redo")
         project_action_texts = [
@@ -1386,6 +1437,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.timeslice_duration_input,
             self.viewer.collision_substeps_label,
             self.viewer.collision_substeps,
+            self.viewer.playback_speed_label,
+            self.viewer.playback_speed,
             self.viewer.ghost_stride_label,
             self.viewer.ghost_stride,
             self.viewer.ghost_alpha_label,
@@ -1457,6 +1510,28 @@ class RobotViewerTimelineTests(unittest.TestCase):
             ),
             self.viewer.collision_substeps_label,
         )
+        playback_speed_row, _ = (
+            self.viewer.timeslice_context_layout.getWidgetPosition(
+                self.viewer.playback_speed
+            )
+        )
+        playback_spacing_row, _ = (
+            self.viewer.timeslice_context_layout.getWidgetPosition(
+                self.viewer.ghost_stride
+            )
+        )
+        self.assertEqual(playback_speed_row, collision_row + 1)
+        self.assertEqual(playback_spacing_row, playback_speed_row + 1)
+        self.assertIs(
+            self.viewer.timeslice_context_layout.labelForField(
+                self.viewer.playback_speed
+            ),
+            self.viewer.playback_speed_label,
+        )
+        self.assertEqual(self.viewer.playback_speed.minimum(), 0.10)
+        self.assertEqual(self.viewer.playback_speed.maximum(), 4.00)
+        self.assertEqual(self.viewer.playback_speed.value(), 1.00)
+        self.assertEqual(self.viewer.playback_speed.suffix(), "×")
         playback_opacity_row, _ = (
             self.viewer.timeslice_context_layout.getWidgetPosition(
                 self.viewer.ghost_alpha

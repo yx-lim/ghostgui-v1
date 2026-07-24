@@ -79,9 +79,9 @@ another body or site exposed by the model.
 
 Choose **End Effector** to edit the target frame with X, Y, Z, Roll, Pitch, and
 Yaw controls or the 3D transform gizmo. Choose **Joint Angles** to edit the
-active robot's joints directly. Both modes update the orange preview and stay
-synchronized as you switch between them. The Move and Rotate toolbar actions
-are available only in End Effector mode.
+active robot's joints directly or move the gizmo through IK while watching the
+joint values update. Both modes update the orange preview and stay synchronized
+as you switch between them.
 
 Both sidebars can be resized from 200 to 400 pixels by dragging their dividers.
 Use the divider arrows or the corresponding **View → Left Sidebar** and
@@ -95,8 +95,9 @@ stored. The single Time slider drives both live scrubbing and playback; the
 robot is sampled immediately while dragging, and the derived frame appears as a
 readout beside the time. Releasing the slider commits the selected edit time
 once. Smoothing, collision substeps, playback opacity, and preview opacity are
-configured here. Saved slices become the source material for generated
-trajectories.
+configured here. Playback speed changes the viewing rate without changing the
+trajectory's stored timestamps. Saved slices become the source material for
+generated trajectories.
 
 ### Workflow Toolbar
 
@@ -112,7 +113,10 @@ trajectories.
 
 **Clear** clears the editable trajectory.
 
-**Move/Rotate** select the active transform gizmo in End Effector mode.
+**Move/Rotate** select the active transform gizmo in either editing mode.
+
+**Gizmo** shows or hides the transform gizmo. Its visibility preference remains
+active when switching editing modes.
 
 **Undo/Redo** navigate recorded editing history.
 

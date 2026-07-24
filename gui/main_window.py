@@ -788,6 +788,18 @@ class RobotGuiMainWindow(QMainWindow):
             lambda checked=False: self.set_gizmo_mode("rotate")
         )
         self.gizmo_action_group.addAction(self.rotate_action)
+        self.gizmo_visibility_action = self._toolbar_action(
+            toolbar,
+            "Gizmo",
+            "gizmo",
+            "gizmoVisibilityButton",
+            "Show or hide the 3D transform gizmo.",
+        )
+        self.gizmo_visibility_action.setCheckable(True)
+        self.gizmo_visibility_action.setChecked(True)
+        self.gizmo_visibility_action.toggled.connect(
+            self.sync_transform_gizmo_state
+        )
 
         toolbar.addSeparator()
         self.undo_action = self._toolbar_action(
@@ -1070,6 +1082,21 @@ class RobotGuiMainWindow(QMainWindow):
     def set_gizmo_mode(self, mode):
         self.viewer_3d.canvas.set_gizmo_mode(mode)
 
+    def sync_transform_gizmo_state(self, _checked=None):
+        if not hasattr(self, "gizmo_visibility_action"):
+            return
+        viewer = self.viewer_3d
+        available = (
+            viewer.robot_state is not None
+            and self.viewer_tabs.currentWidget() is self.viewer_3d_stack
+        )
+        visible = available and self.gizmo_visibility_action.isChecked()
+        viewer.canvas.set_transform_gizmo_visible(visible)
+        viewer.canvas.set_transform_gizmo_interactive(visible)
+        self.gizmo_visibility_action.setEnabled(available)
+        self.move_action.setEnabled(visible)
+        self.rotate_action.setEnabled(visible)
+
     def sync_workflow_toolbar(self):
         if not hasattr(self, "preview_action"):
             return
@@ -1084,13 +1111,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.clear_action,
         ):
             action.setEnabled(has_robot)
-        transform_enabled = (
-            has_robot
-            and self.viewer_tabs.currentWidget() is self.viewer_3d_stack
-            and self.controls.editing_mode() == "end_effector"
-        )
-        self.move_action.setEnabled(transform_enabled)
-        self.rotate_action.setEnabled(transform_enabled)
+        self.sync_transform_gizmo_state()
         mode = viewer.canvas.gizmo.mode
         self.move_action.setChecked(mode == "translate")
         self.rotate_action.setChecked(mode == "rotate")
@@ -2073,9 +2094,6 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.set_preview_ik_context_widget(
                 self.viewer_3d.preview_ik_context_widget()
             )
-            self.viewer_3d.canvas.set_transform_gizmo_interactive(
-                self.controls.editing_mode() == "end_effector"
-            )
             self.sync_viewer_status_panel()
         else:
             self.controls.set_robot_context_widget(None)
@@ -2084,7 +2102,6 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.set_timeslice_context_widget(None)
             self.controls.set_display_context_widget(None)
             self.controls.set_preview_ik_context_widget(None)
-            self.viewer_3d.canvas.set_transform_gizmo_interactive(False)
         self.sync_workflow_toolbar()
 
     # ============================================================
@@ -2213,11 +2230,7 @@ class RobotGuiMainWindow(QMainWindow):
         if viewer is self.viewer_3d:
             self.sync_workflow_toolbar()
 
-    def on_editing_mode_changed(self, mode):
-        self.viewer_3d.canvas.set_transform_gizmo_interactive(
-            mode == "end_effector"
-            and self.viewer_tabs.currentWidget() is self.viewer_3d_stack
-        )
+    def on_editing_mode_changed(self, _mode):
         self.sync_workflow_toolbar()
 
     def capture_history_snapshot(self):

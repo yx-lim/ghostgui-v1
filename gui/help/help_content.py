@@ -54,7 +54,7 @@ another body or site exposed by the model.
 
 ## Editing Mode
 
-Use **End Effector** to edit the target frame with X/Y/Z/Roll/Pitch/Yaw controls or the 3D transform gizmo. Use **Joint Angles** to edit the active robot's joints directly. Both modes update the same orange preview, and the controls stay synchronized when you switch modes.
+Use **End Effector** to edit the target frame with X/Y/Z/Roll/Pitch/Yaw controls or the 3D transform gizmo. Use **Joint Angles** to edit joints directly or move the gizmo through IK while watching the joint values update. Both modes update the same orange preview, and the controls stay synchronized when you switch modes.
 
 ## Sidebars
 
@@ -62,7 +62,7 @@ Drag either divider to resize its sidebar between 200 and 400 pixels. Use the di
 
 ## Planning
 
-Use the single Time slider to scrub the robot live or follow time-based playback. The frame readout is derived from the trajectory, and releasing the slider commits the selected edit time once. Configure smoothing, collision substeps, playback opacity, and preview opacity; capture committed robot states; generate trajectories; and manage the editable timeline here.
+Use the single Time slider to scrub the robot live or follow time-based playback. The frame readout is derived from the trajectory, and releasing the slider commits the selected edit time once. Configure playback speed without changing trajectory timestamps, along with smoothing, collision substeps, playback opacity, and preview opacity; capture committed robot states; generate trajectories; and manage the editable timeline here.
 
 ## Workflow Toolbar
 
@@ -72,7 +72,8 @@ Use the single Time slider to scrub the robot live or follow time-based playback
 - **Play/Pause** controls the current generated or editable timeline.
 - **Reset** returns the active time to the model home pose.
 - **Clear** clears the editable trajectory.
-- **Move/Rotate** select the active transform gizmo in End Effector mode.
+- **Move/Rotate** select the active transform gizmo in either editing mode.
+- **Gizmo** shows or hides the transform gizmo.
 - **Undo/Redo** navigate recorded editing history.
 
 ## Right Sidebar
