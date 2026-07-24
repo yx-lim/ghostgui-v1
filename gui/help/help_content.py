@@ -55,6 +55,10 @@ Choose the active robot body, site, or logical frame to edit.
 
 Use **End Effector** to edit the target frame with X/Y/Z/Roll/Pitch/Yaw controls or the 3D transform gizmo. Use **Joint Angles** to edit the active robot's joints directly. Both modes update the same orange preview, and the controls stay synchronized when you switch modes.
 
+## Sidebars
+
+Drag either divider to resize its sidebar between 200 and 400 pixels. Use the divider arrows or the **View → Left Sidebar** and **View → Right Sidebar** actions to collapse or restore them. GhostGUI remembers both expanded widths.
+
 ## Time Slices
 
 Set the active time, capture committed robot states, generate trajectories, and manage the editable timeline.

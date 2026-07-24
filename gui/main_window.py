@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from PySide6.QtCore import QEvent, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QSettings, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -28,8 +28,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QTextEdit,
     QTabWidget,
-    QSplitter,
     QStackedWidget,
+    QSizePolicy,
     QProgressBar,
     QFileDialog,
     QInputDialog,
@@ -52,6 +52,7 @@ from application.project_manager import (
     load_project_browser_previews,
     load_recent_projects,
     remember_recent_project,
+    ghostgui_config_dir,
 )
 from .controls import TrajectoryControlPanel
 from gui.viewers.reference_frame_2d import RobotCanvas
@@ -60,7 +61,7 @@ from gui.viewers.skeleton_2d import Stickman2DViewer
 from gui.viewers.mujoco_player import Mujoco3DViewerPanel
 from application.backend_interface import BackendInterface
 from core.models import MujocoReferenceFrames
-from .app_sidebars import AppLeftSidebar, AppRightSidebar
+from .app_sidebars import AppLeftSidebar, AppRightSidebar, SidebarSplitter
 from .help import HelpCenterDialog
 from .project_browser import ProjectBrowserDialog
 from .theme import ensure_application_theme, theme_icon
@@ -73,8 +74,12 @@ from application.model_importer import (
 )
 
 
-LEFT_SIDEBAR_WIDTH = 250
-RIGHT_SIDEBAR_WIDTH = 270
+LEFT_SIDEBAR_MIN_WIDTH = 200
+LEFT_SIDEBAR_DEFAULT_WIDTH = 250
+RIGHT_SIDEBAR_MIN_WIDTH = 200
+RIGHT_SIDEBAR_DEFAULT_WIDTH = 270
+SIDEBAR_MAX_WIDTH = 400
+UI_SETTINGS_FILENAME = "ui.ini"
 INITIAL_RENDER_PROGRESS_DELAY_MS = 500
 PROJECT_AUTOSAVE_INTERVAL_MS = 30000
 MAX_HISTORY_DEPTH = 100
@@ -225,6 +230,50 @@ class RobotGuiMainWindow(QMainWindow):
             ensure_application_theme(app)
 
         self.setWindowTitle("Reference Frame Trajectory GUI")
+        self.ui_settings = QSettings(
+            str(ghostgui_config_dir() / UI_SETTINGS_FILENAME),
+            QSettings.Format.IniFormat,
+        )
+        try:
+            saved_sidebar_width = int(
+                self.ui_settings.value(
+                    "left_sidebar/width",
+                    LEFT_SIDEBAR_DEFAULT_WIDTH,
+                )
+            )
+        except (TypeError, ValueError):
+            saved_sidebar_width = LEFT_SIDEBAR_DEFAULT_WIDTH
+        self._left_sidebar_last_width = max(
+            LEFT_SIDEBAR_MIN_WIDTH,
+            min(saved_sidebar_width, SIDEBAR_MAX_WIDTH),
+        )
+        self._restore_left_sidebar_collapsed = self.ui_settings.value(
+            "left_sidebar/collapsed",
+            False,
+            type=bool,
+        )
+        self._left_sidebar_collapsed = False
+        self._syncing_left_sidebar = False
+        try:
+            saved_right_sidebar_width = int(
+                self.ui_settings.value(
+                    "right_sidebar/width",
+                    RIGHT_SIDEBAR_DEFAULT_WIDTH,
+                )
+            )
+        except (TypeError, ValueError):
+            saved_right_sidebar_width = RIGHT_SIDEBAR_DEFAULT_WIDTH
+        self._right_sidebar_last_width = max(
+            RIGHT_SIDEBAR_MIN_WIDTH,
+            min(saved_right_sidebar_width, SIDEBAR_MAX_WIDTH),
+        )
+        self._restore_right_sidebar_collapsed = self.ui_settings.value(
+            "right_sidebar/collapsed",
+            False,
+            type=bool,
+        )
+        self._right_sidebar_collapsed = False
+        self._syncing_right_sidebar = False
 
         # --------------------------------------------------------
         # Core data
@@ -342,10 +391,18 @@ class RobotGuiMainWindow(QMainWindow):
         )
         self.left_sidebar = self.left_sidebar_content
         self.right_sidebar = self.right_sidebar_content
-        self.left_sidebar.setMinimumWidth(LEFT_SIDEBAR_WIDTH)
-        self.left_sidebar.setMaximumWidth(LEFT_SIDEBAR_WIDTH)
-        self.right_sidebar.setMinimumWidth(RIGHT_SIDEBAR_WIDTH)
-        self.right_sidebar.setMaximumWidth(RIGHT_SIDEBAR_WIDTH)
+        self.left_sidebar.setMinimumWidth(LEFT_SIDEBAR_MIN_WIDTH)
+        self.left_sidebar.setMaximumWidth(SIDEBAR_MAX_WIDTH)
+        self.left_sidebar.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Expanding,
+        )
+        self.right_sidebar.setMinimumWidth(RIGHT_SIDEBAR_MIN_WIDTH)
+        self.right_sidebar.setMaximumWidth(SIDEBAR_MAX_WIDTH)
+        self.right_sidebar.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Expanding,
+        )
 
         self.connect_signals()
         self.sync_workflow_toolbar()
@@ -369,17 +426,47 @@ class RobotGuiMainWindow(QMainWindow):
         # --------------------------------------------------------
         # Persistent splitter children resize in place. The 3D viewer is never
         # recreated, so resizing sidebars retains its OpenGL context.
-        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter = SidebarSplitter(Qt.Orientation.Horizontal)
         self.main_splitter.setChildrenCollapsible(False)
-        self.main_splitter.setHandleWidth(5)
+        self.main_splitter.setHandleWidth(14)
         self.main_splitter.addWidget(self.left_sidebar)
         self.main_splitter.addWidget(self.viewer_tabs)
         self.main_splitter.addWidget(self.right_sidebar)
+        self.main_splitter.setCollapsible(0, False)
+        self.main_splitter.setCollapsible(1, False)
+        self.main_splitter.setCollapsible(2, False)
         self.main_splitter.setStretchFactor(0, 0)
         self.main_splitter.setStretchFactor(1, 1)
         self.main_splitter.setStretchFactor(2, 0)
-        self.main_splitter.setSizes([200, 900, 260])
+        self.main_splitter.setSizes([
+            self._left_sidebar_last_width,
+            900,
+            self._right_sidebar_last_width,
+        ])
+        self.main_splitter.configure_left_sidebar_handle()
+        self.main_splitter.configure_right_sidebar_handle()
+        self.main_splitter.left_sidebar_toggle_requested.connect(
+            self.toggle_left_sidebar
+        )
+        self.main_splitter.right_sidebar_toggle_requested.connect(
+            self.toggle_right_sidebar
+        )
+        self.main_splitter.splitterMoved.connect(
+            self.on_main_splitter_moved
+        )
         self.setCentralWidget(self.main_splitter)
+        if self._restore_left_sidebar_collapsed:
+            restored_width = self._left_sidebar_last_width
+            self.set_left_sidebar_visible(False)
+            self._left_sidebar_last_width = restored_width
+        else:
+            self._sync_left_sidebar_controls()
+        if self._restore_right_sidebar_collapsed:
+            restored_width = self._right_sidebar_last_width
+            self.set_right_sidebar_visible(False)
+            self._right_sidebar_last_width = restored_width
+        else:
+            self._sync_right_sidebar_controls()
         self.render_progress_overlay = RenderProgressOverlay(self.viewer_3d_stack)
         self.tutorial_manager = TutorialManager(self)
 
@@ -503,6 +590,31 @@ class RobotGuiMainWindow(QMainWindow):
             self.view_action_group.addAction(action)
             self.view_menu.addAction(action)
             self.view_actions.append(action)
+        self.view_menu.addSeparator()
+
+        self.left_sidebar_action = QAction("Left Sidebar", self)
+        self.left_sidebar_action.setObjectName("leftSidebarAction")
+        self.left_sidebar_action.setCheckable(True)
+        self.left_sidebar_action.setChecked(True)
+        self.left_sidebar_action.setToolTip(
+            "Show or collapse the adjustable left editing sidebar."
+        )
+        self.left_sidebar_action.toggled.connect(
+            self.set_left_sidebar_visible
+        )
+        self.view_menu.addAction(self.left_sidebar_action)
+
+        self.right_sidebar_action = QAction("Right Sidebar", self)
+        self.right_sidebar_action.setObjectName("rightSidebarAction")
+        self.right_sidebar_action.setCheckable(True)
+        self.right_sidebar_action.setChecked(True)
+        self.right_sidebar_action.setToolTip(
+            "Show or collapse the adjustable right inspector sidebar."
+        )
+        self.right_sidebar_action.toggled.connect(
+            self.set_right_sidebar_visible
+        )
+        self.view_menu.addAction(self.right_sidebar_action)
         self.view_menu.addSeparator()
 
         self.model_colors_action = QAction("Use Model Colors", self)
@@ -725,6 +837,202 @@ class RobotGuiMainWindow(QMainWindow):
         )
         self.show_playback_poses_action.setChecked(viewer.show_ghosts.isChecked())
 
+    def _sync_left_sidebar_controls(self):
+        if not hasattr(self, "main_splitter"):
+            return
+        self.main_splitter.set_left_sidebar_collapsed(
+            self._left_sidebar_collapsed
+        )
+        action = getattr(self, "left_sidebar_action", None)
+        if action is not None:
+            action.blockSignals(True)
+            action.setChecked(not self._left_sidebar_collapsed)
+            action.blockSignals(False)
+
+    def _sync_right_sidebar_controls(self):
+        if not hasattr(self, "main_splitter"):
+            return
+        self.main_splitter.set_right_sidebar_collapsed(
+            self._right_sidebar_collapsed
+        )
+        action = getattr(self, "right_sidebar_action", None)
+        if action is not None:
+            action.blockSignals(True)
+            action.setChecked(not self._right_sidebar_collapsed)
+            action.blockSignals(False)
+
+    def set_left_sidebar_visible(self, visible):
+        if not hasattr(self, "main_splitter"):
+            return
+        visible = bool(visible)
+        if visible == (not self._left_sidebar_collapsed):
+            self._sync_left_sidebar_controls()
+            return
+
+        sizes = self.main_splitter.sizes()
+        self._syncing_left_sidebar = True
+        try:
+            if visible:
+                self._left_sidebar_collapsed = False
+                self.left_sidebar.setMinimumWidth(LEFT_SIDEBAR_MIN_WIDTH)
+                target_width = max(
+                    LEFT_SIDEBAR_MIN_WIDTH,
+                    min(self._left_sidebar_last_width, SIDEBAR_MAX_WIDTH),
+                )
+                gained_width = max(0, target_width - sizes[0])
+                sizes[0] = target_width
+                sizes[1] = max(0, sizes[1] - gained_width)
+                self.main_splitter.setCollapsible(0, False)
+            else:
+                if sizes[0] > 0:
+                    self._left_sidebar_last_width = max(
+                        LEFT_SIDEBAR_MIN_WIDTH,
+                        min(sizes[0], SIDEBAR_MAX_WIDTH),
+                    )
+                released_width = sizes[0]
+                self.left_sidebar.setMinimumWidth(0)
+                self.main_splitter.setCollapsible(0, True)
+                self._left_sidebar_collapsed = True
+                sizes[0] = 0
+                sizes[1] += released_width
+            self.main_splitter.setSizes(sizes)
+        finally:
+            self._syncing_left_sidebar = False
+        self._sync_left_sidebar_controls()
+
+    def set_right_sidebar_visible(self, visible):
+        if not hasattr(self, "main_splitter"):
+            return
+        visible = bool(visible)
+        if visible == (not self._right_sidebar_collapsed):
+            self._sync_right_sidebar_controls()
+            return
+
+        sizes = self.main_splitter.sizes()
+        self._syncing_right_sidebar = True
+        try:
+            if visible:
+                self._right_sidebar_collapsed = False
+                self.right_sidebar.setMinimumWidth(RIGHT_SIDEBAR_MIN_WIDTH)
+                target_width = max(
+                    RIGHT_SIDEBAR_MIN_WIDTH,
+                    min(self._right_sidebar_last_width, SIDEBAR_MAX_WIDTH),
+                )
+                gained_width = max(0, target_width - sizes[2])
+                sizes[2] = target_width
+                sizes[1] = max(0, sizes[1] - gained_width)
+                self.main_splitter.setCollapsible(2, False)
+            else:
+                if sizes[2] > 0:
+                    self._right_sidebar_last_width = max(
+                        RIGHT_SIDEBAR_MIN_WIDTH,
+                        min(sizes[2], SIDEBAR_MAX_WIDTH),
+                    )
+                released_width = sizes[2]
+                self.right_sidebar.setMinimumWidth(0)
+                self.main_splitter.setCollapsible(2, True)
+                self._right_sidebar_collapsed = True
+                sizes[2] = 0
+                sizes[1] += released_width
+            self.main_splitter.setSizes(sizes)
+        finally:
+            self._syncing_right_sidebar = False
+        self._sync_right_sidebar_controls()
+
+    def toggle_left_sidebar(self):
+        self.set_left_sidebar_visible(self._left_sidebar_collapsed)
+
+    def toggle_right_sidebar(self):
+        self.set_right_sidebar_visible(self._right_sidebar_collapsed)
+
+    def on_main_splitter_moved(self, _position, index):
+        if self._syncing_left_sidebar or self._syncing_right_sidebar:
+            return
+        sizes = self.main_splitter.sizes()
+        if index == 1:
+            width = sizes[0]
+            if width > SIDEBAR_MAX_WIDTH:
+                excess = width - SIDEBAR_MAX_WIDTH
+                self._syncing_left_sidebar = True
+                try:
+                    sizes[0] = SIDEBAR_MAX_WIDTH
+                    sizes[1] += excess
+                    self.main_splitter.setSizes(sizes)
+                finally:
+                    self._syncing_left_sidebar = False
+                width = SIDEBAR_MAX_WIDTH
+            if self._left_sidebar_collapsed and width > 0:
+                self._left_sidebar_last_width = max(
+                    LEFT_SIDEBAR_MIN_WIDTH,
+                    min(width, SIDEBAR_MAX_WIDTH),
+                )
+                self.set_left_sidebar_visible(True)
+                return
+            if not self._left_sidebar_collapsed:
+                self._left_sidebar_last_width = max(
+                    LEFT_SIDEBAR_MIN_WIDTH,
+                    min(width, SIDEBAR_MAX_WIDTH),
+                )
+            return
+        if index == 2:
+            width = sizes[2]
+            if width > SIDEBAR_MAX_WIDTH:
+                excess = width - SIDEBAR_MAX_WIDTH
+                self._syncing_right_sidebar = True
+                try:
+                    sizes[2] = SIDEBAR_MAX_WIDTH
+                    sizes[1] += excess
+                    self.main_splitter.setSizes(sizes)
+                finally:
+                    self._syncing_right_sidebar = False
+                width = SIDEBAR_MAX_WIDTH
+            if self._right_sidebar_collapsed and width > 0:
+                self._right_sidebar_last_width = max(
+                    RIGHT_SIDEBAR_MIN_WIDTH,
+                    min(width, SIDEBAR_MAX_WIDTH),
+                )
+                self.set_right_sidebar_visible(True)
+                return
+            if not self._right_sidebar_collapsed:
+                self._right_sidebar_last_width = max(
+                    RIGHT_SIDEBAR_MIN_WIDTH,
+                    min(width, SIDEBAR_MAX_WIDTH),
+                )
+
+    def save_ui_settings(self):
+        if hasattr(self, "main_splitter") and not self._left_sidebar_collapsed:
+            width = self.main_splitter.sizes()[0]
+            if width > 0:
+                self._left_sidebar_last_width = max(
+                    LEFT_SIDEBAR_MIN_WIDTH,
+                    min(width, SIDEBAR_MAX_WIDTH),
+                )
+        if hasattr(self, "main_splitter") and not self._right_sidebar_collapsed:
+            width = self.main_splitter.sizes()[2]
+            if width > 0:
+                self._right_sidebar_last_width = max(
+                    RIGHT_SIDEBAR_MIN_WIDTH,
+                    min(width, SIDEBAR_MAX_WIDTH),
+                )
+        ghostgui_config_dir().mkdir(parents=True, exist_ok=True)
+        self.ui_settings.setValue(
+            "left_sidebar/width",
+            self._left_sidebar_last_width,
+        )
+        self.ui_settings.setValue(
+            "left_sidebar/collapsed",
+            self._left_sidebar_collapsed,
+        )
+        self.ui_settings.setValue(
+            "right_sidebar/width",
+            self._right_sidebar_last_width,
+        )
+        self.ui_settings.setValue(
+            "right_sidebar/collapsed",
+            self._right_sidebar_collapsed,
+        )
+        self.ui_settings.sync()
+
     def refresh_robot_menu(self):
         if not hasattr(self, "robot_menu"):
             return
@@ -799,7 +1107,6 @@ class RobotGuiMainWindow(QMainWindow):
     def build_status_panel(self):
         panel = QWidget()
         panel.setMinimumWidth(0)
-        panel.setMaximumWidth(244)
         layout = QVBoxLayout()
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(6)
@@ -823,7 +1130,6 @@ class RobotGuiMainWindow(QMainWindow):
         self.status_text = QTextEdit()
         self.status_text.setReadOnly(True)
         self.status_text.setMinimumWidth(0)
-        self.status_text.setMaximumWidth(236)
         self.status_text.setMinimumHeight(120)
         self.status_text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
 
@@ -911,6 +1217,7 @@ class RobotGuiMainWindow(QMainWindow):
         if not self.confirm_project_transition("close GhostGUI"):
             event.ignore()
             return
+        self.save_ui_settings()
         super().closeEvent(event)
 
     def on_autosave_timer(self):

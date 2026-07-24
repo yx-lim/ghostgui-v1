@@ -571,8 +571,6 @@ class TrajectoryControlPanel(QGroupBox):
         )
         smoothing_label_width = self.corner_smoothing_slider.label.sizeHint().width()
         self.corner_smoothing_slider.label.setMinimumWidth(smoothing_label_width + 8)
-        self.corner_smoothing_slider.setMinimumWidth(232)
-        self.corner_smoothing_slider.setMaximumWidth(240)
 
         # --------------------------------------------------------
         # Keyframe buttons
@@ -600,7 +598,6 @@ class TrajectoryControlPanel(QGroupBox):
         self.table = QTableWidget()
         self.table.setMinimumHeight(96)
         self.table.setMaximumHeight(180)
-        self.table.setMaximumWidth(212)
         self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
             "time",
@@ -624,7 +621,6 @@ class TrajectoryControlPanel(QGroupBox):
         self.trajectory_context_stack = self._make_context_stack()
         self.timeslice_context_stack = self._make_context_stack()
         self.preview_ik_context_stack = self._make_context_stack()
-        self.preview_ik_context_stack.setMaximumWidth(244)
         self.display_context_stack = self._make_context_stack()
         robot_layout.addWidget(self.robot_context_stack)
         self.selection_detail_layout.addWidget(self.target_context_stack)
@@ -646,7 +642,6 @@ class TrajectoryControlPanel(QGroupBox):
         stack.addWidget(stack.empty_widget)
         stack.setVisible(False)
         stack.setMinimumWidth(0)
-        stack.setMaximumWidth(220)
         stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         return stack
 

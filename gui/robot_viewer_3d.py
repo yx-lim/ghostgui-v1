@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QTabWidget,
@@ -336,7 +337,6 @@ class RobotViewer3D(QWidget):
         editor_tabs = QTabWidget()
         editor_tabs.setObjectName("ikEditorTabs")
         editor_tabs.setMinimumWidth(0)
-        editor_tabs.setMaximumWidth(244)
         self.ik_editor_tabs = editor_tabs
         joint_group = QWidget()
         joint_group.setObjectName("ikEditorTabContent")
@@ -506,8 +506,10 @@ class RobotViewer3D(QWidget):
             return
         if widget.parent() is not self.timeslice_context_panel:
             widget.setParent(self.timeslice_context_panel)
-        widget.setMinimumWidth(max(widget.minimumWidth(), 232))
-        widget.setMaximumWidth(max(widget.maximumWidth(), 240))
+        widget.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            widget.sizePolicy().verticalPolicy(),
+        )
         self.smoothing_widget = widget
         self.timeslice_context_layout.insertRow(0, widget)
 
@@ -640,7 +642,6 @@ class RobotViewer3D(QWidget):
         content.setObjectName(content.objectName() or "ikEditorTabContent")
         scroll.setWidgetResizable(True)
         scroll.setMinimumWidth(0)
-        scroll.setMaximumWidth(244)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(content)
         return scroll

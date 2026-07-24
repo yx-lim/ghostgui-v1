@@ -82,6 +82,11 @@ active robot's joints directly. Both modes update the orange preview and stay
 synchronized as you switch between them. The Move and Rotate toolbar actions
 are available only in End Effector mode.
 
+Both sidebars can be resized from 200 to 400 pixels by dragging their dividers.
+Use the divider arrows or the corresponding **View → Left Sidebar** and
+**View → Right Sidebar** actions to collapse and restore them. Their last
+expanded widths and collapsed states are remembered between sessions.
+
 ### Time Slices
 
 Manage the editable timeline. The active time determines where the next slice is

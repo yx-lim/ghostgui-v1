@@ -1,14 +1,99 @@
 """Application-level sidebar sections for the GhostGUI main window."""
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSplitter,
+    QSplitterHandle,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
+
+
+class SidebarSplitterHandle(QSplitterHandle):
+    """Splitter handle with an optional persistent sidebar toggle."""
+
+    def __init__(self, orientation, parent):
+        super().__init__(orientation, parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.toggle_button = QToolButton(self)
+        self.toggle_button.setAutoRaise(True)
+        self.toggle_button.setFixedSize(12, 140)
+        self.toggle_button.hide()
+        layout.addStretch(1)
+        layout.addWidget(
+            self.toggle_button,
+            alignment=Qt.AlignmentFlag.AlignCenter,
+        )
+        layout.addStretch(1)
+
+    def configure_sidebar_toggle(self, side, enabled=True):
+        self.sidebar_side = side
+        self.toggle_button.setObjectName(
+            f"{side}SidebarCollapseButton"
+        )
+        self.toggle_button.setVisible(bool(enabled))
+
+    def set_sidebar_collapsed(self, collapsed):
+        if self.sidebar_side == "right":
+            arrow = (
+                Qt.ArrowType.LeftArrow
+                if collapsed
+                else Qt.ArrowType.RightArrow
+            )
+        else:
+            arrow = (
+                Qt.ArrowType.RightArrow
+                if collapsed
+                else Qt.ArrowType.LeftArrow
+            )
+        self.toggle_button.setArrowType(arrow)
+        self.toggle_button.setToolTip(
+            f"{'Expand' if collapsed else 'Collapse'} "
+            f"{self.sidebar_side} sidebar"
+        )
+
+
+class SidebarSplitter(QSplitter):
+    """Main splitter that exposes a toggle from its left divider."""
+
+    left_sidebar_toggle_requested = Signal()
+    right_sidebar_toggle_requested = Signal()
+
+    def createHandle(self):
+        return SidebarSplitterHandle(self.orientation(), self)
+
+    def configure_left_sidebar_handle(self):
+        handle = self.handle(1)
+        if isinstance(handle, SidebarSplitterHandle):
+            handle.configure_sidebar_toggle("left")
+            handle.toggle_button.clicked.connect(
+                self.left_sidebar_toggle_requested.emit
+            )
+
+    def configure_right_sidebar_handle(self):
+        handle = self.handle(2)
+        if isinstance(handle, SidebarSplitterHandle):
+            handle.configure_sidebar_toggle("right")
+            handle.toggle_button.clicked.connect(
+                self.right_sidebar_toggle_requested.emit
+            )
+
+    def set_left_sidebar_collapsed(self, collapsed):
+        handle = self.handle(1)
+        if isinstance(handle, SidebarSplitterHandle):
+            handle.set_sidebar_collapsed(collapsed)
+
+    def set_right_sidebar_collapsed(self, collapsed):
+        handle = self.handle(2)
+        if isinstance(handle, SidebarSplitterHandle):
+            handle.set_sidebar_collapsed(collapsed)
 
 
 class CollapsibleSection(QWidget):
@@ -85,9 +170,16 @@ class AppSidebar(QWidget):
         root.addWidget(self.scroll)
 
     def add_section(self, title, widget, expanded=True):
-        widget.setMaximumWidth(self.SECTION_MAX_WIDTH - 16)
+        if self.SECTION_MAX_WIDTH is not None:
+            widget.setMaximumWidth(self.SECTION_MAX_WIDTH - 16)
+        else:
+            widget.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                widget.sizePolicy().verticalPolicy(),
+            )
         section = CollapsibleSection(title, widget, expanded=expanded)
-        section.setMaximumWidth(self.SECTION_MAX_WIDTH)
+        if self.SECTION_MAX_WIDTH is not None:
+            section.setMaximumWidth(self.SECTION_MAX_WIDTH)
         self.body_layout.addWidget(section)
         self.sections.append(section)
         return section
@@ -103,6 +195,8 @@ class AppSidebar(QWidget):
 
 
 class AppLeftSidebar(AppSidebar):
+    SECTION_MAX_WIDTH = None
+
     def __init__(
         self,
         trajectory_controls,
@@ -150,7 +244,7 @@ class AppLeftSidebar(AppSidebar):
 
 
 class AppRightSidebar(AppSidebar):
-    SECTION_MAX_WIDTH = 260
+    SECTION_MAX_WIDTH = None
 
     def __init__(self, status_panel, base_sections=None, parent=None):
         super().__init__(parent)

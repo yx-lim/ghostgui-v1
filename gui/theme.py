@@ -143,6 +143,35 @@ def application_stylesheet(widget: QWidget | None = None) -> str:
             background: {theme.sidebar_bg};
             color: {theme.text};
         }}
+        QSplitter::handle:horizontal {{
+            background: {theme.window_bg};
+            border-left: 1px solid {theme.border};
+            border-right: 1px solid {theme.border};
+        }}
+        QToolButton#leftSidebarCollapseButton,
+        QToolButton#rightSidebarCollapseButton {{
+            background: {theme.elevated_bg};
+            border: 1px solid {theme.border};
+            border-radius: 3px;
+            padding: 0;
+        }}
+        QToolButton#leftSidebarCollapseButton:hover,
+        QToolButton#rightSidebarCollapseButton:hover {{
+            background: {theme.panel_hover_bg};
+            border-color: {theme.focus_border};
+        }}
+        QToolButton#leftSidebarCollapseButton::left-arrow,
+        QToolButton#rightSidebarCollapseButton::left-arrow {{
+            image: url("{_icon_url(theme, "chevron-left")}");
+            width: 9px;
+            height: 9px;
+        }}
+        QToolButton#leftSidebarCollapseButton::right-arrow,
+        QToolButton#rightSidebarCollapseButton::right-arrow {{
+            image: url("{_icon_url(theme, "chevron-right")}");
+            width: 9px;
+            height: 9px;
+        }}
         QLabel, QCheckBox, QRadioButton, QGroupBox {{
             color: {theme.text};
         }}

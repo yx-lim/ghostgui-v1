@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTabWidget,
     QToolBar,
     QToolButton,
@@ -32,7 +33,13 @@ from application.project_manager import (
     ghostgui_projects_dir,
     load_recent_projects,
 )
-from gui.main_window import INITIAL_RENDER_PROGRESS_DELAY_MS, RobotGuiMainWindow
+from gui.main_window import (
+    INITIAL_RENDER_PROGRESS_DELAY_MS,
+    LEFT_SIDEBAR_MIN_WIDTH,
+    RIGHT_SIDEBAR_MIN_WIDTH,
+    SIDEBAR_MAX_WIDTH,
+    RobotGuiMainWindow,
+)
 from gui.viewers.transform_gizmo import GizmoInteractionState
 from core.trajectory import quat_to_rpy, rpy_to_quat
 from scripts.view_g1_mujoco import RAW_QPOS_KEY, load_trajectory_csv
@@ -998,7 +1005,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertIs(overlay.parentWidget(), self.window.viewer_3d_stack)
         self.assertEqual(overlay.geometry(), self.window.viewer_3d_stack.rect())
 
-    def test_sidebars_are_fixed_shells_with_collapsible_sections(self):
+    def test_sidebars_are_resizable_shells_with_collapsible_sections(self):
         self.window.resize(1700, 800)
         self.window.viewer_tabs.setCurrentWidget(self.window.viewer_3d_stack)
         self.window.show()
@@ -1025,9 +1032,30 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.right_sidebar_content.body_layout.contentsMargins().left(),
             0,
         )
-        self.assertLessEqual(self.window.left_sidebar.maximumWidth(), 250)
-        self.assertLessEqual(self.window.right_sidebar.maximumWidth(), 270)
-        self.assertEqual(self.window.status_panel.maximumWidth(), 244)
+        self.assertEqual(
+            self.window.left_sidebar.minimumWidth(),
+            LEFT_SIDEBAR_MIN_WIDTH,
+        )
+        self.assertGreater(
+            self.window.left_sidebar.maximumWidth(),
+            LEFT_SIDEBAR_MIN_WIDTH,
+        )
+        self.assertEqual(
+            self.window.left_sidebar.maximumWidth(),
+            SIDEBAR_MAX_WIDTH,
+        )
+        self.assertEqual(
+            self.window.right_sidebar.minimumWidth(),
+            RIGHT_SIDEBAR_MIN_WIDTH,
+        )
+        self.assertEqual(
+            self.window.right_sidebar.maximumWidth(),
+            SIDEBAR_MAX_WIDTH,
+        )
+        self.assertGreater(
+            self.window.status_panel.maximumWidth(),
+            SIDEBAR_MAX_WIDTH,
+        )
         left_titles = [
             section.title for section in self.window.left_sidebar_content.sections
         ]
@@ -1298,9 +1326,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
         for section in self.window.left_sidebar_content.sections:
             section.set_expanded(True)
             self.app.processEvents()
-            self.assertLessEqual(section.maximumWidth(), 250)
-            self.assertLessEqual(section.sizeHint().width(), 250)
-            self.assertLessEqual(section.content.sizeHint().width(), 250)
+            self.assertGreater(
+                section.maximumWidth(),
+                LEFT_SIDEBAR_MIN_WIDTH,
+            )
             section.set_expanded(False)
         self.assertIsNone(self.viewer.status_label.parent())
         self.assertIsNone(self.viewer.timeline_state_label.parent())
@@ -1370,11 +1399,11 @@ class RobotViewerTimelineTests(unittest.TestCase):
             ["Tasks", "Weights", "Solver"],
         )
         self.assertEqual(ik_tabs.currentIndex(), 0)
-        self.assertEqual(ik_tabs.maximumWidth(), 244)
+        self.assertGreater(ik_tabs.maximumWidth(), SIDEBAR_MAX_WIDTH)
         self.assertEqual(ik_tabs.objectName(), "ikEditorTabs")
-        self.assertEqual(
+        self.assertGreater(
             self.window.controls.preview_ik_context_stack.maximumWidth(),
-            244,
+            SIDEBAR_MAX_WIDTH,
         )
         expected_group_titles = {
             0: "IK Tasks",
@@ -1398,7 +1427,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 self.assertEqual(area.horizontalScrollBar().maximum(), 0)
                 self.assertFalse(area.horizontalScrollBar().isVisible())
                 self.assertLessEqual(area.widget().width(), area.viewport().width())
-                self.assertEqual(area.maximumWidth(), 244)
+                self.assertGreater(area.maximumWidth(), SIDEBAR_MAX_WIDTH)
             expected_title = expected_group_titles.get(tab_index)
             if expected_title is not None:
                 visible_group_titles = [
@@ -1450,6 +1479,144 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(id(self.window.viewer_3d), viewer_identity)
         self.assertEqual(id(self.window.robot_model_3d.mj_model), model_identity)
         np.testing.assert_allclose(self.viewer.robot_state.get_qpos(), qpos)
+
+    def test_sidebars_resize_collapse_and_restore_width(self):
+        self.window.resize(1800, 800)
+        self.window.show()
+        self.app.processEvents()
+
+        splitter = self.window.main_splitter
+        splitter.setSizes([380, 1100, 270])
+        self.app.processEvents()
+        expanded_width = splitter.sizes()[0]
+        self.assertGreaterEqual(expanded_width, 380)
+        self.assertGreater(
+            self.window.left_sidebar.maximumWidth(),
+            expanded_width,
+        )
+        splitter.moveSplitter(600, 1)
+        self.app.processEvents()
+        self.assertEqual(splitter.sizes()[0], SIDEBAR_MAX_WIDTH)
+        splitter.setSizes([380, 1100, 270])
+        self.app.processEvents()
+
+        available_width = (
+            self.window.left_sidebar_content.body_layout.contentsRect().width()
+        )
+        for section in self.window.left_sidebar_content.sections:
+            self.assertAlmostEqual(section.width(), available_width, delta=1)
+        self.assertAlmostEqual(
+            self.window.controls.editing_mode_bar.width(),
+            self.window.controls.editing_mode_panel.width(),
+            delta=1,
+        )
+
+        splitter.moveSplitter(20, 1)
+        self.app.processEvents()
+        self.assertGreaterEqual(
+            splitter.sizes()[0],
+            LEFT_SIDEBAR_MIN_WIDTH,
+        )
+
+        splitter.setSizes([380, 1100, 270])
+        self.app.processEvents()
+        expanded_width = splitter.sizes()[0]
+        collapse_button = splitter.handle(1).toggle_button
+        self.assertIsNotNone(collapse_button)
+        self.assertTrue(collapse_button.isVisible())
+
+        collapse_button.click()
+        self.app.processEvents()
+        self.assertEqual(splitter.sizes()[0], 0)
+        self.assertEqual(self.window.left_sidebar.minimumWidth(), 0)
+        self.assertFalse(self.window.left_sidebar_action.isChecked())
+        self.assertEqual(
+            collapse_button.arrowType(),
+            Qt.ArrowType.RightArrow,
+        )
+
+        collapse_button.click()
+        self.app.processEvents()
+        self.assertGreaterEqual(splitter.sizes()[0], expanded_width)
+        self.assertEqual(
+            self.window.left_sidebar.minimumWidth(),
+            LEFT_SIDEBAR_MIN_WIDTH,
+        )
+        self.assertTrue(self.window.left_sidebar_action.isChecked())
+        self.assertEqual(
+            collapse_button.arrowType(),
+            Qt.ArrowType.LeftArrow,
+        )
+
+        splitter.setSizes([380, 1000, 390])
+        splitter.moveSplitter(splitter.width() - 600, 2)
+        self.app.processEvents()
+        self.assertEqual(splitter.sizes()[2], SIDEBAR_MAX_WIDTH)
+        right_expanded_width = splitter.sizes()[2]
+        right_available_width = (
+            self.window.right_sidebar_content.body_layout.contentsRect().width()
+        )
+        for section in self.window.right_sidebar_content.sections:
+            self.assertAlmostEqual(
+                section.width(),
+                right_available_width,
+                delta=1,
+            )
+
+        splitter.moveSplitter(splitter.width() - 20, 2)
+        self.app.processEvents()
+        self.assertGreaterEqual(
+            splitter.sizes()[2],
+            RIGHT_SIDEBAR_MIN_WIDTH,
+        )
+
+        splitter.setSizes([380, 1000, 390])
+        self.app.processEvents()
+        right_expanded_width = splitter.sizes()[2]
+        right_collapse_button = splitter.handle(2).toggle_button
+        self.assertTrue(right_collapse_button.isVisible())
+        right_collapse_button.click()
+        self.app.processEvents()
+        self.assertEqual(splitter.sizes()[2], 0)
+        self.assertFalse(self.window.right_sidebar_action.isChecked())
+        self.assertEqual(
+            right_collapse_button.arrowType(),
+            Qt.ArrowType.LeftArrow,
+        )
+        right_collapse_button.click()
+        self.app.processEvents()
+        self.assertGreaterEqual(splitter.sizes()[2], right_expanded_width)
+        self.assertTrue(self.window.right_sidebar_action.isChecked())
+        self.assertEqual(
+            right_collapse_button.arrowType(),
+            Qt.ArrowType.RightArrow,
+        )
+
+        self.window.left_sidebar_action.setChecked(False)
+        self.window.right_sidebar_action.setChecked(False)
+        self.window.save_ui_settings()
+        restored = RobotGuiMainWindow()
+        try:
+            self.assertFalse(restored.left_sidebar_action.isChecked())
+            self.assertFalse(restored.right_sidebar_action.isChecked())
+            self.assertEqual(restored.main_splitter.sizes()[0], 0)
+            self.assertEqual(restored.main_splitter.sizes()[2], 0)
+            restored.resize(1800, 800)
+            restored.show()
+            self.app.processEvents()
+            restored.left_sidebar_action.setChecked(True)
+            restored.right_sidebar_action.setChecked(True)
+            self.app.processEvents()
+            self.assertGreaterEqual(
+                restored.main_splitter.sizes()[0],
+                expanded_width,
+            )
+            self.assertGreaterEqual(
+                restored.main_splitter.sizes()[2],
+                right_expanded_width,
+            )
+        finally:
+            restored.close()
 
     def test_project_save_and_open_restores_committed_workspace(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2275,7 +2442,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(
             controls.corner_smoothing_slider.slider.format_value(), "0%"
         )
-        self.assertGreaterEqual(controls.corner_smoothing_slider.minimumWidth(), 232)
+        self.assertEqual(
+            controls.corner_smoothing_slider.sizePolicy().horizontalPolicy(),
+            QSizePolicy.Policy.Expanding,
+        )
         self.assertAlmostEqual(controls.corner_smoothing(), 0.0)
 
         controls.corner_smoothing_slider.set_value(0.5)
