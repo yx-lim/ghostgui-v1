@@ -151,6 +151,10 @@ class TutorialManager(QObject):
         elif hook == "expand_target_pose":
             self._run_before_show("show_3d_view")
             self._set_section_expanded("Target / Pose", True)
+        elif hook == "expand_end_effector_editor":
+            self._run_before_show("expand_target_pose")
+            self._set_section_expanded("Editing Mode", True)
+            self.main_window.controls.set_editing_mode("end_effector")
         elif hook == "expand_time_slices":
             self._run_before_show("show_3d_view")
             self._set_section_expanded("Time Slices", True)

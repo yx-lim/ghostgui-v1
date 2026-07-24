@@ -779,6 +779,7 @@ class RobotGuiMainWindow(QMainWindow):
         transform_enabled = (
             has_robot
             and self.viewer_tabs.currentWidget() is self.viewer_3d_stack
+            and self.controls.editing_mode() == "end_effector"
         )
         self.move_action.setEnabled(transform_enabled)
         self.rotate_action.setEnabled(transform_enabled)
@@ -1726,6 +1727,9 @@ class RobotGuiMainWindow(QMainWindow):
 
     def update_editor_context(self, index=None):
         active = self.viewer_tabs.currentWidget()
+        self.controls.set_joint_editor_widget(
+            self.viewer_3d.joint_editor_widget()
+        )
         if active is self.viewer_3d_stack:
             self.controls.set_robot_context_widget(
                 self.viewer_3d.robot_context_widget()
@@ -1749,6 +1753,9 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.set_preview_ik_context_widget(
                 self.viewer_3d.preview_ik_context_widget()
             )
+            self.viewer_3d.canvas.set_transform_gizmo_interactive(
+                self.controls.editing_mode() == "end_effector"
+            )
             self.sync_viewer_status_panel()
         else:
             self.controls.set_robot_context_widget(None)
@@ -1757,6 +1764,8 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.set_timeslice_context_widget(None)
             self.controls.set_display_context_widget(None)
             self.controls.set_preview_ik_context_widget(None)
+            self.viewer_3d.canvas.set_transform_gizmo_interactive(False)
+        self.sync_workflow_toolbar()
 
     # ============================================================
     # Signal connections
@@ -1768,6 +1777,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.choose_mesh_folder_clicked.connect(self.on_choose_mesh_folder)
         self.controls.setup_import_requested.connect(self.on_setup_import_requested)
         self.controls.setup_export_requested.connect(self.on_setup_export_requested)
+        self.controls.editing_mode_changed.connect(self.on_editing_mode_changed)
         self.controls.pose_changed.connect(self.on_pose_changed)
         self.controls.add_keyframe_clicked.connect(self.on_add_keyframe)
         self.controls.update_keyframe_clicked.connect(self.on_update_keyframe)
@@ -1882,6 +1892,13 @@ class RobotGuiMainWindow(QMainWindow):
     def on_viewer_gizmo_mode_changed(self, viewer):
         if viewer is self.viewer_3d:
             self.sync_workflow_toolbar()
+
+    def on_editing_mode_changed(self, mode):
+        self.viewer_3d.canvas.set_transform_gizmo_interactive(
+            mode == "end_effector"
+            and self.viewer_tabs.currentWidget() is self.viewer_3d_stack
+        )
+        self.sync_workflow_toolbar()
 
     def capture_history_snapshot(self):
         viewer = self.viewer_3d

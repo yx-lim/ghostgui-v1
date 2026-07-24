@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -355,18 +356,18 @@ class RobotViewer3D(QWidget):
             joint_layout.addWidget(QLabel("Joint controls unavailable."))
         joint_layout.addStretch()
         scroll = QScrollArea()
-        scroll.setObjectName("ikEditorScroll")
+        scroll.setObjectName("jointEditorScroll")
         scroll.viewport().setObjectName("ikEditorViewport")
         scroll.setWidgetResizable(True)
         scroll.setMinimumWidth(0)
-        scroll.setMaximumWidth(244)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(joint_group)
-        editor_tabs.addTab(scroll, "Joint angles")
+        self.joint_angles_page = scroll
         editor_tabs.addTab(self._build_ik_tasks_widget(), "Tasks")
         editor_tabs.addTab(self._build_joint_weights_widget(), "Weights")
         editor_tabs.addTab(self._build_solver_widget(), "Solver")
-        editor_tabs.setCurrentIndex(1)
+        editor_tabs.setCurrentIndex(0)
         preview_ik_layout.addWidget(editor_tabs)
         root.addWidget(self._build_canvas_workspace(), stretch=1)
         root.addWidget(self._build_timeslice_editor())
@@ -629,6 +630,9 @@ class RobotViewer3D(QWidget):
     def preview_ik_context_widget(self):
         return self.preview_ik_context_panel
 
+    def joint_editor_widget(self):
+        return self.joint_angles_page
+
     def _make_ik_scroll_area(self, content):
         scroll = QScrollArea()
         scroll.setObjectName("ikEditorScroll")
@@ -703,7 +707,9 @@ class RobotViewer3D(QWidget):
         defaults = {
             "tcp_position": (True, 1.0),
             "tcp_orientation": (
-                self.robot_model.model_type != "quadruped", 0.25
+                self.robot_model.model_type != "quadruped"
+                or self.robot_model.info.key == "go2",
+                0.25,
             ),
             # Secondary pose objectives are opt-in. Enabling them by default
             # makes an ordinary TCP drag settle at a weighted compromise and
@@ -878,6 +884,14 @@ class RobotViewer3D(QWidget):
         self.begin_preview()
         self.preview_state.set_joint_value(name, value)
         self._set_target_to_selected_pose()
+        if self.last_valid_target_position is not None:
+            roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
+            self.target_pose_dragged.emit(
+                *map(float, self.last_valid_target_position),
+                roll,
+                pitch,
+                yaw,
+            )
         self.status_label.setText(
             f"Preview FK: {name} = {value:+.3f} rad; Accept Preview to commit"
         )

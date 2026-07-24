@@ -28,6 +28,11 @@ class CollapsibleSection(QWidget):
         self.header.setChecked(bool(expanded))
         self.header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.header.toggled.connect(self.set_expanded)
+        self.header.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.header.setMinimumWidth(0)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -72,8 +77,8 @@ class AppSidebar(QWidget):
         self.body = QWidget()
         self.body.setObjectName("appSidebarBody")
         self.body_layout = QVBoxLayout(self.body)
-        self.body_layout.setContentsMargins(4, 4, 4, 4)
-        self.body_layout.setSpacing(4)
+        self.body_layout.setContentsMargins(0, 4, 0, 4)
+        self.body_layout.setSpacing(2)
         self.scroll.setWidget(self.body)
         self.sections = []
 
@@ -107,6 +112,7 @@ class AppLeftSidebar(AppSidebar):
         parent=None,
     ):
         super().__init__(parent)
+        self.body_layout.setContentsMargins(4, 4, 0, 4)
         if project_panel is not None:
             self.add_section("Project", project_panel, expanded=True)
         self.add_sections(trajectory_controls.workflow_sections())

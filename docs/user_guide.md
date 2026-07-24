@@ -72,8 +72,15 @@ trajectory.
 
 ### Target / Pose
 
-Choose the active target frame and edit its target pose. The position and
-orientation controls update the same preview system used by the 3D gizmo.
+Choose the active robot body, site, or logical frame to edit.
+
+### Editing Mode
+
+Choose **End Effector** to edit the target frame with X, Y, Z, Roll, Pitch, and
+Yaw controls or the 3D transform gizmo. Choose **Joint Angles** to edit the
+active robot's joints directly. Both modes update the orange preview and stay
+synchronized as you switch between them. The Move and Rotate toolbar actions
+are available only in End Effector mode.
 
 ### Time Slices
 
@@ -94,7 +101,7 @@ stored. Saved slices become the source material for generated trajectories.
 
 **Clear** clears the editable trajectory.
 
-**Move/Rotate** select the active transform gizmo.
+**Move/Rotate** select the active transform gizmo in End Effector mode.
 
 **Undo/Redo** navigate recorded editing history.
 

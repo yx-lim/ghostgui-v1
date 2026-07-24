@@ -156,6 +156,9 @@ class AdvancedIKTests(unittest.TestCase):
         try:
             self.assertEqual(len(g1.viewer_3d.ik_influence_controls), 29)
             self.assertEqual(len(go2.viewer_3d.ik_influence_controls), 12)
+            self.assertTrue(
+                go2.viewer_3d.ik_task_controls["tcp_orientation"][0].isChecked()
+            )
             self.assertTrue(all(
                 value == 1.0 for value in g1.viewer_3d.ik_joint_weights.values()
             ))
@@ -244,6 +247,13 @@ class AdvancedIKTests(unittest.TestCase):
                     )
                     viewer.select_target(kind, name, emit=False)
                     viewer._set_target_to_selected_pose()
+                    if model_key == "go2":
+                        # This test isolates unconstrained position reach.
+                        # Go2 now intentionally enables TCP orientation by
+                        # default, so disable it for this specific scenario.
+                        viewer.ik_task_controls["tcp_orientation"][
+                            0
+                        ].setChecked(False)
                     start = viewer.last_valid_target_position.copy()
                     quaternion = viewer.last_valid_target_quaternion.copy()
                     committed = viewer.committed_state.get_qpos().copy()

@@ -351,7 +351,7 @@ def _section_stylesheet(theme: Theme) -> str:
         QToolButton#sectionHeader {{
             border: none;
             border-bottom: 1px solid {theme.border};
-            padding: 7px 9px;
+            padding: 3px 6px;
             text-align: left;
             background: {theme.section_header_bg};
             color: {theme.section_header_text};
@@ -364,6 +364,34 @@ def _section_stylesheet(theme: Theme) -> str:
         QToolButton#sectionHeader:checked:hover {{
             background: {theme.section_header_hover_bg};
             color: {theme.section_header_hover_text};
+        }}
+        QTabBar#editingModeBar {{
+            color: {theme.text};
+            background: transparent;
+        }}
+        QTabBar#editingModeBar::tab {{
+            color: {theme.muted_text};
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid transparent;
+            padding: 3px 6px;
+            margin: 0;
+        }}
+        QTabBar#editingModeBar::tab:selected {{
+            color: {theme.text};
+            background: {theme.section_header_active_bg};
+            border-bottom-color: {theme.focus_border};
+        }}
+        QTabBar#editingModeBar::tab:hover {{
+            color: {theme.section_header_hover_text};
+            background: {theme.section_header_hover_bg};
+        }}
+        QStackedWidget#editingModeStack,
+        QStackedWidget#jointEditorStack,
+        QWidget#endEffectorEditorPage,
+        QScrollArea#jointEditorScroll {{
+            border: none;
+            background: transparent;
         }}
     """
 

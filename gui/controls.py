@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QTableWidget,
     QTableWidgetItem,
+    QTabBar,
     QStackedWidget,
     QHBoxLayout,
     QCheckBox,
@@ -196,6 +197,26 @@ class InlineLabeledSlider(QWidget):
             self.value_changed.emit(float(value))
 
 
+class CurrentPageStack(QStackedWidget):
+    """A stack whose size hint follows the visible page instead of the largest."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.currentChanged.connect(lambda _index: self.updateGeometry())
+
+    def sizeHint(self):
+        current = self.currentWidget()
+        return current.sizeHint() if current is not None else super().sizeHint()
+
+    def minimumSizeHint(self):
+        current = self.currentWidget()
+        return (
+            current.minimumSizeHint()
+            if current is not None
+            else super().minimumSizeHint()
+        )
+
+
 class NoWheelComboBox(QComboBox):
     def wheelEvent(self, event):
         event.ignore()
@@ -241,6 +262,7 @@ class TrajectoryControlPanel(QGroupBox):
     choose_mesh_folder_clicked = Signal()
     setup_import_requested = Signal(str)
     setup_export_requested = Signal(str)
+    editing_mode_changed = Signal(str)
 
     def __init__(self, model_registry=None, model_key="g1", frame_names=None):
         super().__init__("Reference Frame Trajectory Editor")
@@ -260,8 +282,10 @@ class TrajectoryControlPanel(QGroupBox):
 
         self.robot_panel, robot_layout = self._make_section_panel()
         self.target_panel, self.target_layout = self._make_section_panel()
-        self.transform_panel = self.target_panel
-        transform_layout = self.target_layout
+        self.editing_mode_panel, self.editing_mode_layout = (
+            self._make_section_panel()
+        )
+        self.editing_mode_layout.setContentsMargins(0, 0, 0, 0)
         self.preview_ik_panel, self.preview_ik_layout = self._make_section_panel()
         self.selection_detail_panel, self.selection_detail_layout = (
             self._make_section_panel()
@@ -356,7 +380,50 @@ class TrajectoryControlPanel(QGroupBox):
         self.frame_box.setCurrentText(preferred)
         self.frame_box.currentTextChanged.connect(self.frame_name_changed.emit)
         self.target_layout.addWidget(self.frame_box)
-        self.target_layout.addWidget(QLabel("Transform"))
+
+        # --------------------------------------------------------
+        # Editing mode: target-pose IK or direct joint angles
+        # --------------------------------------------------------
+        self.editing_mode_bar = QTabBar()
+        self.editing_mode_bar.setObjectName("editingModeBar")
+        self.editing_mode_bar.setDrawBase(False)
+        self.editing_mode_bar.setExpanding(True)
+        self.editing_mode_bar.setUsesScrollButtons(False)
+        self.editing_mode_bar.setElideMode(Qt.TextElideMode.ElideRight)
+        self.editing_mode_bar.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.editing_mode_bar.addTab("End Effector")
+        self.editing_mode_bar.addTab("Joint Angles")
+
+        self.end_effector_page = QWidget()
+        self.end_effector_page.setObjectName("endEffectorEditorPage")
+        transform_layout = QVBoxLayout(self.end_effector_page)
+        transform_layout.setContentsMargins(0, 4, 0, 0)
+        transform_layout.setSpacing(4)
+        self.transform_panel = self.end_effector_page
+
+        self.joint_editor_stack = CurrentPageStack()
+        self.joint_editor_stack.setObjectName("jointEditorStack")
+        self.joint_editor_stack.setMinimumWidth(0)
+        self.joint_editor_empty_page = QWidget()
+        self.joint_editor_stack.addWidget(self.joint_editor_empty_page)
+
+        self.editing_mode_stack = CurrentPageStack()
+        self.editing_mode_stack.setObjectName("editingModeStack")
+        self.editing_mode_stack.setMinimumWidth(0)
+        self.editing_mode_stack.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        self.editing_mode_stack.addWidget(self.end_effector_page)
+        self.editing_mode_stack.addWidget(self.joint_editor_stack)
+        self.editing_mode_bar.currentChanged.connect(
+            self._on_editing_mode_changed
+        )
+        self.editing_mode_layout.addWidget(self.editing_mode_bar)
+        self.editing_mode_layout.addWidget(self.editing_mode_stack)
 
         # --------------------------------------------------------
         # Motion phase
@@ -621,6 +688,35 @@ class TrajectoryControlPanel(QGroupBox):
     def set_preview_ik_context_widget(self, widget):
         self._set_context_widget(self.preview_ik_context_stack, widget)
 
+    def set_joint_editor_widget(self, widget):
+        if widget is None:
+            widget = self.joint_editor_empty_page
+        if self.joint_editor_stack.indexOf(widget) < 0:
+            self.joint_editor_stack.addWidget(widget)
+        self.joint_editor_stack.setCurrentWidget(widget)
+        self.joint_editor_stack.updateGeometry()
+        self.editing_mode_stack.updateGeometry()
+
+    def editing_mode(self):
+        return (
+            "joint_angles"
+            if self.editing_mode_bar.currentIndex() == 1
+            else "end_effector"
+        )
+
+    def set_editing_mode(self, mode):
+        index = 1 if mode == "joint_angles" else 0
+        if self.editing_mode_bar.currentIndex() == index:
+            self.editing_mode_stack.setCurrentIndex(index)
+            return
+        self.editing_mode_bar.setCurrentIndex(index)
+
+    def _on_editing_mode_changed(self, index):
+        if not 0 <= index < self.editing_mode_stack.count():
+            return
+        self.editing_mode_stack.setCurrentIndex(index)
+        self.editing_mode_changed.emit(self.editing_mode())
+
     def selection_context_widget(self):
         return self.target_context_stack.currentWidget()
 
@@ -642,6 +738,7 @@ class TrajectoryControlPanel(QGroupBox):
     def workflow_sections(self):
         return [
             ("Target / Pose", self.target_panel, True),
+            ("Editing Mode", self.editing_mode_panel, True),
             ("Time Slices", self.trajectory_panel, False),
         ]
 

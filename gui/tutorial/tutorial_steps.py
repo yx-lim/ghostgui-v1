@@ -53,7 +53,7 @@ FIRST_MOTION_TUTORIAL = [
             "Press T for translate, R for rotate, or E/Esc to cancel a drag."
         ),
         target="workflowToolbar",
-        before_show="show_3d_view",
+        before_show="expand_end_effector_editor",
     ),
     TutorialStep(
         id="preview_path",

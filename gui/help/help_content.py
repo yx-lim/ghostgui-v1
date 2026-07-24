@@ -49,7 +49,11 @@ Create/open/save projects, choose the robot model, import or export data, switch
 
 ## Target / Pose
 
-Choose the active target frame and edit its target position/orientation. These controls drive the same preview path as the 3D transform gizmo.
+Choose the active robot body, site, or logical frame to edit.
+
+## Editing Mode
+
+Use **End Effector** to edit the target frame with X/Y/Z/Roll/Pitch/Yaw controls or the 3D transform gizmo. Use **Joint Angles** to edit the active robot's joints directly. Both modes update the same orange preview, and the controls stay synchronized when you switch modes.
 
 ## Time Slices
 
@@ -63,7 +67,7 @@ Set the active time, capture committed robot states, generate trajectories, and 
 - **Play/Pause** controls the current generated or editable timeline.
 - **Reset** returns the active time to the model home pose.
 - **Clear** clears the editable trajectory.
-- **Move/Rotate** select the active transform gizmo.
+- **Move/Rotate** select the active transform gizmo in End Effector mode.
 - **Undo/Redo** navigate recorded editing history.
 
 ## Right Sidebar

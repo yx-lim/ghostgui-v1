@@ -92,6 +92,7 @@ class RobotCanvas3D(QOpenGLWidget):
         self.gizmo = TransformGizmo(
             (self.target_x, self.target_y, self.target_z)
         )
+        self.transform_gizmo_interactive = True
         self._geometry_build_count = 0
         self._geometry_queue = []
         self._geometry_total = 0
@@ -140,6 +141,17 @@ class RobotCanvas3D(QOpenGLWidget):
     def set_target_pose(self, position, quaternion=None):
         self.target_x, self.target_y, self.target_z = map(float, position)
         self.gizmo.set_pose(position, quaternion)
+        self.update()
+
+    def set_transform_gizmo_interactive(self, enabled):
+        enabled = bool(enabled)
+        if self.transform_gizmo_interactive == enabled:
+            return
+        self.transform_gizmo_interactive = enabled
+        if not enabled:
+            self.cancel_transform_drag()
+            self.gizmo.end_drag()
+            self.setCursor(Qt.CursorShape.ArrowCursor)
         self.update()
 
     # ============================================================
@@ -903,16 +915,17 @@ class RobotCanvas3D(QOpenGLWidget):
         self.last_mouse_pos = event.position()
 
         if event.button() == Qt.MouseButton.LeftButton:
-            self._sync_gizmo_screen_scale()
-            if self.gizmo.begin_drag(
-                event.position().x(),
-                event.position().y(),
-                self.project_point,
-                self.screen_ray,
-            ):
-                self.setCursor(Qt.CursorShape.ClosedHandCursor)
-                self.update()
-                return
+            if self.transform_gizmo_interactive:
+                self._sync_gizmo_screen_scale()
+                if self.gizmo.begin_drag(
+                    event.position().x(),
+                    event.position().y(),
+                    self.project_point,
+                    self.screen_ray,
+                ):
+                    self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                    self.update()
+                    return
             self.rotating_camera = True
             return
 
@@ -975,17 +988,22 @@ class RobotCanvas3D(QOpenGLWidget):
             self.update()
             return
 
-        old_state = self.gizmo.state
-        self._sync_gizmo_screen_scale()
-        new_state = self.gizmo.hover(
-            event.position().x(), event.position().y(), self.project_point
-        )
-        if new_state != old_state:
-            self.setCursor(
-                Qt.CursorShape.OpenHandCursor
-                if new_state != GizmoInteractionState.NONE
-                else Qt.CursorShape.ArrowCursor
+        if self.transform_gizmo_interactive:
+            old_state = self.gizmo.state
+            self._sync_gizmo_screen_scale()
+            new_state = self.gizmo.hover(
+                event.position().x(), event.position().y(), self.project_point
             )
+            if new_state != old_state:
+                self.setCursor(
+                    Qt.CursorShape.OpenHandCursor
+                    if new_state != GizmoInteractionState.NONE
+                    else Qt.CursorShape.ArrowCursor
+                )
+                self.update()
+        elif self.gizmo.state != GizmoInteractionState.NONE:
+            self.gizmo.end_drag()
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             self.update()
 
         super().mouseMoveEvent(event)
@@ -1032,11 +1050,17 @@ class RobotCanvas3D(QOpenGLWidget):
         self.update()
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_T:
+        if (
+            self.transform_gizmo_interactive
+            and event.key() == Qt.Key.Key_T
+        ):
             self.set_gizmo_mode("translate")
             event.accept()
             return
-        if event.key() == Qt.Key.Key_R:
+        if (
+            self.transform_gizmo_interactive
+            and event.key() == Qt.Key.Key_R
+        ):
             self.set_gizmo_mode("rotate")
             event.accept()
             return

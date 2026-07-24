@@ -13,6 +13,7 @@ from PySide6.QtGui import QCloseEvent, QMouseEvent, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
     QGroupBox,
     QLabel,
     QMessageBox,
@@ -874,6 +875,74 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertTrue(self.viewer.preview_active)
         self.assertTrue(self.viewer.canvas.show_ghosts)
 
+    def test_editing_mode_switches_sidebar_editor_and_gizmo(self):
+        controls = self.window.controls
+        self.assertEqual(
+            [
+                controls.editing_mode_bar.tabText(index)
+                for index in range(controls.editing_mode_bar.count())
+            ],
+            ["End Effector", "Joint Angles"],
+        )
+        self.assertTrue(controls.editing_mode_bar.expanding())
+        self.assertEqual(controls.editing_mode(), "end_effector")
+        self.assertIs(
+            controls.editing_mode_stack.currentWidget(),
+            controls.end_effector_page,
+        )
+        for slider in (
+            controls.x_slider,
+            controls.y_slider,
+            controls.z_slider,
+            controls.roll_slider,
+            controls.pitch_slider,
+            controls.yaw_slider,
+        ):
+            self.assertTrue(controls.end_effector_page.isAncestorOf(slider))
+
+        joint_page = self.viewer.joint_editor_widget()
+        self.assertIs(controls.joint_editor_stack.currentWidget(), joint_page)
+        self.assertTrue(controls.joint_editor_stack.isAncestorOf(joint_page))
+        self.assertEqual(joint_page.frameShape(), QFrame.Shape.NoFrame)
+        self.assertGreater(joint_page.maximumWidth(), 244)
+
+        controls.set_editing_mode("joint_angles")
+        self.app.processEvents()
+        self.assertEqual(controls.editing_mode(), "joint_angles")
+        self.assertIs(
+            controls.editing_mode_stack.currentWidget(),
+            controls.joint_editor_stack,
+        )
+        self.assertFalse(self.viewer.canvas.transform_gizmo_interactive)
+        self.assertFalse(self.window.move_action.isEnabled())
+        self.assertFalse(self.window.rotate_action.isEnabled())
+
+        joint_name = self.viewer.preview_state.get_joint_names()[-1]
+        self.viewer._joint_changed(
+            joint_name,
+            self.viewer.preview_state.get_joint_value(joint_name),
+        )
+        expected_rpy = quat_to_rpy(self.viewer.last_valid_target_quaternion)
+        actual_pose = (
+            controls.x_slider.value(),
+            controls.y_slider.value(),
+            controls.z_slider.value(),
+            controls.roll_slider.value(),
+            controls.pitch_slider.value(),
+            controls.yaw_slider.value(),
+        )
+        np.testing.assert_allclose(
+            actual_pose,
+            (*self.viewer.last_valid_target_position, *expected_rpy),
+            atol=1e-3,
+        )
+
+        controls.set_editing_mode("end_effector")
+        self.app.processEvents()
+        self.assertTrue(self.viewer.canvas.transform_gizmo_interactive)
+        self.assertTrue(self.window.move_action.isEnabled())
+        self.assertTrue(self.window.rotate_action.isEnabled())
+
     def test_render_progress_overlay_waits_for_active_3d_geometry_progress(self):
         self.window.begin_render_progress(
             "Rendering test model",
@@ -948,6 +1017,14 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertFalse(hasattr(self.viewer, "controls_sidebar"))
         self.assertFalse(hasattr(self.viewer, "viewer_splitter"))
         self.assertIsNone(self.window.right_sidebar_content.current_context_widget())
+        self.assertEqual(
+            self.window.left_sidebar_content.body_layout.contentsMargins().left(),
+            4,
+        )
+        self.assertEqual(
+            self.window.right_sidebar_content.body_layout.contentsMargins().left(),
+            0,
+        )
         self.assertLessEqual(self.window.left_sidebar.maximumWidth(), 250)
         self.assertLessEqual(self.window.right_sidebar.maximumWidth(), 270)
         self.assertEqual(self.window.status_panel.maximumWidth(), 244)
@@ -959,7 +1036,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         ]
         self.assertEqual(
             left_titles,
-            ["Target / Pose", "Time Slices"],
+            ["Target / Pose", "Editing Mode", "Time Slices"],
         )
         self.assertEqual(
             right_titles,
@@ -967,6 +1044,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         expected_visible = {
             "Target / Pose": True,
+            "Editing Mode": True,
             "Time Slices": False,
             "Selected Object": False,
             "IK / Constraints": False,
@@ -1289,9 +1367,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
         ik_tabs = self.viewer.preview_ik_context_widget().findChild(QTabWidget)
         self.assertEqual(
             [ik_tabs.tabText(index) for index in range(ik_tabs.count())],
-            ["Joint angles", "Tasks", "Weights", "Solver"],
+            ["Tasks", "Weights", "Solver"],
         )
-        self.assertEqual(ik_tabs.currentIndex(), 1)
+        self.assertEqual(ik_tabs.currentIndex(), 0)
         self.assertEqual(ik_tabs.maximumWidth(), 244)
         self.assertEqual(ik_tabs.objectName(), "ikEditorTabs")
         self.assertEqual(
@@ -1299,9 +1377,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
             244,
         )
         expected_group_titles = {
-            1: "IK Tasks",
-            2: "Joint Weights",
-            3: "Solver",
+            0: "IK Tasks",
+            1: "Joint Weights",
+            2: "Solver",
         }
         for tab_index in range(ik_tabs.count()):
             ik_tabs.setCurrentIndex(tab_index)
@@ -1329,7 +1407,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
                     if group.isVisible()
                 ]
                 self.assertIn(expected_title, visible_group_titles)
-        weight_tab = ik_tabs.widget(2)
+        weight_tab = ik_tabs.widget(1)
         weight_group_titles = [
             group.title()
             for group in weight_tab.findChildren(QGroupBox)
