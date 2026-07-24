@@ -1,16 +1,18 @@
 import math
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QColor, QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from gui.widgets.inline_value_slider import InlineValueSlider
 from gui.widgets.joint_controls import IKInfluenceControl, JointControl
+from gui.theme import DARK_THEME, LIGHT_THEME
 
 
 class InlineValueSliderTests(unittest.TestCase):
@@ -171,6 +173,30 @@ class InlineValueSliderTests(unittest.TestCase):
         self.assertEqual(slider.format_value(), "35%")
         slider.set_logical_value(2.0)
         self.assertAlmostEqual(slider.logical_value(), 1.0)
+
+    def test_custom_background_tracks_active_theme(self):
+        slider = self.make_slider(value=-1.0)
+        sample = QPoint(slider.width() - 12, slider.height() // 2)
+
+        with patch(
+            "gui.widgets.inline_value_slider.current_theme",
+            return_value=LIGHT_THEME,
+        ):
+            slider.update()
+            self.app.processEvents()
+            light_background = slider.grab().toImage().pixelColor(sample)
+
+        with patch(
+            "gui.widgets.inline_value_slider.current_theme",
+            return_value=DARK_THEME,
+        ):
+            slider.update()
+            self.app.processEvents()
+            dark_background = slider.grab().toImage().pixelColor(sample)
+
+        self.assertEqual(light_background, QColor(LIGHT_THEME.panel_bg))
+        self.assertEqual(dark_background, QColor(DARK_THEME.panel_bg))
+        self.assertNotEqual(light_background, dark_background)
 
     def test_joint_and_weight_controls_emit_logical_values(self):
         joint = JointControl("joint", (-math.pi, math.pi), 0.0)

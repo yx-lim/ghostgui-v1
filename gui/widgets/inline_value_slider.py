@@ -5,15 +5,17 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QDoubleValidator,
+    QColor,
     QKeyEvent,
     QMouseEvent,
     QPainter,
     QPainterPath,
-    QPalette,
     QPen,
     QWheelEvent,
 )
 from PySide6.QtWidgets import QApplication, QLineEdit, QSlider
+
+from gui.theme import current_theme
 
 
 class InlineValueSlider(QSlider):
@@ -334,6 +336,15 @@ class InlineValueSlider(QSlider):
         if self.editor.isVisible():
             self._position_editor()
 
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (
+            QEvent.Type.ApplicationPaletteChange,
+            QEvent.Type.PaletteChange,
+            QEvent.Type.StyleChange,
+        ):
+            self.update()
+
     def sizeHint(self):
         base = super().sizeHint()
         text_height = self.fontMetrics().height() + 8
@@ -373,22 +384,22 @@ class InlineValueSlider(QSlider):
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        palette = self.palette()
+        theme = current_theme(self)
         groove = self._groove_rect()
         radius = min(4.0, groove.height() / 2.0)
 
-        background = palette.color(QPalette.ColorRole.Base)
-        border = palette.color(QPalette.ColorRole.Mid)
-        fill = palette.color(QPalette.ColorRole.Highlight)
-        normal_text = palette.color(QPalette.ColorRole.Text)
-        filled_text = palette.color(QPalette.ColorRole.HighlightedText)
+        background = QColor(theme.panel_bg)
+        border = QColor(theme.border)
+        fill = QColor(theme.accent)
+        normal_text = QColor(theme.text)
+        filled_text = QColor(theme.accent_text)
         if not self.isEnabled():
-            background = palette.color(QPalette.ColorRole.Window)
-            fill = palette.color(QPalette.ColorRole.Mid)
-            normal_text = palette.color(QPalette.ColorRole.PlaceholderText)
-            filled_text = palette.color(QPalette.ColorRole.PlaceholderText)
+            background = QColor(theme.window_bg)
+            fill = QColor(theme.border)
+            normal_text = QColor(theme.disabled_text)
+            filled_text = QColor(theme.disabled_text)
         elif self._hovered:
-            border = palette.color(QPalette.ColorRole.Highlight)
+            border = QColor(theme.focus_border)
 
         path = QPainterPath()
         path.addRoundedRect(groove, radius, radius)
@@ -412,7 +423,7 @@ class InlineValueSlider(QSlider):
                 / (self._logical_maximum - self._logical_minimum)
             )
             zero_x = groove.left() + groove.width() * zero_fraction
-            zero_color = palette.color(QPalette.ColorRole.Mid)
+            zero_color = QColor(theme.border)
             zero_color.setAlpha(150)
             painter.setPen(QPen(zero_color, 1.0))
             painter.drawLine(
@@ -420,7 +431,7 @@ class InlineValueSlider(QSlider):
                 QPointF(zero_x, groove.bottom() - 3.0),
             )
 
-        focus_color = palette.color(QPalette.ColorRole.Highlight)
+        focus_color = QColor(theme.focus_border)
         painter.setPen(
             QPen(
                 focus_color if self.hasFocus() else border,
