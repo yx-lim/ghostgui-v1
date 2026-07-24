@@ -451,6 +451,61 @@ class RobotViewerTimelineTests(unittest.TestCase):
         np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), before)
         self.assertFalse(np.allclose(self.viewer.preview_state.get_qpos(), before))
 
+    def test_joint_collision_highlights_preview_link_and_still_blocks_accept(self):
+        model = self.viewer.robot_model.mj_model
+        geom_id = next(
+            candidate
+            for candidate in self.viewer.canvas.render_geom_ids(model)
+            if int(model.geom_bodyid[candidate]) > 0
+        )
+        body_id = int(model.geom_bodyid[geom_id])
+        collision = Collision(
+            "colliding_geom",
+            "environment",
+            "colliding_body",
+            "world",
+            -0.01,
+            "environment",
+            geom1_id=geom_id,
+            body1_id=body_id,
+            body2_id=0,
+        )
+
+        class FixedCollisionChecker:
+            def get_collisions(self, _state):
+                return [collision]
+
+        self.viewer.collision_checker = FixedCollisionChecker()
+        name = self.viewer.preview_state.get_joint_names()[0]
+        value = self.viewer.preview_state.get_joint_value(name) + 0.01
+
+        self.viewer._joint_changed(name, value)
+
+        self.assertTrue(self.viewer.preview_active)
+        self.assertIn("Collision warning", self.viewer.status_label.text())
+        self.assertIn(geom_id, self.viewer.canvas.preview_collision_geom_ids)
+        self.assertIn(body_id, self.viewer.canvas.preview_collision_body_ids)
+        self.assertTrue(
+            self.viewer.canvas._geom_is_preview_collision(model, geom_id)
+        )
+
+        self.assertFalse(self.viewer.accept_preview())
+        self.assertTrue(self.viewer.preview_active)
+        self.assertIn("Cannot accept preview", self.viewer.status_label.text())
+
+        class NoCollisionChecker:
+            def get_collisions(self, _state):
+                return []
+
+        self.viewer.collision_checker = NoCollisionChecker()
+        self.viewer._joint_changed(name, value)
+        self.assertEqual(self.viewer.canvas.preview_collision_geom_ids, set())
+        self.assertEqual(self.viewer.canvas.preview_collision_body_ids, set())
+
+        self.viewer.cancel_preview()
+        self.assertEqual(self.viewer.canvas.preview_collision_geom_ids, set())
+        self.assertEqual(self.viewer.canvas.preview_collision_body_ids, set())
+
     def test_timeline_change_discards_unaccepted_preview(self):
         name = self.viewer.preview_state.get_joint_names()[0]
         self.viewer._joint_changed(

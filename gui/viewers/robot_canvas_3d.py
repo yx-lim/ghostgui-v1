@@ -86,6 +86,8 @@ class RobotCanvas3D(QOpenGLWidget):
         self.selected_target_kind = None
         self.selected_target_name = None
         self.selected_body_id = None
+        self.preview_collision_geom_ids = set()
+        self.preview_collision_body_ids = set()
         self._geom_lists = []
         self._mesh_display_lists = {}
         self._quadric = None
@@ -120,6 +122,28 @@ class RobotCanvas3D(QOpenGLWidget):
 
     def set_preview_alpha(self, alpha):
         self.preview_alpha = max(0.1, min(1.0, float(alpha)))
+        self.update()
+
+    def set_preview_collisions(self, collisions):
+        """Highlight visible preview geometry involved in MuJoCo contacts."""
+        geom_ids = set()
+        body_ids = set()
+        model = self.robot_state.mj_model if self.robot_state is not None else None
+
+        for collision in collisions or []:
+            for side in (1, 2):
+                geom_id = getattr(collision, f"geom{side}_id", None)
+                body_id = getattr(collision, f"body{side}_id", None)
+                if geom_id is not None and int(geom_id) >= 0:
+                    geom_id = int(geom_id)
+                    geom_ids.add(geom_id)
+                    if body_id is None and model is not None:
+                        body_id = int(model.geom_bodyid[geom_id])
+                if body_id is not None and int(body_id) > 0:
+                    body_ids.add(int(body_id))
+
+        self.preview_collision_geom_ids = geom_ids
+        self.preview_collision_body_ids = body_ids
         self.update()
 
     def set_ghost_options(self, visible, alpha=0.18):
@@ -423,7 +447,12 @@ class RobotCanvas3D(QOpenGLWidget):
         return matrix
 
     def _draw_robot_transforms(
-        self, positions, rotations, alpha_scale=1.0, color_override=None
+        self,
+        positions,
+        rotations,
+        alpha_scale=1.0,
+        color_override=None,
+        show_preview_collisions=False,
     ):
         if self.robot_state is None or not self._geom_lists:
             return
@@ -434,7 +463,13 @@ class RobotCanvas3D(QOpenGLWidget):
             selected = color_override is None and self._geom_is_selected_body(
                 model, geom_id
             )
-            if color_override is not None:
+            collision_warning = (
+                show_preview_collisions
+                and self._geom_is_preview_collision(model, geom_id)
+            )
+            if collision_warning:
+                rgba = (1.0, 0.03, 0.03, 1.0)
+            elif color_override is not None:
                 rgba = color_override
             elif self.use_model_colors:
                 rgba = self.robot_state.robot_model.get_geom_rgba(geom_id)
@@ -442,7 +477,12 @@ class RobotCanvas3D(QOpenGLWidget):
                 rgba = (0.55, 0.55, 0.55, 1.0)
             if selected:
                 rgba = self._selected_body_rgba(rgba)
-            self._apply_geom_material(model, geom_id, selected=selected)
+            self._apply_geom_material(
+                model,
+                geom_id,
+                selected=selected,
+                warning=collision_warning,
+            )
             GL.glColor4f(float(rgba[0]), float(rgba[1]), float(rgba[2]),
                          float(rgba[3]) * alpha_scale)
             GL.glPushMatrix()
@@ -456,6 +496,12 @@ class RobotCanvas3D(QOpenGLWidget):
             and int(model.geom_bodyid[geom_id]) == int(self.selected_body_id)
         )
 
+    def _geom_is_preview_collision(self, model, geom_id):
+        return (
+            int(geom_id) in self.preview_collision_geom_ids
+            or int(model.geom_bodyid[geom_id]) in self.preview_collision_body_ids
+        )
+
     @staticmethod
     def _selected_body_rgba(rgba):
         rgba = np.asarray(rgba, dtype=float)
@@ -467,7 +513,7 @@ class RobotCanvas3D(QOpenGLWidget):
         return (float(bright[0]), float(bright[1]), float(bright[2]), float(rgba[3]))
 
     @staticmethod
-    def _apply_geom_material(model, geom_id, selected=False):
+    def _apply_geom_material(model, geom_id, selected=False, warning=False):
         material_id = int(model.geom_matid[geom_id])
         if material_id >= 0:
             specular = float(model.mat_specular[material_id])
@@ -485,15 +531,24 @@ class RobotCanvas3D(QOpenGLWidget):
             GL.GL_SHININESS,
             max(0.0, min(128.0, shininess)),
         )
-        GL.glMaterialfv(
-            GL.GL_FRONT_AND_BACK,
-            GL.GL_EMISSION,
-            (
+        if warning:
+            emission_rgba = (
+                min(1.0, emission + 0.28),
+                min(1.0, emission + 0.02),
+                min(1.0, emission + 0.02),
+                1.0,
+            )
+        else:
+            emission_rgba = (
                 min(1.0, emission + (0.18 if selected else 0.0)),
                 min(1.0, emission + (0.14 if selected else 0.0)),
                 min(1.0, emission + (0.04 if selected else 0.0)),
                 1.0,
-            ),
+            )
+        GL.glMaterialfv(
+            GL.GL_FRONT_AND_BACK,
+            GL.GL_EMISSION,
+            emission_rgba,
         )
 
     def draw_robot(self):
@@ -511,6 +566,7 @@ class RobotCanvas3D(QOpenGLWidget):
                 data.geom_xpos,
                 data.geom_xmat,
                 color_override=(1.0, 0.38, 0.04, 1.0),
+                show_preview_collisions=True,
             )
             return
         self._begin_transparent_pass()
@@ -520,6 +576,7 @@ class RobotCanvas3D(QOpenGLWidget):
                 data.geom_xmat,
                 alpha_scale=self.preview_alpha,
                 color_override=(1.0, 0.38, 0.04, 1.0),
+                show_preview_collisions=True,
             )
         finally:
             self._end_transparent_pass()

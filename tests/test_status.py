@@ -41,6 +41,20 @@ class StatusEventTests(unittest.TestCase):
             "Collision blocked: Box_0 ↔ panda_link5.",
         )
 
+    def test_nonblocking_collision_is_presented_as_preview_warning(self):
+        event = status_event_from_text(
+            "MuJoCo IK converged; Collision warning: left_hand ↔ torso; "
+            "accepted=100%; IK error=0.0020; tasks=2; frame=left_hand; "
+            "model=G1; preview not committed"
+        )
+
+        self.assertEqual(event.severity, "warning")
+        self.assertEqual(event.title, "Preview warning")
+        self.assertEqual(
+            event.message,
+            "Collision warning: left_hand ↔ torso.",
+        )
+
     def test_failure_uses_error_severity(self):
         event = status_event_from_text("Could not load Go2: invalid model.")
 

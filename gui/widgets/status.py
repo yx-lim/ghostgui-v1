@@ -123,7 +123,15 @@ def _verbose_ik_status_event(raw, parts, fields):
         if key not in _DETAIL_FIELD_KEYS:
             notes.append(part)
 
-    if "collision blocked" in lower:
+    if "collision warning" in lower:
+        severity = "warning"
+        title = "Preview warning"
+        cause = next(
+            (note for note in notes if "collision warning" in note.lower()),
+            "The preview pose contains a collision.",
+        )
+        message = cause.rstrip(".") + "."
+    elif "collision blocked" in lower:
         severity = "warning"
         title = "Preview blocked"
         cause = next(

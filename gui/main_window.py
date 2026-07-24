@@ -2440,7 +2440,9 @@ class RobotGuiMainWindow(QMainWindow):
         lower_text = str(text).lower()
         state = "Preview"
 
-        if "collision blocked" in lower_text:
+        if "collision warning" in lower_text:
+            state = "Warning: collision"
+        elif "collision blocked" in lower_text:
             state = "Blocked: collision"
         elif "ik blocked" in lower_text:
             state = "Blocked: IK"

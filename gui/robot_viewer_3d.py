@@ -957,6 +957,7 @@ class RobotViewer3D(QWidget):
         self.begin_preview()
         self.preview_state.set_joint_value(name, value)
         self._set_target_to_selected_pose()
+        collisions = self._update_preview_collisions()
         if self.last_valid_target_position is not None:
             roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
             self.target_pose_dragged.emit(
@@ -965,9 +966,29 @@ class RobotViewer3D(QWidget):
                 pitch,
                 yaw,
             )
-        self.status_label.setText(
-            f"Preview FK: {name} = {value:+.3f} rad; use Slice to commit"
-        )
+        if collisions:
+            names = ", ".join(
+                f"{item.geom1} ↔ {item.geom2}" for item in collisions[:2]
+            )
+            self.status_label.setText(
+                f"Collision warning: {names}; "
+                f"Preview FK: {name} = {value:+.3f} rad; "
+                "adjust the pose before Slice"
+            )
+        else:
+            self.status_label.setText(
+                f"Preview FK: {name} = {value:+.3f} rad; use Slice to commit"
+            )
+
+    def _update_preview_collisions(self, collisions=None):
+        if collisions is None:
+            collisions = (
+                self.collision_checker.get_collisions(self.preview_state)
+                if self.collision_checker and self.preview_state else []
+            )
+        collisions = list(collisions)
+        self.canvas.set_preview_collisions(collisions)
+        return collisions
 
     def _sync_joint_controls(self, state=None):
         if state is None:
@@ -1108,6 +1129,7 @@ class RobotViewer3D(QWidget):
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self._capture_secondary_targets()
         self.preview_active = True
+        self.canvas.set_preview_collisions([])
         self.canvas.set_preview_visible(True)
         self._update_root_pose_label()
 
@@ -1162,11 +1184,16 @@ class RobotViewer3D(QWidget):
             self.last_valid_target_position = result.position.copy()
             self.last_valid_target_quaternion = result.quaternion.copy()
 
-        # Whether fully accepted, clamped, or rejected, snap the handle back to
-        # the last collision-free pose rather than displaying an invalid target.
+        # Collision is a preview warning rather than a drag constraint. IK
+        # failures can still leave the handle at the last solvable substep.
         self.canvas.set_target_pose(
             self.last_valid_target_position,
             self.last_valid_target_quaternion,
+        )
+        self._update_preview_collisions(
+            result.collisions
+            if result.success or result.collisions
+            else None
         )
         self._sync_joint_controls()
         logical_frame = self.reverse_bindings.get((kind, name), name)
@@ -1309,6 +1336,7 @@ class RobotViewer3D(QWidget):
             if self.collision_checker else []
         )
         if collisions:
+            self.canvas.set_preview_collisions(collisions)
             names = ", ".join(
                 f"{item.geom1} ↔ {item.geom2}" for item in collisions[:2]
             )
@@ -1320,6 +1348,7 @@ class RobotViewer3D(QWidget):
         self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
+        self.canvas.set_preview_collisions([])
         self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
@@ -1339,6 +1368,7 @@ class RobotViewer3D(QWidget):
             return
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
+        self.canvas.set_preview_collisions([])
         self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
@@ -1497,6 +1527,7 @@ class RobotViewer3D(QWidget):
         self.committed_state.set_qpos(qpos)
         self.preview_state.set_qpos(qpos)
         self.preview_active = False
+        self.canvas.set_preview_collisions([])
         self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
@@ -1551,6 +1582,7 @@ class RobotViewer3D(QWidget):
         self.committed_state.reset_to_default()
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
+        self.canvas.set_preview_collisions([])
         self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self.update_current_keyframe_from_robot_state(refresh_ghosts=True)

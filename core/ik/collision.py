@@ -19,6 +19,10 @@ class Collision:
     body2: str
     distance: float
     kind: str
+    geom1_id: int | None = None
+    geom2_id: int | None = None
+    body1_id: int | None = None
+    body2_id: int | None = None
 
 
 class CollisionChecker:
@@ -54,7 +58,16 @@ class CollisionChecker:
             body2 = self._name(mujoco.mjtObj.mjOBJ_BODY, body2_id, "body")
             kind = "environment" if 0 in (body1_id, body2_id) else "self"
             collisions.append(Collision(
-                geom1, geom2, body1, body2, float(contact.dist), kind
+                geom1,
+                geom2,
+                body1,
+                body2,
+                float(contact.dist),
+                kind,
+                geom1_id,
+                geom2_id,
+                body1_id,
+                body2_id,
             ))
         return collisions
 
@@ -84,7 +97,7 @@ class DragSolveResult:
 
 
 class CollisionAwareIKSolver:
-    """Solves in a temporary state and accepts the furthest valid substep."""
+    """Solves incrementally and reports collisions without blocking previews."""
 
     def __init__(
         self,
@@ -127,7 +140,6 @@ class CollisionAwareIKSolver:
         near_singularity = False
         min_singular_value = float("inf")
         condition_number = 0.0
-        blocked_collisions = []
         blocked_reason = None
         settings = dict(solver_settings or {})
         orientation_weight = (
@@ -245,16 +257,6 @@ class CollisionAwareIKSolver:
             )
             condition_number = max(condition_number, ik_result.condition_number)
 
-            blocked_collisions = self.collision_checker.get_collisions(
-                self.candidate_state
-            )
-            if blocked_collisions:
-                names = ", ".join(
-                    f"{item.geom1} ↔ {item.geom2}" for item in blocked_collisions[:2]
-                )
-                blocked_reason = f"Collision blocked drag: {names}"
-                break
-
             accepted_qpos = self.candidate_state.get_qpos()
             solved_position, solved_quaternion = self.candidate_state.get_body_pose(
                 object_name, resolved_kind
@@ -269,6 +271,17 @@ class CollisionAwareIKSolver:
             )
             accepted_fraction = fraction
 
+        self.candidate_state.set_qpos(accepted_qpos)
+        preview_collisions = self.collision_checker.get_collisions(
+            self.candidate_state
+        )
+        collision_note = ""
+        if preview_collisions:
+            names = ", ".join(
+                f"{item.geom1} ↔ {item.geom2}" for item in preview_collisions[:2]
+            )
+            collision_note = f"; Collision warning: {names}"
+
         if blocked_reason is not None:
             return DragSolveResult(
                 accepted_qpos,
@@ -276,9 +289,9 @@ class CollisionAwareIKSolver:
                 accepted_quaternion,
                 accepted_fraction,
                 accepted_fraction > 0.0,
-                blocked_reason,
+                blocked_reason + collision_note,
                 last_error,
-                blocked_collisions,
+                preview_collisions,
                 near_singularity,
                 min_singular_value,
                 condition_number,
@@ -289,9 +302,13 @@ class CollisionAwareIKSolver:
             accepted_quaternion,
             1.0,
             True,
-            f"{ik_result.message}; state is collision-free",
+            (
+                f"{ik_result.message}{collision_note}"
+                if preview_collisions
+                else f"{ik_result.message}; state is collision-free"
+            ),
             last_error,
-            [],
+            preview_collisions,
             near_singularity,
             min_singular_value,
             condition_number,
