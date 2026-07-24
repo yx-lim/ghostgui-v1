@@ -902,7 +902,7 @@ class RobotCanvas3D(QOpenGLWidget):
 
     def _zoom_camera(self, amount):
         self.camera_distance = max(
-            1.8,
+            0.5,
             min(10.0, self.camera_distance + float(amount)),
         )
 
