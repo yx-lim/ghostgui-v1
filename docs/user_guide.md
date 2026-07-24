@@ -70,9 +70,10 @@ switch views, and open help. Import supports models, qpos poses, and
 trajectories. Export can save a single committed qpos pose or a timed
 trajectory.
 
-### Target / Pose
+### Target
 
-Choose the active robot body, site, or logical frame to edit.
+Choose the logical robot frame to edit, or use **Advanced target** to select
+another body or site exposed by the model.
 
 ### Editing Mode
 
@@ -87,13 +88,15 @@ Use the divider arrows or the corresponding **View → Left Sidebar** and
 **View → Right Sidebar** actions to collapse and restore them. Their last
 expanded widths and collapsed states are remembered between sessions.
 
-### Time Slices
+### Planning
 
 Manage the editable timeline. The active time determines where the next slice is
 stored. The single Time slider drives both live scrubbing and playback; the
 robot is sampled immediately while dragging, and the derived frame appears as a
 readout beside the time. Releasing the slider commits the selected edit time
-once. Saved slices become the source material for generated trajectories.
+once. Smoothing, collision substeps, playback opacity, and preview opacity are
+configured here. Saved slices become the source material for generated
+trajectories.
 
 ### Workflow Toolbar
 
@@ -115,14 +118,12 @@ once. Saved slices become the source material for generated trajectories.
 
 ### Right Sidebar
 
-**Selected Object** describes the currently selected body, site, or frame.
-
-**IK / Constraints** contains solver settings, task weights, collision controls,
-and preview controls.
-
 **Status** shows the latest important event or problem in a compact summary.
 Expand **Details** to inspect the latest operation's frame, IK result, solver
 metrics, and other diagnostics.
+
+**IK / Constraints** contains solver settings, task weights, collision controls,
+and preview controls.
 
 ## Keyboard / Mouse Shortcuts
 

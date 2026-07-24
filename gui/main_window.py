@@ -2054,8 +2054,8 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.set_robot_context_widget(
                 self.viewer_3d.robot_context_widget()
             )
-            self.controls.set_selection_context_widget(
-                self.viewer_3d.selection_context_widget()
+            self.controls.set_target_context_widget(
+                self.viewer_3d.target_context_widget()
             )
             self.controls.set_trajectory_context_widget(
                 self.viewer_3d.trajectory_context_widget()
@@ -2079,7 +2079,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.sync_viewer_status_panel()
         else:
             self.controls.set_robot_context_widget(None)
-            self.controls.set_selection_context_widget(None)
+            self.controls.set_target_context_widget(None)
             self.controls.set_trajectory_context_widget(None)
             self.controls.set_timeslice_context_widget(None)
             self.controls.set_display_context_widget(None)

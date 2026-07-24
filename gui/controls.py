@@ -287,9 +287,6 @@ class TrajectoryControlPanel(QGroupBox):
         )
         self.editing_mode_layout.setContentsMargins(0, 0, 0, 0)
         self.preview_ik_panel, self.preview_ik_layout = self._make_section_panel()
-        self.selection_detail_panel, self.selection_detail_layout = (
-            self._make_section_panel()
-        )
         self.trajectory_panel, self.trajectory_layout = self._make_section_panel()
         self.view_panel, self.view_layout = self._make_section_panel()
 
@@ -623,7 +620,7 @@ class TrajectoryControlPanel(QGroupBox):
         self.preview_ik_context_stack = self._make_context_stack()
         self.display_context_stack = self._make_context_stack()
         robot_layout.addWidget(self.robot_context_stack)
-        self.selection_detail_layout.addWidget(self.target_context_stack)
+        self.target_layout.addWidget(self.target_context_stack)
         robot_layout.addWidget(self.trajectory_context_stack)
         self.trajectory_layout.addWidget(self.timeslice_context_stack)
         self.preview_ik_layout.addWidget(self.preview_ik_context_stack)
@@ -665,7 +662,7 @@ class TrajectoryControlPanel(QGroupBox):
         if action:
             self.setup_export_requested.emit(action)
 
-    def set_selection_context_widget(self, widget):
+    def set_target_context_widget(self, widget):
         self._set_context_widget(self.target_context_stack, widget)
 
     def set_robot_context_widget(self, widget):
@@ -712,7 +709,7 @@ class TrajectoryControlPanel(QGroupBox):
         self.editing_mode_stack.setCurrentIndex(index)
         self.editing_mode_changed.emit(self.editing_mode())
 
-    def selection_context_widget(self):
+    def target_context_widget(self):
         return self.target_context_stack.currentWidget()
 
     def robot_context_widget(self):
@@ -732,14 +729,13 @@ class TrajectoryControlPanel(QGroupBox):
 
     def workflow_sections(self):
         return [
-            ("Target / Pose", self.target_panel, True),
+            ("Target", self.target_panel, True),
             ("Editing Mode", self.editing_mode_panel, True),
-            ("Time Slices", self.trajectory_panel, False),
+            ("Planning", self.trajectory_panel, False),
         ]
 
     def inspector_sections(self):
         return [
-            ("Selected Object", self.selection_detail_panel, False),
             ("IK / Constraints", self.preview_ik_panel, False),
         ]
 

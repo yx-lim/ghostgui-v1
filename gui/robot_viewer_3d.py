@@ -252,8 +252,8 @@ class RobotViewer3D(QWidget):
         qpos_csv_layout.addWidget(self.save_qpos_button)
         self.qpos_csv_group.setVisible(False)
 
-        self.selection_context_panel = QWidget()
-        target_layout = QFormLayout(self.selection_context_panel)
+        self.target_context_panel = QWidget()
+        target_layout = QFormLayout(self.target_context_panel)
         target_layout.setContentsMargins(6, 6, 6, 6)
         target_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.target_box = QComboBox()
@@ -272,15 +272,7 @@ class RobotViewer3D(QWidget):
                     if (kind, name) not in known and name != "world":
                         self.target_box.addItem(f"{kind}: {name}", (kind, name))
         self.target_box.currentIndexChanged.connect(self._target_selected)
-        self.collision_substeps = QSpinBox()
-        _compact_spinbox(self.collision_substeps)
-        self.collision_substeps.setRange(1, 32)
-        self.collision_substeps.setValue(8)
-        self.collision_substeps.valueChanged.connect(
-            self._set_collision_substeps
-        )
         target_layout.addRow("Advanced target", self.target_box)
-        target_layout.addRow("Collision substeps", self.collision_substeps)
         self.root_pose_label = StatusValueLabel()
         self.root_pose_label.setWordWrap(True)
 
@@ -289,36 +281,22 @@ class RobotViewer3D(QWidget):
         preview_ik_layout.setContentsMargins(4, 4, 4, 4)
         preview_ik_layout.setSpacing(4)
 
-        preview_group = QWidget()
-        preview_layout = QVBoxLayout(preview_group)
-        preview_layout.setContentsMargins(0, 0, 0, 0)
-        self.plan_preview_button = QPushButton("Plan Preview")
-        self.accept_preview_button = QPushButton("Accept Preview")
-        self.cancel_preview_button = QPushButton("Cancel Preview")
-        self.preview_alpha = QDoubleSpinBox()
-        _compact_spinbox(self.preview_alpha)
-        self.preview_alpha.setRange(0.1, 1.0)
-        self.preview_alpha.setSingleStep(0.05)
-        self.preview_alpha.setValue(0.65)
-        self.preview_alpha.valueChanged.connect(self.canvas.set_preview_alpha)
-        self.plan_preview_button.clicked.connect(self.plan_preview)
-        self.accept_preview_button.clicked.connect(self.accept_preview)
-        self.cancel_preview_button.clicked.connect(self.cancel_preview)
-        preview_layout.addWidget(self.plan_preview_button)
-        preview_layout.addWidget(self.accept_preview_button)
-        preview_layout.addWidget(self.cancel_preview_button)
-        alpha_row = QHBoxLayout()
-        self.preview_alpha_label = QLabel("Preview opacity")
-        alpha_row.addWidget(self.preview_alpha_label)
-        alpha_row.addWidget(self.preview_alpha)
-        preview_layout.addLayout(alpha_row)
-        preview_ik_layout.addWidget(preview_group)
-
         self.timeslice_context_panel = QWidget()
         self.timeslice_context_layout = QFormLayout(self.timeslice_context_panel)
         self.timeslice_context_layout.setContentsMargins(6, 6, 6, 6)
         self.timeslice_context_layout.setRowWrapPolicy(
             QFormLayout.RowWrapPolicy.WrapLongRows
+        )
+        self.collision_substeps = QSpinBox()
+        _compact_spinbox(self.collision_substeps)
+        self.collision_substeps.setRange(1, 32)
+        self.collision_substeps.setValue(8)
+        self.collision_substeps.valueChanged.connect(
+            self._set_collision_substeps
+        )
+        self.collision_substeps_label = QLabel("Collision substeps")
+        self.timeslice_context_layout.addRow(
+            self.collision_substeps_label, self.collision_substeps
         )
         self.generate_button = QPushButton("Demo trajectory")
         self.generate_button.clicked.connect(self.generate_demo_trajectory)
@@ -335,13 +313,23 @@ class RobotViewer3D(QWidget):
         self.ghost_alpha.setSingleStep(0.05)
         self.ghost_alpha.setValue(0.16)
         self.ghost_alpha.valueChanged.connect(self._update_ghost_options)
+        self.preview_alpha = QDoubleSpinBox()
+        _compact_spinbox(self.preview_alpha)
+        self.preview_alpha.setRange(0.1, 1.0)
+        self.preview_alpha.setSingleStep(0.05)
+        self.preview_alpha.setValue(0.65)
+        self.preview_alpha.valueChanged.connect(self.canvas.set_preview_alpha)
         self.ghost_stride_label = QLabel("Playback spacing")
         self.ghost_alpha_label = QLabel("Playback opacity")
+        self.preview_alpha_label = QLabel("Preview opacity")
         self.timeslice_context_layout.addRow(
             self.ghost_stride_label, self.ghost_stride
         )
         self.timeslice_context_layout.addRow(
             self.ghost_alpha_label, self.ghost_alpha
+        )
+        self.timeslice_context_layout.addRow(
+            self.preview_alpha_label, self.preview_alpha
         )
 
         editor_tabs = QTabWidget()
@@ -388,9 +376,9 @@ class RobotViewer3D(QWidget):
         self.trajectory_import_dt.setEnabled(enabled)
         self.save_qpos_button.setEnabled(enabled)
         self.save_trajectory_button.setEnabled(enabled)
-        self.selection_context_panel.setEnabled(enabled)
+        self.target_context_panel.setEnabled(enabled)
         self.timeslice_context_panel.setEnabled(enabled)
-        preview_group.setEnabled(enabled)
+        self.preview_ik_context_panel.setEnabled(enabled)
         self.timeslice_editor.setEnabled(enabled)
 
     def _build_canvas_workspace(self):
@@ -660,8 +648,8 @@ class RobotViewer3D(QWidget):
     def robot_context_widget(self):
         return self.robot_context_panel
 
-    def selection_context_widget(self):
-        return self.selection_context_panel
+    def target_context_widget(self):
+        return self.target_context_panel
 
     def trajectory_context_widget(self):
         return None
@@ -944,7 +932,7 @@ class RobotViewer3D(QWidget):
                 yaw,
             )
         self.status_label.setText(
-            f"Preview FK: {name} = {value:+.3f} rad; Accept Preview to commit"
+            f"Preview FK: {name} = {value:+.3f} rad; use Slice to commit"
         )
 
     def _sync_joint_controls(self, state=None):

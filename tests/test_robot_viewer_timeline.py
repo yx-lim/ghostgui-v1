@@ -1178,17 +1178,16 @@ class RobotViewerTimelineTests(unittest.TestCase):
         ]
         self.assertEqual(
             left_titles,
-            ["Target / Pose", "Editing Mode", "Time Slices"],
+            ["Target", "Editing Mode", "Planning"],
         )
         self.assertEqual(
             right_titles,
-            ["Selected Object", "IK / Constraints", "Status"],
+            ["Status", "IK / Constraints"],
         )
         expected_visible = {
-            "Target / Pose": True,
+            "Target": True,
             "Editing Mode": True,
-            "Time Slices": False,
-            "Selected Object": False,
+            "Planning": False,
             "IK / Constraints": False,
             "Status": True,
         }
@@ -1339,10 +1338,14 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.timeslice_step_input,
             self.viewer.timeslice_duration_label,
             self.viewer.timeslice_duration_input,
+            self.viewer.collision_substeps_label,
+            self.viewer.collision_substeps,
             self.viewer.ghost_stride_label,
             self.viewer.ghost_stride,
             self.viewer.ghost_alpha_label,
             self.viewer.ghost_alpha,
+            self.viewer.preview_alpha_label,
+            self.viewer.preview_alpha,
         ):
             self.assertIn(timeslice_widget, trajectory_widgets)
         for removed_widget in (
@@ -1358,10 +1361,6 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertIs(
             self.window.controls.corner_smoothing_slider.parent(),
             self.viewer.timeslice_context_panel,
-        )
-        self.assertIs(
-            self.window.right_sidebar_content.sections[0].content,
-            self.window.controls.selection_detail_panel,
         )
         self.assertIs(
             self.window.right_sidebar_content.sections[1].content,
@@ -1399,6 +1398,46 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.controls.corner_smoothing_slider.parent(),
             self.viewer.timeslice_context_panel,
         )
+        smoothing_row, _ = self.viewer.timeslice_context_layout.getWidgetPosition(
+            self.window.controls.corner_smoothing_slider
+        )
+        collision_row, _ = self.viewer.timeslice_context_layout.getWidgetPosition(
+            self.viewer.collision_substeps
+        )
+        self.assertEqual(collision_row, smoothing_row + 1)
+        self.assertIs(
+            self.viewer.timeslice_context_layout.labelForField(
+                self.viewer.collision_substeps
+            ),
+            self.viewer.collision_substeps_label,
+        )
+        playback_opacity_row, _ = (
+            self.viewer.timeslice_context_layout.getWidgetPosition(
+                self.viewer.ghost_alpha
+            )
+        )
+        preview_opacity_row, _ = (
+            self.viewer.timeslice_context_layout.getWidgetPosition(
+                self.viewer.preview_alpha
+            )
+        )
+        self.assertEqual(preview_opacity_row, playback_opacity_row + 1)
+        self.assertIs(
+            self.viewer.timeslice_context_layout.labelForField(
+                self.viewer.preview_alpha
+            ),
+            self.viewer.preview_alpha_label,
+        )
+        self.assertIs(
+            self.viewer.preview_alpha.parent(),
+            self.viewer.timeslice_context_panel,
+        )
+        for removed_button in (
+            "plan_preview_button",
+            "accept_preview_button",
+            "cancel_preview_button",
+        ):
+            self.assertFalse(hasattr(self.viewer, removed_button))
         self.assertIs(
             self.viewer.timeslice_context_layout.labelForField(
                 self.viewer.timeslice_step_input
@@ -1518,17 +1557,20 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(self.window.status_details_panel.isVisible())
         self.assertEqual(
-            self.viewer.selection_context_panel.layout()
+            self.viewer.target_context_panel.layout()
             .labelForField(self.viewer.target_box)
             .text(),
             "Advanced target",
+        )
+        self.assertIs(
+            self.viewer.target_context_panel.parent(),
+            self.window.controls.target_context_stack,
         )
         preview_section = next(
             section for section in self.window.right_sidebar_content.sections
             if section.title == "IK / Constraints"
         )
         preview_section.set_expanded(True)
-        self.assertEqual(self.viewer.preview_alpha_label.text(), "Preview opacity")
         ik_tabs = self.viewer.preview_ik_context_widget().findChild(QTabWidget)
         self.assertEqual(
             [ik_tabs.tabText(index) for index in range(ik_tabs.count())],
@@ -1583,7 +1625,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
         for removed_title in (
             "Editors", "Display", "Selection", "Properties",
             "3D Selection", "Export / Import", "Playback / Ghosts",
-            "Joints / IK", "Transform", "Preview / IK",
+            "Joints / IK", "Transform", "Preview / IK", "Target / Pose",
+            "Time Slices", "Selected Object",
         ):
             self.assertNotIn(removed_title, all_titles)
         self.assertLessEqual(self.window.controls.table.maximumHeight(), 180)
@@ -1592,8 +1635,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.robot_context_widget(),
         )
         self.assertIs(
-            self.window.controls.selection_context_widget(),
-            self.viewer.selection_context_widget(),
+            self.window.controls.target_context_widget(),
+            self.viewer.target_context_widget(),
         )
         self.assertIs(
             self.window.controls.trajectory_context_widget(),

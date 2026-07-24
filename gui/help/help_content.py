@@ -47,9 +47,10 @@ move target -> orange preview -> Slice -> committed time slice -> Generate -> Ex
 
 Create/open/save projects, choose the robot model, import or export data, switch views, and open help.
 
-## Target / Pose
+## Target
 
-Choose the active robot body, site, or logical frame to edit.
+Choose the logical robot frame to edit, or use **Advanced target** to select
+another body or site exposed by the model.
 
 ## Editing Mode
 
@@ -59,9 +60,9 @@ Use **End Effector** to edit the target frame with X/Y/Z/Roll/Pitch/Yaw controls
 
 Drag either divider to resize its sidebar between 200 and 400 pixels. Use the divider arrows or the **View → Left Sidebar** and **View → Right Sidebar** actions to collapse or restore them. GhostGUI remembers both expanded widths.
 
-## Time Slices
+## Planning
 
-Use the single Time slider to scrub the robot live or follow time-based playback. The frame readout is derived from the trajectory, and releasing the slider commits the selected edit time once. Capture committed robot states, generate trajectories, and manage the editable timeline here.
+Use the single Time slider to scrub the robot live or follow time-based playback. The frame readout is derived from the trajectory, and releasing the slider commits the selected edit time once. Configure smoothing, collision substeps, playback opacity, and preview opacity; capture committed robot states; generate trajectories; and manage the editable timeline here.
 
 ## Workflow Toolbar
 
@@ -76,9 +77,8 @@ Use the single Time slider to scrub the robot live or follow time-based playback
 
 ## Right Sidebar
 
-- **Selected Object** shows the picked body/site/frame details.
-- **IK / Constraints** exposes IK weights, solver settings, collision checks, and preview controls.
 - **Status** shows the latest important event or problem. Expand **Details** for the latest operation's frame, IK result, and solver diagnostics.
+- **IK / Constraints** exposes IK weights, solver settings, collision checks, and preview controls.
 """.strip(),
     ),
     HelpSection(

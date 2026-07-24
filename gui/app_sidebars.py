@@ -248,9 +248,9 @@ class AppRightSidebar(AppSidebar):
 
     def __init__(self, status_panel, base_sections=None, parent=None):
         super().__init__(parent)
+        self.add_section("Status", status_panel, expanded=True)
         if base_sections:
             self.add_sections(base_sections)
-        self.add_section("Status", status_panel, expanded=True)
         self.add_stretch()
 
     def set_context_widget(self, widget):
