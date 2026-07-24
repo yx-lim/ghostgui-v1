@@ -798,6 +798,26 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(activated, [])
         self.assertEqual(self.viewer.get_current_time(), 0.2)
 
+    def test_timeslice_markers_use_requested_dimensions_and_current_guide(self):
+        slider = self.viewer.timeslice_slider
+        slider.resize(500, 40)
+        x = slider._time_to_pixel(0.2)
+
+        normal_marker = slider._marker_rect(x, current=False)
+        current_marker = slider._marker_rect(x, current=True)
+        guide_top, guide_bottom = slider._current_guide_bounds()
+
+        self.assertEqual(
+            (normal_marker.width(), normal_marker.height()),
+            (2, 6),
+        )
+        self.assertEqual(
+            (current_marker.width(), current_marker.height()),
+            (4, 10),
+        )
+        self.assertEqual(guide_bottom - guide_top + 1, 40)
+        self.assertGreaterEqual(slider.minimumHeight(), 40)
+
     def test_delete_slice_removes_defined_marker_and_logical_targets(self):
         self.window.controls.time_slider.set_value(0.2)
         self.window.controls.emit_time_changed(0.2)
