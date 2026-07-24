@@ -254,8 +254,8 @@ class RobotViewer3D(QWidget):
 
         self.target_context_panel = QWidget()
         target_layout = QFormLayout(self.target_context_panel)
-        target_layout.setContentsMargins(6, 6, 6, 6)
-        target_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        target_layout.setContentsMargins(0, 0, 0, 0)
+        target_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         self.target_box = QComboBox()
         _compact_combo(self.target_box, minimum_chars=12)
         if self.robot_model:
