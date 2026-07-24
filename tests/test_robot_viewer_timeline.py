@@ -1342,6 +1342,16 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.viewer_status_label.text(),
             "Viewer status moved",
         )
+        self.assertEqual(self.window.status_icon_label.text(), "●")
+        self.assertEqual(
+            self.window.status_icon_label.property("severity"),
+            "info",
+        )
+        self.assertTrue(self.window.status_message_label.isHidden())
+        self.assertIsNone(self.window.status_frame_label.parent())
+        self.assertIsNone(self.window.status_ik_label.parent())
+        self.assertIsNone(self.window.status_move_label.parent())
+        self.assertIsNone(self.window.viewer_root_pose_label.parent())
         self.assertEqual(self.window.status_frame_label.text(), "-")
         self.assertEqual(self.window.status_ik_label.text(), "-")
         self.assertEqual(self.window.status_move_label.text(), "-")
@@ -1358,13 +1368,22 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(
             self.window.viewer_status_label.text(),
-            "Preview",
+            "Preview updated",
+        )
+        self.assertEqual(
+            self.window.status_message_label.text(),
+            "Left hand pose is collision-free.",
         )
         self.assertEqual(self.window.status_frame_label.text(), "left hand")
         self.assertEqual(self.window.status_ik_label.text(), "0.0032 m")
         self.assertEqual(self.window.status_move_label.text(), "100%")
         self.assertIn(
-            "MuJoCo IK converged in 4 iterations\nstate is collision-free",
+            "Solver: MuJoCo IK converged in 4 iterations\n"
+            "Collision: state is collision-free",
+            self.window.status_text.toPlainText(),
+        )
+        self.assertIn(
+            "Frame: left hand",
             self.window.status_text.toPlainText(),
         )
         self.assertTrue(self.window.viewer_time_label.text().startswith("Time:"))
@@ -1375,7 +1394,15 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.viewer.status_label.setText(singular_status)
         self.app.processEvents()
-        self.assertEqual(self.window.viewer_status_label.text(), "Preview")
+        self.assertEqual(self.window.viewer_status_label.text(), "Preview warning")
+        self.assertEqual(
+            self.window.status_icon_label.property("severity"),
+            "warning",
+        )
+        self.assertEqual(
+            self.window.status_message_label.text(),
+            "Near singularity while updating left hand.",
+        )
         self.assertIn("near singularity", self.window.status_text.toPlainText())
         self.assertFalse(self.window.status_details_panel.isVisible())
         self.window.status_details_button.setChecked(True)

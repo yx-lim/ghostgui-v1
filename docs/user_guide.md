@@ -117,8 +117,9 @@ stored. Saved slices become the source material for generated trajectories.
 **IK / Constraints** contains solver settings, task weights, collision controls,
 and preview controls.
 
-**Status** shows the active state, selected frame, IK result, root pose, and
-detailed messages.
+**Status** shows the latest important event or problem in a compact summary.
+Expand **Details** to inspect the latest operation's frame, IK result, solver
+metrics, and other diagnostics.
 
 ## Keyboard / Mouse Shortcuts
 

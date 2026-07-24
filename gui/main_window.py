@@ -57,6 +57,7 @@ from application.project_manager import (
 from .controls import TrajectoryControlPanel
 from gui.viewers.reference_frame_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
+from .widgets.status import StatusEvent, status_event_from_text
 from gui.viewers.skeleton_2d import Stickman2DViewer
 from gui.viewers.mujoco_player import Mujoco3DViewerPanel
 from application.backend_interface import BackendInterface
@@ -1109,45 +1110,54 @@ class RobotGuiMainWindow(QMainWindow):
         panel.setMinimumWidth(0)
         layout = QVBoxLayout()
         layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(6)
+        layout.setSpacing(4)
 
         self.backend_label = QLabel()
         self.backend_label.setWordWrap(True)
+
+        self.status_icon_label = QLabel()
+        self.status_icon_label.setObjectName("statusSeverityIcon")
+        self.status_icon_label.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+        )
+        self.status_icon_label.setFixedWidth(18)
+
         self.viewer_status_label = QLabel()
+        self.viewer_status_label.setObjectName("statusEventTitle")
         self.viewer_status_label.setWordWrap(True)
+        self.status_message_label = QLabel()
+        self.status_message_label.setObjectName("statusEventMessage")
+        self.status_message_label.setWordWrap(True)
+
+        summary = QWidget()
+        summary.setObjectName("statusEventSummary")
+        summary.setAccessibleName("Current status")
+        summary_layout = QHBoxLayout(summary)
+        summary_layout.setContentsMargins(0, 0, 0, 0)
+        summary_layout.setSpacing(5)
+        summary_layout.addWidget(self.status_icon_label)
+        summary_copy = QVBoxLayout()
+        summary_copy.setContentsMargins(0, 0, 0, 0)
+        summary_copy.setSpacing(1)
+        summary_copy.addWidget(self.viewer_status_label)
+        summary_copy.addWidget(self.status_message_label)
+        summary_layout.addLayout(summary_copy, stretch=1)
+        layout.addWidget(summary)
+
+        # These values remain available to integrations, but duplicate data is
+        # no longer rendered as permanent rows in the compact Status section.
         self.status_frame_label = QLabel("-")
-        self.status_frame_label.setWordWrap(True)
         self.status_ik_label = QLabel("-")
-        self.status_ik_label.setWordWrap(True)
         self.status_move_label = QLabel("-")
-        self.status_move_label.setWordWrap(True)
         self.viewer_time_label = QLabel()
-        self.viewer_time_label.setWordWrap(True)
         self.viewer_root_pose_label = QLabel()
-        self.viewer_root_pose_label.setWordWrap(True)
         self.model_source_label = QLabel(self.model_source_text(self.robot_model_3d))
-        self.model_source_label.setWordWrap(True)
+
         self.status_text = QTextEdit()
         self.status_text.setReadOnly(True)
         self.status_text.setMinimumWidth(0)
-        self.status_text.setMinimumHeight(120)
+        self.status_text.setMinimumHeight(80)
         self.status_text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-
-        def add_summary_row(name, value_widget):
-            row = QHBoxLayout()
-            row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(6)
-            label = QLabel(name)
-            label.setMinimumWidth(42)
-            row.addWidget(label)
-            row.addWidget(value_widget, stretch=1)
-            layout.addLayout(row)
-
-        add_summary_row("State", self.viewer_status_label)
-        add_summary_row("Frame", self.status_frame_label)
-        add_summary_row("IK", self.status_ik_label)
-        add_summary_row("Move", self.status_move_label)
-        add_summary_row("Root", self.viewer_root_pose_label)
 
         self.status_details_button = QToolButton()
         self.status_details_button.setText("Details")
@@ -1174,6 +1184,12 @@ class RobotGuiMainWindow(QMainWindow):
         self.status_details_button.toggled.connect(set_details_visible)
         layout.addWidget(self.status_details_button)
         layout.addWidget(self.status_details_panel)
+
+        self._status_summary_signature = None
+        self._status_repeat_count = 0
+        self.apply_status_event(
+            status_event_from_text(self.viewer_3d.status_label.text())
+        )
 
         panel.setLayout(layout)
         return panel
@@ -1224,7 +1240,7 @@ class RobotGuiMainWindow(QMainWindow):
         try:
             self.autosave_current_project(show_status=False, reason="timer")
         except (OSError, ValueError) as exc:
-            self.status_text.append(f"Project autosave failed: {exc}")
+            self.show_status_message(f"Project autosave failed: {exc}")
 
     def current_model_display_name(self):
         if self.robot_model_3d is not None:
@@ -1407,7 +1423,9 @@ class RobotGuiMainWindow(QMainWindow):
             self.refresh_recent_projects()
         except OSError as exc:
             if hasattr(self, "status_text"):
-                self.status_text.append(f"Could not update recent projects: {exc}")
+                self.show_status_message(
+                    f"Could not update recent projects: {exc}"
+                )
 
     def build_project_browser_dialog(self):
         return ProjectBrowserDialog(load_project_browser_previews(), parent=self)
@@ -1573,7 +1591,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.remember_current_project()
         if show_status:
             message = f"Saved project: {project.root_dir}"
-            self.status_text.setText(message)
+            self.show_status_message(message)
             self.statusBar().showMessage(message, 3000)
         return True
 
@@ -1842,7 +1860,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.sync_workflow_toolbar()
         source = "autosaved project" if autosave else "project"
         message = f"Opened {source}: {project.root_dir}"
-        self.status_text.setText(message)
+        self.show_status_message(message)
         self.statusBar().showMessage(message, 3000)
         return True
 
@@ -2388,22 +2406,22 @@ class RobotGuiMainWindow(QMainWindow):
     def on_viewer_status_changed(self, viewer, text):
         if viewer is self.viewer_3d:
             status = self.format_viewer_status(text)
-            self.viewer_status_label.setText(status["state"])
             self.status_frame_label.setText(status["frame"])
             self.status_ik_label.setText(status["ik"])
             self.status_move_label.setText(status["move"])
-            self.status_text.setText(status["detail"])
+            self.apply_status_event(status["event"])
 
     def format_viewer_status(self, text):
-        detail = self.format_status_detail(text)
+        event = status_event_from_text(text)
         parts = [part.strip() for part in str(text).split(";") if part.strip()]
         if not self.is_verbose_ik_status(parts):
             return {
-                "state": str(text).splitlines()[0],
+                "event": event,
+                "state": event.title,
                 "frame": "-",
                 "ik": "-",
                 "move": "-",
-                "detail": detail,
+                "detail": event.details,
             }
 
         frame = self.status_field(parts, "frame") or "selected frame"
@@ -2419,12 +2437,43 @@ class RobotGuiMainWindow(QMainWindow):
             state = "Blocked: IK"
 
         return {
+            "event": event,
             "state": state,
             "frame": frame,
             "ik": f"{ik_error} m" if ik_error else "-",
             "move": accepted or "-",
-            "detail": detail,
+            "detail": event.details,
         }
+
+    def apply_status_event(self, event):
+        """Display one compact event and replace the previous diagnostics."""
+        if not isinstance(event, StatusEvent):
+            event = status_event_from_text(event)
+
+        if event.signature == self._status_summary_signature:
+            self._status_repeat_count += 1
+        else:
+            self._status_summary_signature = event.signature
+            self._status_repeat_count = 1
+            self.status_icon_label.setText(event.icon)
+            self.status_icon_label.setAccessibleName(
+                f"{event.severity.capitalize()} status"
+            )
+            self.viewer_status_label.setText(event.title)
+            self.status_message_label.setText(event.message)
+            self.status_message_label.setVisible(bool(event.message))
+
+            for widget in (self.status_icon_label, self.viewer_status_label):
+                widget.setProperty("severity", event.severity)
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+
+        # Details always describe only the latest operation. This deliberately
+        # replaces rapid live updates instead of growing an event transcript.
+        self.status_text.setPlainText(event.details)
+
+    def show_status_message(self, text):
+        self.apply_status_event(status_event_from_text(text))
 
     def is_verbose_ik_status(self, parts):
         fields = {"accepted", "IK error", "frame"}
@@ -2443,10 +2492,7 @@ class RobotGuiMainWindow(QMainWindow):
         return None
 
     def format_status_detail(self, text):
-        parts = [part.strip() for part in str(text).split(";") if part.strip()]
-        if len(parts) <= 1:
-            return str(text)
-        return "\n".join(parts)
+        return status_event_from_text(text).details
 
     def on_viewer_time_changed(self, viewer, text):
         if viewer is self.viewer_3d:
@@ -2473,7 +2519,7 @@ class RobotGuiMainWindow(QMainWindow):
             return
         model_info = self.model_registry.get(model_key)
         if model_info is None:
-            self.status_text.setText(f"Unknown robot model: {model_key}")
+            self.show_status_message(f"Unknown robot model: {model_key}")
             return
         cached = self.model_sessions.get(model_key)
         if cached is not None:
@@ -2526,7 +2572,7 @@ class RobotGuiMainWindow(QMainWindow):
             self._pending_project_restore_source = "direct"
         self.finish_model_loading_ui()
         self.finish_render_progress()
-        self.status_text.setText(f"Could not load {model_key}: {error}")
+        self.show_status_message(f"Could not load {model_key}: {error}")
         index = self.controls.model_box.findData(self.model_key)
         self.controls.model_box.blockSignals(True)
         self.controls.model_box.setCurrentIndex(index)
@@ -2566,7 +2612,7 @@ class RobotGuiMainWindow(QMainWindow):
         if not path:
             return
         self.import_mesh_folder = Path(path).expanduser().resolve()
-        self.status_text.append(f"Mesh folder: {self.import_mesh_folder}")
+        self.show_status_message(f"Mesh folder: {self.import_mesh_folder}")
 
     def _prompt_for_mesh_folder(self):
         path = QFileDialog.getExistingDirectory(
@@ -2608,10 +2654,10 @@ class RobotGuiMainWindow(QMainWindow):
         except Exception as exc:
             self.finish_render_progress()
             message = f"Could not import model: {exc}"
-            self.status_text.setText(message)
+            self.show_status_message(message)
             QMessageBox.warning(self, "Import model failed", message)
             return
-        self.status_text.append(
+        self.show_status_message(
             f"Imported {info.display_name} to {info.model_path}"
         )
         self.controls.add_model(info.key, info.display_name, select=True)
@@ -2671,7 +2717,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.prompt_trajectory_import_dt()
         count = self.import_loaded_robot_trajectory_as_keyframes()
         import_dt = self.viewer_3d.trajectory_import_dt.value()
-        self.status_text.setText(
+        self.show_status_message(
             f"Loaded trajectory CSV: {csv_path}\n"
             f"Imported {count} editable target-frame keyframes from FK "
             f"at {import_dt:.2f} s intervals."
@@ -2756,7 +2802,6 @@ class RobotGuiMainWindow(QMainWindow):
         if count <= 0:
             message = f"No logical target frames were available at t={time:.2f} s."
             self.viewer_3d.status_label.setText(message)
-            self.status_text.setText(message)
             return
 
         self.refresh_display()
@@ -2771,7 +2816,6 @@ class RobotGuiMainWindow(QMainWindow):
             f"from the committed solved pose;{advance_note}"
         )
         self.viewer_3d.status_label.setText(message)
-        self.status_text.setText(message)
         self.record_history_action("Accept slice")
 
     def on_delete_timeslice_requested(self):
@@ -2784,7 +2828,6 @@ class RobotGuiMainWindow(QMainWindow):
         if deleted_targets <= 0 and not deleted_qpos:
             message = f"No defined slice found at t={time:.2f} s."
             self.viewer_3d.status_label.setText(message)
-            self.status_text.setText(message)
             return
 
         self.active_index = -1
@@ -2806,7 +2849,6 @@ class RobotGuiMainWindow(QMainWindow):
         detail = " and ".join(parts)
         message = f"Deleted slice at t={time:.2f} s ({detail})."
         self.viewer_3d.status_label.setText(message)
-        self.status_text.setText(message)
         self.record_history_action("Delete slice")
 
     def define_timeslice_from_committed_pose(self):
@@ -3031,7 +3073,7 @@ class RobotGuiMainWindow(QMainWindow):
         row = self.controls.selected_row()
 
         if row < 0:
-            self.status_text.append("No keyframe selected to update.")
+            self.show_status_message("No keyframe selected to update.")
             return
 
         frame = self.controls.current_frame()
@@ -3049,7 +3091,7 @@ class RobotGuiMainWindow(QMainWindow):
         row = self.controls.selected_row()
 
         if row < 0:
-            self.status_text.append("No keyframe selected to delete.")
+            self.show_status_message("No keyframe selected to delete.")
             return
 
         self.trajectory.delete_frame(row)
@@ -3061,7 +3103,7 @@ class RobotGuiMainWindow(QMainWindow):
     def on_clear_trajectory(self):
         keyframe_count = len(self.trajectory.frames)
         if keyframe_count == 0:
-            self.status_text.append("Trajectory is already empty.")
+            self.show_status_message("Trajectory is already empty.")
             return
 
         response = QMessageBox.question(
@@ -3072,7 +3114,7 @@ class RobotGuiMainWindow(QMainWindow):
             QMessageBox.StandardButton.No,
         )
         if response != QMessageBox.StandardButton.Yes:
-            self.status_text.append("Clear trajectory cancelled.")
+            self.show_status_message("Clear trajectory cancelled.")
             return
 
         self.trajectory.clear()
@@ -3090,7 +3132,6 @@ class RobotGuiMainWindow(QMainWindow):
             "current robot pose was left unchanged."
         )
         self.viewer_3d.status_label.setText(message)
-        self.status_text.setText(message)
         self.record_history_action("Clear trajectory")
 
     def on_keyframe_selected(self, row):
@@ -3165,7 +3206,7 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_generate_trajectory(self):
         if len(self.trajectory.frames) == 0:
-            self.status_text.setText("Trajectory is empty. Add keyframes first.")
+            self.show_status_message("Trajectory is empty. Add keyframes first.")
             return
 
         result = trajectory_generation.generate_trajectory_status(
@@ -3175,7 +3216,7 @@ class RobotGuiMainWindow(QMainWindow):
         )
         self.viewer_3d.load_backend_states(result.result_states)
         self.viewer_3d_mujoco.set_trajectory_csv(result.csv_path)
-        self.status_text.setText(result.status_text)
+        self.show_status_message(result.status_text)
         self.record_history_action("Generate trajectory")
 
     # ============================================================

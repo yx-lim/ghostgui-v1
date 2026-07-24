@@ -132,6 +132,9 @@ def current_theme(widget: QWidget | None = None) -> Theme:
 
 def application_stylesheet(widget: QWidget | None = None) -> str:
     theme = current_theme(widget)
+    status_success = "#4ade80" if theme.icon_variant == "dark" else "#15803d"
+    status_warning = "#fbbf24" if theme.icon_variant == "dark" else "#b45309"
+    status_error = "#f87171" if theme.icon_variant == "dark" else "#b91c1c"
     return (
         f"""
         QMainWindow, QDialog {{
@@ -174,6 +177,24 @@ def application_stylesheet(widget: QWidget | None = None) -> str:
         }}
         QLabel, QCheckBox, QRadioButton, QGroupBox {{
             color: {theme.text};
+        }}
+        QLabel#statusSeverityIcon {{
+            color: {theme.accent};
+        }}
+        QLabel#statusSeverityIcon[severity="success"] {{
+            color: {status_success};
+        }}
+        QLabel#statusSeverityIcon[severity="warning"] {{
+            color: {status_warning};
+        }}
+        QLabel#statusSeverityIcon[severity="error"] {{
+            color: {status_error};
+        }}
+        QLabel#statusEventTitle {{
+            color: {theme.text};
+        }}
+        QLabel#statusEventMessage {{
+            color: {theme.muted_text};
         }}
         QGroupBox {{
             background: {theme.panel_bg};

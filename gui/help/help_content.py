@@ -78,7 +78,7 @@ Set the active time, capture committed robot states, generate trajectories, and 
 
 - **Selected Object** shows the picked body/site/frame details.
 - **IK / Constraints** exposes IK weights, solver settings, collision checks, and preview controls.
-- **Status** shows the current state, selected frame, IK result, root pose, and detailed messages.
+- **Status** shows the latest important event or problem. Expand **Details** for the latest operation's frame, IK result, and solver diagnostics.
 """.strip(),
     ),
     HelpSection(
