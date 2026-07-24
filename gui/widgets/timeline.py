@@ -17,6 +17,8 @@ class TimesliceSlider(QSlider):
     CURRENT_MARKER_WIDTH = 2
     CURRENT_MARKER_HEIGHT = 10
     CURRENT_GUIDE_HEIGHT = 40
+    GUIDE_COLOR = (72, 72, 72)
+    DEFINED_GUIDE_COLOR = (15, 158, 255)
 
     def __init__(self, orientation, parent=None):
         super().__init__(orientation, parent)
@@ -40,24 +42,37 @@ class TimesliceSlider(QSlider):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        if self.orientation() != Qt.Orientation.Horizontal or not self.defined_times:
+        if self.orientation() != Qt.Orientation.Horizontal:
             return
 
         painter = QPainter(self)
         current_raw = self.value()
-        groove = self._groove_rect()
+        guide_top, guide_bottom = self._current_guide_bounds()
+        guide_x = self._handle_rect().center().x()
+        painter.setPen(QPen(self._current_guide_color(), 1))
+        painter.drawLine(guide_x, guide_top, guide_x, guide_bottom)
+
         for time in sorted(self.defined_times):
             x = self._time_to_pixel(time)
             raw_value = self._time_to_raw(time)
             current = abs(raw_value - current_raw) <= 1
             color = QColor(21, 116, 214) if not current else QColor(15, 158, 255)
-            if current:
-                guide_top, guide_bottom = self._current_guide_bounds()
-                guide_color = QColor(color)
-                guide_color.setAlpha(220)
-                painter.setPen(QPen(guide_color, 1))
-                painter.drawLine(x, guide_top, x, guide_bottom)
             painter.fillRect(self._marker_rect(x, current), color)
+
+    def _current_value_is_defined(self):
+        current_raw = self.value()
+        return any(
+            abs(self._time_to_raw(time) - current_raw) <= 1
+            for time in self.defined_times
+        )
+
+    def _current_guide_color(self):
+        rgb = (
+            self.DEFINED_GUIDE_COLOR
+            if self._current_value_is_defined()
+            else self.GUIDE_COLOR
+        )
+        return QColor(*rgb)
 
     def _marker_rect(self, x, current):
         width = (

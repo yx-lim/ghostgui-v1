@@ -9,7 +9,7 @@ import numpy as np
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
-from PySide6.QtGui import QCloseEvent, QMouseEvent, QPixmap, QWheelEvent
+from PySide6.QtGui import QColor, QCloseEvent, QMouseEvent, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -813,10 +813,36 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertEqual(
             (current_marker.width(), current_marker.height()),
-            (4, 10),
+            (2, 10),
         )
         self.assertEqual(guide_bottom - guide_top + 1, 40)
         self.assertGreaterEqual(slider.minimumHeight(), 40)
+
+    def test_current_time_guide_is_always_visible_and_highlights_slices(self):
+        slider = self.viewer.timeslice_slider
+        slider.resize(500, 40)
+        slider.setRange(0, 100)
+        slider.set_defined_times([])
+        slider.setValue(20)
+
+        self.assertFalse(slider._current_value_is_defined())
+        self.assertEqual(
+            slider._current_guide_color(),
+            QColor(*slider.GUIDE_COLOR),
+        )
+
+        slider.set_defined_times([0.4])
+        self.assertEqual(
+            slider._current_guide_color(),
+            QColor(*slider.GUIDE_COLOR),
+        )
+
+        slider.setValue(40)
+        self.assertTrue(slider._current_value_is_defined())
+        self.assertEqual(
+            slider._current_guide_color(),
+            QColor(*slider.DEFINED_GUIDE_COLOR),
+        )
 
     def test_delete_slice_removes_defined_marker_and_logical_targets(self):
         self.window.controls.time_slider.set_value(0.2)
