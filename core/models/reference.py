@@ -3,7 +3,7 @@ Reference-frame bindings for the real MuJoCo robot model.
 
 The GUI frame names are user-facing targets. This module maps them to concrete
 MuJoCo bodies/sites so new targets can start from the real robot geometry
-instead of the simplified 2D stickman skeleton.
+and remain consistent with the 3D editor.
 """
 
 from pathlib import Path

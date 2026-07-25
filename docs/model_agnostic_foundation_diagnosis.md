@@ -10,9 +10,9 @@ subsystems did not share a robot description.
 G1 assumptions were spread across the six logical frame bindings
 (`pelvis`, torso, hands, and feet), a fixed 29-joint backend list, floating-base
 qpos assumptions, G1 labels/paths in the CSV viewer, and the frame combo in the
-left control panel.  `viewer_2d_stickman.py` additionally defined a complete
-humanoid pose and limb topology in Python, independent of the loaded MuJoCo
-model.
+left control panel. The former 2D stickman module additionally defined a
+complete humanoid pose and limb topology in Python, independent of the loaded
+MuJoCo model.
 
 The live 3D editor considered configured G1 logical frames first, then exposed
 every MuJoCo body and site as a possible target.  The legacy 2D view only knew
@@ -20,12 +20,11 @@ the six hardcoded frame names.  Asset lookup worked for G1 because absolute
 paths happened to reach its MJCF, while no shared policy existed for another
 model or URDF package assets.
 
-Supporting Go2 and future robots therefore requires one registry-selected
+Supporting Go2 and future robots therefore required one registry-selected
 adapter to own path resolution, model type, joints, logical frame candidate
 matching, root/end-effector metadata, home state, and the MuJoCo kinematic tree.
-Both viewers and controls must consume that adapter.  The 2D view can then draw
-projected MuJoCo body positions and parent-child edges, with a generic graph
-fallback, instead of selecting a robot-specific drawing class.
+The former 2D viewers consumed that adapter as an intermediate migration step;
+those viewers have since been removed in favor of the 3D pose editor.
 
 The supplied Go2 source is a URDF whose visual blocks contain repeated material
 elements and `package://` DAE meshes. MuJoCo cannot compile that file directly.

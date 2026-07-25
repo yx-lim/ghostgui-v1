@@ -58,10 +58,8 @@ from application.project_manager import (
 )
 from .controls import TrajectoryControlPanel
 from .file_selection import SynchronousFileSelectionStage
-from gui.viewers.reference_frame_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
 from .widgets.status import StatusEvent, status_event_from_text
-from gui.viewers.skeleton_2d import Stickman2DViewer
 from gui.viewers.mujoco_player import Mujoco3DViewerPanel
 from application.backend_interface import BackendInterface
 from core.models import MujocoReferenceFrames
@@ -348,14 +346,12 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls = TrajectoryControlPanel(
             self.model_registry, model_key=model_key, frame_names=frame_names
         )
-        self.viewer_2d = RobotCanvas()
         self.viewer_3d = RobotViewer3D(
             robot_model=self.robot_model_3d,
             error=self.robot_model_error,
             background_jobs=self.background_jobs,
             file_selection_stage=self.file_selection_stage,
         )
-        self.viewer_2d_stickman = Stickman2DViewer(self.robot_model_3d)
         self.viewer_3d_mujoco = Mujoco3DViewerPanel(self.robot_model_3d)
         self.viewer_3d_mujoco.set_trajectory_regenerator(
             self.regenerate_mujoco_playback_cache
@@ -366,7 +362,6 @@ class RobotGuiMainWindow(QMainWindow):
                 backend=self.backend_interface,
                 reference=self.model_reference,
                 viewer_3d=self.viewer_3d,
-                viewer_2d_skeleton=self.viewer_2d_stickman,
                 trajectory=self.trajectory,
                 active_index=self.active_index,
             )
@@ -1230,11 +1225,7 @@ class RobotGuiMainWindow(QMainWindow):
         tabs = QTabWidget()
         self.viewer_3d_stack = QStackedWidget()
         self.viewer_3d_stack.addWidget(self.viewer_3d)
-        self.viewer_2d_skeleton_stack = QStackedWidget()
-        self.viewer_2d_skeleton_stack.addWidget(self.viewer_2d_stickman)
         tabs.addTab(self.viewer_3d_stack, "3D Pose")
-        tabs.addTab(self.viewer_2d, "2D Side View")
-        tabs.addTab(self.viewer_2d_skeleton_stack, "2D Skeleton")
         tabs.addTab(self.viewer_3d_mujoco, "Simulation")
         tabs.currentChanged.connect(self.update_editor_context)
         tabs.currentChanged.connect(lambda _index: self.mark_project_dirty("Active view"))
@@ -1704,6 +1695,9 @@ class RobotGuiMainWindow(QMainWindow):
             "schema_version": 1,
             "active_index": int(self.active_index),
             "active_view_index": int(self.viewer_tabs.currentIndex()),
+            "active_view": self.viewer_tabs.tabText(
+                self.viewer_tabs.currentIndex()
+            ),
             "current_time": float(viewer.get_current_time()),
             "selected_frame": self.controls.frame_box.currentText(),
             "selected_row": int(self.controls.selected_row()),
@@ -1884,7 +1878,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls._suppress_pose_changed = False
 
         self.active_index = int(workspace.get("active_index", -1))
-        self.refresh_display(apply_stickman_frame=False)
+        self.refresh_display()
         selected_row = int(workspace.get("selected_row", -1))
         if 0 <= selected_row < self.controls.table.rowCount():
             self.controls.table.setCurrentCell(selected_row, 0)
@@ -1956,9 +1950,17 @@ class RobotGuiMainWindow(QMainWindow):
             canvas.camera_center = np.asarray(center, dtype=float)
         canvas.update()
 
-        active_view_index = int(workspace.get("active_view_index", 0))
-        if 0 <= active_view_index < self.viewer_tabs.count():
-            self.viewer_tabs.setCurrentIndex(active_view_index)
+        active_view_name = str(workspace.get("active_view") or "")
+        restored_view_index = -1
+        for index in range(self.viewer_tabs.count()):
+            if self.viewer_tabs.tabText(index) == active_view_name:
+                restored_view_index = index
+                break
+        if restored_view_index < 0:
+            legacy_view_index = int(workspace.get("active_view_index", 0))
+            # Before the 2D viewers were removed, Simulation was index 3.
+            restored_view_index = 1 if legacy_view_index == 3 else 0
+        self.viewer_tabs.setCurrentIndex(restored_view_index)
 
     def show_help_center(self):
         if self.help_dialog is None:
@@ -2162,10 +2164,9 @@ class RobotGuiMainWindow(QMainWindow):
         )
         self.controls.time_changed.connect(self.on_time_changed)
 
-        self.viewer_2d.target_dragged.connect(self.on_target_dragged)
-        self.connect_model_viewer_signals(self.viewer_3d, self.viewer_2d_stickman)
+        self.connect_model_viewer_signals(self.viewer_3d)
 
-    def connect_model_viewer_signals(self, viewer_3d, viewer_2d_skeleton):
+    def connect_model_viewer_signals(self, viewer_3d):
         viewer_3d.target_dragged.connect(self.on_target_dragged)
         viewer_3d.target_pose_dragged.connect(self.on_target_pose_dragged)
         viewer_3d.target_pose_drag_finished.connect(
@@ -2243,8 +2244,6 @@ class RobotGuiMainWindow(QMainWindow):
                 viewer, text
             )
         )
-        viewer_2d_skeleton.target_dragged.connect(self.on_target_dragged)
-
     def on_viewer_playback_poses_changed(self, viewer, checked):
         if viewer is self.viewer_3d:
             self.show_playback_poses_action.setChecked(bool(checked))
@@ -2393,7 +2392,7 @@ class RobotGuiMainWindow(QMainWindow):
 
             control_frame = TargetFrame.from_dict(dict(snapshot.control_frame))
             self._restore_control_frame(control_frame)
-            self.refresh_display(apply_stickman_frame=False)
+            self.refresh_display()
             if 0 <= snapshot.selected_row < self.controls.table.rowCount():
                 self.controls.table.setCurrentCell(snapshot.selected_row, 0)
             else:
@@ -2614,13 +2613,10 @@ class RobotGuiMainWindow(QMainWindow):
             background_jobs=self.background_jobs,
             file_selection_stage=self.file_selection_stage,
         )
-        viewer_2d_skeleton = Stickman2DViewer(adapter)
-        self.connect_model_viewer_signals(viewer_3d, viewer_2d_skeleton)
+        self.connect_model_viewer_signals(viewer_3d)
         self.viewer_3d_stack.addWidget(viewer_3d)
-        self.viewer_2d_skeleton_stack.addWidget(viewer_2d_skeleton)
         session = model_sessions.RobotModelSession(
-            adapter, backend, reference, viewer_3d, viewer_2d_skeleton,
-            Trajectory(), -1,
+            adapter, backend, reference, viewer_3d, Trajectory(), -1,
         )
         self.model_sessions[model_key] = session
         self.finish_model_loading_ui()
@@ -2825,7 +2821,6 @@ class RobotGuiMainWindow(QMainWindow):
         ).items():
             setattr(self, name, value)
         self.viewer_3d_stack.setCurrentWidget(self.viewer_3d)
-        self.viewer_2d_skeleton_stack.setCurrentWidget(self.viewer_2d_stickman)
         self.viewer_3d_mujoco.set_model_adapter(session.adapter)
         self.viewer_3d_mujoco.clear_trajectory()
         if self.viewer_3d.robot_trajectory:
@@ -2844,7 +2839,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.set_frame_names(session.adapter.trajectory_frames)
         self.update_project_chrome()
         self.update_editor_context()
-        self.refresh_display(apply_stickman_frame=False)
+        self.refresh_display()
         self.request_active_model_render()
         self.undo_stack.clear()
         self.redo_stack.clear()
@@ -3186,9 +3181,8 @@ class RobotGuiMainWindow(QMainWindow):
         self, x, y, z, roll=None, pitch=None, yaw=None
     ):
         """Sync controls without repainting every viewer on every mouse event."""
-        # A full refresh here previously scheduled the 2D, 3D, stickman, table,
-        # and status panel repeatedly during one drag. The live canvas already
-        # updated its transforms; refresh the rest once on mouse release.
+        # The live canvas already updated its transforms; refresh the remaining
+        # controls and status once on mouse release.
         self.controls.set_position_values(
             x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw,
             emit_pose_changed=False,
@@ -3234,7 +3228,7 @@ class RobotGuiMainWindow(QMainWindow):
                 roll=roll, pitch=pitch, yaw=yaw,
                 emit_pose_changed=False,
             )
-        self.refresh_display(apply_stickman_frame=False)
+        self.refresh_display()
 
     def on_preview_cancelled(self):
         kind, name = self.viewer_3d._selected_target()
@@ -3249,7 +3243,7 @@ class RobotGuiMainWindow(QMainWindow):
             roll=roll, pitch=pitch, yaw=yaw,
             emit_pose_changed=False,
         )
-        self.refresh_display(apply_stickman_frame=False)
+        self.refresh_display()
 
     def on_trajectory_lines_changed(self, checked):
         self.on_trajectory_display_changed(checked)
@@ -3363,27 +3357,18 @@ class RobotGuiMainWindow(QMainWindow):
             pelvis -> left_foot
 
         The target controls should jump to the current real MuJoCo body/site
-        position. The simplified stickman is still drawn as a 2D helper, but
-        target-frame defaults come from the actual robot model.
+        position using the actual robot model.
         """
 
         if self.set_current_frame_to_model_reference(
             frame_name,
             emit_pose_changed=False,
         ):
-            self.refresh_display(apply_stickman_frame=False)
-            self._refresh_history_baseline()
-            return
-
-        x, z = self.viewer_2d_stickman.get_body_point(frame_name)
-
-        self.controls.set_position_from_viewer(
-            x,
-            z,
-            emit_pose_changed=False,
-        )
-
-        self.refresh_display(apply_stickman_frame=False)
+            self.refresh_display()
+        else:
+            self.show_status_message(
+                f"No model reference pose is available for {frame_name}."
+            )
         self._refresh_history_baseline()
 
     def set_current_frame_to_model_reference(
@@ -3392,6 +3377,17 @@ class RobotGuiMainWindow(QMainWindow):
         emit_pose_changed=True,
     ):
         pose = self.model_reference.pose_for_frame(frame_name)
+        if pose is None and self.viewer_3d.committed_state is not None:
+            binding = self.viewer_3d.frame_bindings.get(frame_name)
+            if binding is not None:
+                kind, object_name = binding
+                try:
+                    pose = self.viewer_3d.committed_state.get_body_pose(
+                        object_name,
+                        kind,
+                    )
+                except KeyError:
+                    pose = None
 
         if pose is None:
             return False
@@ -3440,7 +3436,7 @@ class RobotGuiMainWindow(QMainWindow):
     # Display update
     # ============================================================
 
-    def refresh_display(self, apply_stickman_frame=True):
+    def refresh_display(self):
         """
         Refresh viewer, table, and status text.
         """
@@ -3450,13 +3446,6 @@ class RobotGuiMainWindow(QMainWindow):
         show_trajectory_lines = self.controls.show_trajectory_lines()
         trajectory_smoothing = self.controls.corner_smoothing()
 
-        self.viewer_2d.update_scene(
-            trajectory=self.trajectory,
-            active_frame=active_frame,
-            show_trajectory_lines=show_trajectory_lines,
-            trajectory_smoothing=trajectory_smoothing,
-            show_keyframes=show_keyframes,
-        )
         self.viewer_3d.update_scene(
             trajectory=self.trajectory,
             active_frame=active_frame,
@@ -3464,15 +3453,6 @@ class RobotGuiMainWindow(QMainWindow):
             trajectory_smoothing=trajectory_smoothing,
             show_keyframes=show_keyframes,
         )
-        self.viewer_2d_stickman.update_scene(
-            trajectory=self.trajectory,
-            active_frame=active_frame,
-            apply_active_frame=apply_stickman_frame,
-            show_trajectory_lines=show_trajectory_lines,
-            trajectory_smoothing=trajectory_smoothing,
-            show_keyframes=show_keyframes,
-        )
-
         self.controls.refresh_table(self.trajectory)
         self.viewer_3d.set_defined_timeslices(
             sorted({frame.time for frame in self.trajectory.frames})

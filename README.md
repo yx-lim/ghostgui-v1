@@ -197,11 +197,11 @@ python3 -m unittest discover -s tests -v
 ## Manual model checks
 
 - G1: run `python3 scripts/run_gui.py --model g1`; confirm 29 joint sliders, the
-  humanoid kinematic skeleton, logical hand/foot targets, gizmo dragging,
+  detailed robot geometry, logical hand/foot targets, gizmo dragging,
   orange preview, Plan/Accept/Cancel, double-click selection, reset, timeline
   states, and ghosts.
-- Go2: run `python3 scripts/run_gui.py --model go2`; confirm 12 joint sliders, the
-  base/four-leg skeleton, `FL/FR/RL/RR_foot` targets, lit ground, and detailed
+- Go2: run `python3 scripts/run_gui.py --model go2`; confirm 12 joint sliders,
+  `FL/FR/RL/RR_foot` targets, lit ground, and detailed
   colored mesh geometry rather than boxes/capsules.
 - H2/Z1: run `python3 scripts/run_gui.py --model h2` or `--model z1`; confirm the
   robot selector shows `Unitree H2` / `Unitree Z1`, logical targets populate,

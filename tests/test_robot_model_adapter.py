@@ -137,7 +137,7 @@ class RobotModelAdapterTests(unittest.TestCase):
             lowest = adapter._lowest_robot_geom_z(adapter.mj_data)
             self.assertAlmostEqual(lowest, 0.002, places=6)
 
-    def test_go2_window_uses_go2_controls_and_skeleton(self):
+    def test_go2_window_uses_go2_controls(self):
         window = RobotGuiMainWindow("go2")
         try:
             self.assertEqual(len(window.viewer_3d.joint_controls), 12)
@@ -148,40 +148,6 @@ class RobotModelAdapterTests(unittest.TestCase):
             self.assertEqual(
                 frames,
                 ["base", "trunk", "FL_foot", "FR_foot", "RL_foot", "RR_foot"],
-            )
-            window.viewer_2d_stickman.update_scene(
-                window.trajectory, window.controls.current_frame()
-            )
-            self.assertGreater(len(window.viewer_2d_stickman.scene.items()), 10)
-        finally:
-            window.close()
-
-    def test_generated_skeleton_marks_only_editable_model_objects(self):
-        window = RobotGuiMainWindow("go2")
-        try:
-            viewer = window.viewer_2d_stickman
-            viewer.update_scene(window.trajectory, window.controls.current_frame())
-            handle_names = {
-                item.data(2)
-                for item in viewer.scene.items()
-                if item.data(0) == "editable_handle"
-            }
-            label_texts = {
-                item.toPlainText()
-                for item in viewer.scene.items()
-                if item.data(0) == "editable_label"
-            }
-
-            self.assertEqual(
-                handle_names,
-                {"base", "FL_foot", "FR_foot", "RL_foot", "RR_foot"},
-            )
-            self.assertTrue(handle_names <= label_texts)
-            self.assertNotIn("FL_hip", handle_names)
-            self.assertNotIn("FL_hip", label_texts)
-            self.assertEqual(
-                viewer._last_editable_projected_points["FL_foot"][1],
-                "FL_foot",
             )
         finally:
             window.close()
@@ -892,39 +858,12 @@ class RobotModelAdapterTests(unittest.TestCase):
             go2_window.close()
             z1_window.close()
 
-    def test_generated_skeleton_uses_ik_and_whole_body_follow(self):
-        window = RobotGuiMainWindow("go2")
-        try:
-            viewer = window.viewer_2d_stickman
-            viewer.update_scene(window.trajectory, None)
-            base_before = viewer._last_projected_positions["base"]
-            frame = window.controls.current_frame()
-            frame.frame_name = "FL_foot"
-            frame.x = 2.0
-            frame.y = 0.142
-            frame.z = 1.0
-            viewer.update_scene(window.trajectory, frame)
-            _, model_name = window.robot_model_3d.resolve_logical_frame("FL_foot")
-            foot = viewer._last_projected_positions[model_name]
-            base_after = viewer._last_projected_positions["base"]
-            self.assertAlmostEqual(foot[0], frame.x, delta=0.02)
-            self.assertAlmostEqual(foot[1], frame.z, delta=0.02)
-            self.assertGreater(np.linalg.norm(np.subtract(base_after, base_before)), 0.2)
-            for name, joint in window.robot_model_3d.joints.items():
-                limits = joint.limits
-                if limits is not None:
-                    value = viewer.skeleton_state.get_joint_value(name)
-                    self.assertGreaterEqual(value, limits[0] - 1e-9)
-                    self.assertLessEqual(value, limits[1] + 1e-9)
-        finally:
-            window.close()
-
     def test_model_switch_preserves_selected_editor_tab(self):
         window = RobotGuiMainWindow("g1")
         try:
-            for mode in ("skeleton", "3d"):
+            for mode in ("simulation", "3d"):
                 selected = (
-                    window.viewer_2d_skeleton_stack if mode == "skeleton"
+                    window.viewer_3d_mujoco if mode == "simulation"
                     else window.viewer_3d_stack
                 )
                 window.viewer_tabs.setCurrentWidget(selected)
@@ -936,11 +875,8 @@ class RobotModelAdapterTests(unittest.TestCase):
                     self.app.processEvents()
                 self.assertEqual(window.model_key, target_key)
                 self.assertIs(window.viewer_tabs.currentWidget(), selected)
-                expected_page = (
-                    window.viewer_2d_stickman if mode == "skeleton"
-                    else window.viewer_3d
-                )
-                self.assertIs(selected.currentWidget(), expected_page)
+                if mode == "3d":
+                    self.assertIs(selected.currentWidget(), window.viewer_3d)
         finally:
             window.close()
 

@@ -11,7 +11,6 @@ class RobotModelSession:
     backend: object
     reference: object
     viewer_3d: object
-    viewer_2d_skeleton: object
     trajectory: object
     active_index: int = -1
 
@@ -31,7 +30,6 @@ def activated_session_state(model_key, session):
         "backend_interface": session.backend,
         "model_reference": session.reference,
         "viewer_3d": session.viewer_3d,
-        "viewer_2d_stickman": session.viewer_2d_skeleton,
         "trajectory": session.trajectory,
         "active_index": session.active_index,
     }

@@ -8,8 +8,8 @@
 - `gui/robot_model_3d.py::RobotState3D` owns MuJoCo qpos, FK, and Jacobian IK.
 - `gui/controls.py::TrajectoryControlPanel` owns the current `Time [s]` value;
   `gui/trajectory.py::Trajectory` stores logical target-frame keyframes.
-- The 2D viewers drag a logical target position. The 3D viewer maps logical
-  `pelvis` to MuJoCo body `robot/pelvis` through `FRAME_BINDINGS`.
+- The removed 2D viewers dragged a logical target position. The 3D viewer maps
+  logical `pelvis` to MuJoCo body `robot/pelvis` through `FRAME_BINDINGS`.
 
 ## Root causes
 

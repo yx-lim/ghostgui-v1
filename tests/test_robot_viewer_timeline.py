@@ -1427,7 +1427,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertEqual(
             [action.text() for action in self.window.view_actions],
-            ["3D Pose", "2D Side View", "2D Skeleton", "Simulation"],
+            ["3D Pose", "Simulation"],
         )
         self.assertIsNone(self.window.controls.view_panel.parent())
 
@@ -1987,7 +1987,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             project_root = Path(directory) / "reach_test.ghostgui"
 
-            self.window.viewer_tabs.setCurrentIndex(2)
+            self.window.viewer_tabs.setCurrentIndex(1)
             self.window.on_viewer_timeslice_time_changed(0.2)
             self.window.controls.frame_box.setCurrentText("left_hand")
             self.window.controls.set_position_values(
@@ -2059,7 +2059,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 self.viewer.committed_state.get_qpos(),
                 saved_qpos,
             )
-            self.assertEqual(self.window.viewer_tabs.currentIndex(), 2)
+            self.assertEqual(self.window.viewer_tabs.currentIndex(), 1)
             self.assertFalse(self.window.controls.show_lines_box.isChecked())
             self.assertAlmostEqual(self.window.controls.corner_smoothing(), 0.35)
             self.assertAlmostEqual(self.viewer.canvas.camera_yaw, 12.5)
@@ -2070,6 +2070,23 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 np.asarray([0.4, -0.2, 1.1], dtype=float),
             )
             self.window.current_project = None
+
+    def test_legacy_removed_view_indices_restore_to_supported_views(self):
+        self.window.restore_project_workspace({"active_view_index": 3})
+        self.assertEqual(
+            self.window.viewer_tabs.tabText(
+                self.window.viewer_tabs.currentIndex()
+            ),
+            "Simulation",
+        )
+
+        self.window.restore_project_workspace({"active_view_index": 2})
+        self.assertEqual(
+            self.window.viewer_tabs.tabText(
+                self.window.viewer_tabs.currentIndex()
+            ),
+            "3D Pose",
+        )
 
     def test_project_create_updates_recent_projects_menu(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2811,7 +2828,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
         self.assertAlmostEqual(controls.corner_smoothing(), 0.5)
 
-    def test_refresh_display_passes_trajectory_display_options_to_views(self):
+    def test_refresh_display_passes_trajectory_display_options_to_3d_view(self):
         captured = {}
 
         def capture(name):
@@ -2823,9 +2840,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 }
             return update_scene
 
-        self.window.viewer_2d.update_scene = capture("viewer_2d")
         self.window.viewer_3d.update_scene = capture("viewer_3d")
-        self.window.viewer_2d_stickman.update_scene = capture("viewer_2d_stickman")
         self.window.controls.corner_smoothing_slider.set_value(0.75)
         self.window.controls.show_keyframes_box.setChecked(False)
         self.window.controls.show_lines_box.setChecked(False)
@@ -2833,17 +2848,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.window.refresh_display()
 
         self.assertEqual(captured, {
-            "viewer_2d": {
-                "smoothing": 0.75,
-                "show_lines": False,
-                "show_keyframes": False,
-            },
             "viewer_3d": {
-                "smoothing": 0.75,
-                "show_lines": False,
-                "show_keyframes": False,
-            },
-            "viewer_2d_stickman": {
                 "smoothing": 0.75,
                 "show_lines": False,
                 "show_keyframes": False,
