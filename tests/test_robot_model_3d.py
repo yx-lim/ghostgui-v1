@@ -119,9 +119,13 @@ class RobotModel3DTests(unittest.TestCase):
         end[0] += 0.4
         end[3:7] = np.array([np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)])
         timeline.set_state(0.4, end)
-        middle = timeline.ensure_state(0.2)
+        middle = timeline.sample_state(0.2)
         self.assertAlmostEqual(middle[0], 0.2, places=6)
         self.assertAlmostEqual(float(np.linalg.norm(middle[3:7])), 1.0, places=6)
+        self.assertEqual(timeline.times(), [0.0, 0.4])
+
+        timeline.ensure_state(0.2)
+        self.assertEqual(timeline.times(), [0.0, 0.2, 0.4])
 
     def test_ghost_cache_reuses_unchanged_trajectory(self):
         start = self.state.get_qpos()

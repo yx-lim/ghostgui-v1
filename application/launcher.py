@@ -24,8 +24,10 @@ def main() -> None:
     from PySide6.QtWidgets import QApplication
 
     from gui.main_window import RobotGuiMainWindow
+    from gui.theme import apply_application_theme
 
     app = QApplication([sys.argv[0], *qt_args])
+    apply_application_theme(app)
 
     window = RobotGuiMainWindow(model_key=args.model)
     window.resize(1200, 700)

@@ -471,11 +471,7 @@ class RobotModelAdapterTests(unittest.TestCase):
             window = RobotGuiMainWindow("g1")
             try:
                 window.model_library_root = root / "models"
-                with patch(
-                    "gui.main_window.QFileDialog.getOpenFileName",
-                    return_value=(str(source), ""),
-                ):
-                    window.on_open_model_file()
+                window.import_model_file(str(source))
                 loader = window.model_loaders.get("go3")
                 if loader is not None:
                     loader.wait()

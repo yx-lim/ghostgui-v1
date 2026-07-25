@@ -99,11 +99,12 @@ transparent ghosts. Drag IK is solved in a temporary state and accepted only
 when MuJoCo reports no self/environment collision; the collision-substep control
 sets how finely motion is clamped at a contact boundary.
 
-Trajectory keyframes expose target roll, pitch, and yaw in radians. Orientation
-is stored with each logical-frame keyframe, interpolated with quaternion SLERP,
-and solved with MuJoCo position and rotation Jacobians during **Generate /
-Simulate Trajectory**. Accepting a 3D ring-rotation preview copies the solved
-frame orientation back into the corresponding trajectory keyframe. The exported
+Trajectory keyframes expose target roll, pitch, and yaw as inline-editable
+degrees while retaining radians internally. Orientation is stored with each
+logical-frame keyframe, interpolated with quaternion SLERP, and solved with
+MuJoCo position and rotation Jacobians during **Generate / Simulate
+Trajectory**. Accepting a 3D ring-rotation preview copies the solved frame
+orientation back into the corresponding trajectory keyframe. The exported
 robot trajectory stores the floating-base orientation as `base_qw`, `base_qx`,
 `base_qy`, and `base_qz`; limb orientation is represented by the solved joints.
 

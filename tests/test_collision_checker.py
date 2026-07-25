@@ -51,6 +51,15 @@ class CollisionCheckerTests(unittest.TestCase):
         collisions = CollisionChecker(self.model).get_collisions(state)
         self.assertTrue(collisions)
         self.assertTrue(any(item.kind == "self" for item in collisions))
+        self.assertTrue(
+            all(
+                item.geom1_id is not None
+                and item.geom2_id is not None
+                and item.body1_id is not None
+                and item.body2_id is not None
+                for item in collisions
+            )
+        )
 
     def test_actual_ground_collision_is_reported(self):
         state = self.model.create_state()
@@ -73,16 +82,17 @@ class CollisionCheckerTests(unittest.TestCase):
         solver.orientation_weight = 0.25
         return solver
 
-    def test_collision_clamps_at_furthest_valid_substep(self):
+    def test_collision_warns_without_clamping_preview_drag(self):
         result = self._fake_solver().solve_drag(
             np.zeros(1), np.zeros(3), np.array([1.0, 0.0, 0.0, 0.0]),
             np.array([1.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0, 0.0]),
             object_name="target",
         )
         self.assertTrue(result.success)
-        self.assertEqual(result.accepted_fraction, 0.5)
-        self.assertAlmostEqual(result.qpos[0], 0.5)
-        self.assertIn("Collision blocked", result.status)
+        self.assertEqual(result.accepted_fraction, 1.0)
+        self.assertAlmostEqual(result.qpos[0], 1.0)
+        self.assertIn("Collision warning", result.status)
+        self.assertTrue(result.collisions)
 
     def test_failed_ik_preserves_last_valid_qpos(self):
         start = np.array([0.25])
@@ -95,7 +105,7 @@ class CollisionCheckerTests(unittest.TestCase):
         np.testing.assert_allclose(result.qpos, start)
         self.assertEqual(result.accepted_fraction, 0.0)
 
-    def test_ground_collision_blocks_free_root_drag(self):
+    def test_ground_collision_warns_without_blocking_free_root_drag(self):
         state = self.model.create_state()
         start_qpos = state.get_qpos()
         start_position, start_quaternion = state.get_body_pose("robot/pelvis", "body")
@@ -117,9 +127,14 @@ class CollisionCheckerTests(unittest.TestCase):
             tcp_orientation_weight=0.0,
         )
 
-        self.assertFalse(result.success)
-        self.assertEqual(result.accepted_fraction, 0.0)
-        np.testing.assert_allclose(result.qpos, start_qpos)
+        self.assertTrue(result.success)
+        self.assertEqual(result.accepted_fraction, 1.0)
+        self.assertFalse(np.allclose(result.qpos, start_qpos))
+        np.testing.assert_allclose(
+            result.position,
+            start_position + np.array([0.0, 0.0, -0.2]),
+        )
+        self.assertIn("Collision warning", result.status)
         self.assertTrue(any(item.kind == "environment" for item in result.collisions))
 
 

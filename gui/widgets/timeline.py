@@ -1,7 +1,7 @@
 """Timeline widgets for trajectory editing."""
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QSlider, QStyle, QStyleOptionSlider
 
 
@@ -10,11 +10,18 @@ class TimesliceSlider(QSlider):
 
     marker_activated = Signal(float)
     time_activated = Signal(float)
+    WHEEL_STEP_RAW = 2
+    WHEEL_NOTCH_ANGLE = 120
+    MARKER_WIDTH = 2
+    MARKER_HEIGHT = 6
+    CURRENT_MARKER_WIDTH = 2
+    CURRENT_MARKER_HEIGHT = 10
 
     def __init__(self, orientation, parent=None):
         super().__init__(orientation, parent)
         self.defined_times = set()
         self.marker_snap_pixels = 10
+        self._wheel_angle_remainder = 0
 
     def set_defined_times(self, times):
         self.defined_times = {round(float(time), 6) for time in times}
@@ -31,21 +38,35 @@ class TimesliceSlider(QSlider):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        if self.orientation() != Qt.Orientation.Horizontal or not self.defined_times:
+        if self.orientation() != Qt.Orientation.Horizontal:
             return
 
         painter = QPainter(self)
         current_raw = self.value()
+
         for time in sorted(self.defined_times):
             x = self._time_to_pixel(time)
             raw_value = self._time_to_raw(time)
             current = abs(raw_value - current_raw) <= 1
             color = QColor(21, 116, 214) if not current else QColor(15, 158, 255)
-            painter.setPen(QPen(color, 3 if current else 2))
-            groove = self._groove_rect()
-            top = groove.bottom() + 3
-            bottom = min(self.height() - 2, top + (8 if current else 6))
-            painter.drawLine(x, top, x, bottom)
+            painter.fillRect(self._marker_rect(x, current), color)
+
+    def _marker_rect(self, x, current):
+        width = (
+            self.CURRENT_MARKER_WIDTH
+            if current
+            else self.MARKER_WIDTH
+        )
+        height = (
+            self.CURRENT_MARKER_HEIGHT
+            if current
+            else self.MARKER_HEIGHT
+        )
+        top = min(
+            self._groove_rect().bottom() + 3,
+            max(0, self.height() - height),
+        )
+        return QRect(int(x) - width // 2, top, width, height)
 
     def mousePressEvent(self, event):
         if (
@@ -63,9 +84,14 @@ class TimesliceSlider(QSlider):
 
     def wheelEvent(self, event):
         previous = self.value()
-        super().wheelEvent(event)
+        self._wheel_angle_remainder += event.angleDelta().y()
+        notches = int(self._wheel_angle_remainder / self.WHEEL_NOTCH_ANGLE)
+        if notches:
+            self._wheel_angle_remainder -= notches * self.WHEEL_NOTCH_ANGLE
+            self.setValue(previous + notches * self.WHEEL_STEP_RAW)
         if self.value() != previous:
             self.time_activated.emit(self.value() / 100.0)
+        event.accept()
 
     def activate_time_at_pixel(self, x):
         if self.defined_times:

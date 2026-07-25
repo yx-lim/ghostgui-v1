@@ -5,8 +5,9 @@
 - `RobotViewer3D.reset_robot_pose()` is called directly by the
   **Reset 3D Pose** button. It immediately applies `RobotModel3D.home_qpos`;
   there is no reset mode, pending flag, or callback stored in the timer.
-- `RobotViewer3D._advance_frame()` is the only playback-timer callback. It
-  advances `frame_slider`, whose handler loads `robot_trajectory[index]`.
+- `RobotViewer3D._advance_playback()` is the playback-timer callback. It
+  advances elapsed trajectory time and samples the surrounding qpos states;
+  the Time slider and derived frame readout follow that sampled time.
 - The apparent repeated reset is caused by `_refresh_timeline_trajectory()`:
   after an edit/reset it replaces `robot_trajectory` with the editor timeline.
   The reset home-qpos keyframe is then revisited every time that short list

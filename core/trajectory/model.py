@@ -285,6 +285,40 @@ class Trajectory:
         """
         return [frame.to_dict() for frame in self.all_frames()]
 
+    def to_project_dict(self):
+        """Serialize named target-frame tracks for GhostGUI project files."""
+        return {
+            "schema_version": 1,
+            "tracks": {
+                name: [frame.to_dict() for frame in track]
+                for name, track in self.tracks.items()
+            },
+        }
+
+    def load_project_dict(self, data):
+        """
+        Load named target-frame tracks from a project file.
+
+        Older flattened trajectory lists are accepted so regular trajectory JSON
+        files can still be promoted into project data.
+        """
+        self.tracks = {name: [] for name in DEFAULT_TRACK_NAMES}
+
+        if isinstance(data, list):
+            items = data
+        else:
+            tracks = data.get("tracks", {})
+            for name in tracks:
+                self.ensure_track(name)
+            items = [
+                item
+                for track_items in tracks.values()
+                for item in track_items
+            ]
+
+        for item in items:
+            self.add_frame(TargetFrame.from_dict(item))
+
     def save_json(self, path):
         with open(path, "w") as f:
             json.dump(self.as_list(), f, indent=4)
@@ -293,10 +327,7 @@ class Trajectory:
         with open(path, "r") as f:
             data = json.load(f)
 
-        self.clear()
-
-        for item in data:
-            self.add_frame(TargetFrame.from_dict(item))
+        self.load_project_dict(data)
 
     # ============================================================
     # Uniform-dt sampling

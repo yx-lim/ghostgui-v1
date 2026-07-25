@@ -21,7 +21,7 @@ HELP_SECTIONS = [
 
 Use this workflow to create one editable robot motion.
 
-1. Choose the robot model in **Setup**.
+1. Choose the robot model in the app toolbar.
 2. Select a **Target robot frame**, such as `left_hand`.
 3. Move the target with the 3D gizmo or the position/orientation sliders.
 4. The orange robot is the temporary preview. It is not saved yet.
@@ -29,7 +29,7 @@ Use this workflow to create one editable robot motion.
 6. Click **Slice** to accept the current preview, record it at the active time, and advance the timeline.
 7. Add another slice at a later time.
 8. Click **Generate** or **Generate / Simulate**.
-9. Export the trajectory or qpos data from **Setup**.
+9. Export the trajectory or qpos data from the app toolbar.
 
 The main idea is:
 
@@ -43,33 +43,43 @@ move target -> orange preview -> Slice -> committed time slice -> Generate -> Ex
         """
 # Controls Map
 
-## Setup
+## Menu Bar
 
-Choose the robot model, import qpos or trajectory data, and export qpos rows or timed trajectories.
+Create/open/save projects, choose the robot model, import or export data, switch views, and open help.
 
-## Target / Pose
+## Target
 
-Choose the active target frame and edit its target position/orientation. These controls drive the same preview path as the 3D transform gizmo.
+Choose the logical robot frame to edit, or use **Advanced target** to select
+another body or site exposed by the model.
 
-## Time Slices
+## Editing Mode
 
-Set the active time, capture committed robot states, generate trajectories, and manage the editable timeline.
+Use **End Effector** to edit the target frame with X/Y/Z/Roll/Pitch/Yaw controls or the 3D transform gizmo. Use **Joint Angles** to edit joints directly or move the gizmo through IK while watching the joint values update. Both modes update the same orange preview, and the controls stay synchronized when you switch modes.
 
-## 3D Quick Toolbar
+## Sidebars
+
+Drag either divider to resize its sidebar between 200 and 400 pixels. Use the divider arrows or the **View → Left Sidebar** and **View → Right Sidebar** actions to collapse or restore them. GhostGUI remembers both expanded widths.
+
+## Planning
+
+Use the single Time slider to scrub the robot live or follow time-based playback. The frame readout is derived from the trajectory, and releasing the slider commits the selected edit time once. Configure playback speed without changing trajectory timestamps, along with smoothing, collision substeps, playback opacity, and preview opacity; capture committed robot states; generate trajectories; and manage the editable timeline here.
+
+## Workflow Toolbar
 
 - **Preview** plans/checks the path from the committed pose to the orange preview.
 - **Slice** accepts the current preview and stores it at the active time.
 - **Generate** samples the saved slices into a robot trajectory.
-- **Play** plays the current generated or editable timeline.
+- **Play/Pause** controls the current generated or editable timeline.
 - **Reset** returns the active time to the model home pose.
 - **Clear** clears the editable trajectory.
-- **Playback** toggles trajectory ghost/playback visibility.
+- **Move/Rotate** select the active transform gizmo in either editing mode.
+- **Gizmo** shows or hides the transform gizmo.
+- **Undo/Redo** navigate recorded editing history.
 
 ## Right Sidebar
 
-- **Selected Object** shows the picked body/site/frame details.
+- **Status** shows the latest important event or problem. Expand **Details** for the latest operation's frame, IK result, and solver diagnostics.
 - **IK / Constraints** exposes IK weights, solver settings, collision checks, and preview controls.
-- **Status** shows the current state, selected frame, IK result, root pose, and detailed messages.
 """.strip(),
     ),
     HelpSection(
@@ -115,6 +125,15 @@ A sampled sequence built from saved slices/keyframes and IK. This is the data yo
 - **Shift + drag** gives finer gizmo movement.
 - **Ctrl + drag** snaps gizmo movement.
 
+## Inline Value Sliders
+
+- **Drag** for continuous live adjustment.
+- **Click the left/right half** to decrease/increase by one logical step.
+- **Arrow keys** decrease or increase; **Page Up/Down** moves ten steps.
+- **Home/End** selects the minimum or maximum.
+- **Enter**, **F2**, or double-click the displayed number to type a value.
+- **Enter** commits typed input; **Esc** cancels it.
+
 ## History
 
 - **Ctrl+Z** undoes the last recorded action.
@@ -133,7 +152,7 @@ A sampled sequence built from saved slices/keyframes and IK. This is the data yo
         """
 # Export Format
 
-Use **Setup -> Export** to choose what to save.
+Use **File > Export** to choose what to save.
 
 - **Qpos** saves the current committed pose as one headerless qpos row.
 - **Trajectory** saves timed qpos rows from the generated trajectory, or from the editable timeline when no generated trajectory is active.

@@ -45,7 +45,7 @@ IK. This is the usual export target.
 
 ## First Motion Workflow
 
-1. Choose a robot in **Setup**.
+1. Choose a robot from the **Robot** menu.
 2. Select a **Target robot frame**, such as `left_hand`.
 3. Move the target with the 3D transform gizmo or the pose sliders.
 4. Inspect the orange preview robot.
@@ -53,7 +53,7 @@ IK. This is the usual export target.
 6. Click **Slice** to commit the preview and save it at the current time.
 7. Move to another time, adjust the frame again, and click **Slice** again.
 8. Click **Generate** or **Generate / Simulate**.
-9. Use **Setup -> Export -> Trajectory** to save timed qpos rows.
+9. Use **File -> Export -> Trajectory** to save timed qpos rows.
 
 The beginner workflow is:
 
@@ -63,23 +63,43 @@ select frame -> move target -> orange preview -> Slice -> Generate -> Export
 
 ## GUI Sections
 
-### Setup
+### Menu Bar
 
-Choose the active robot model and import or export data. Import supports models,
-qpos poses, and trajectories. Export can save a single committed qpos pose or a
-timed trajectory.
+Create/open/save projects, choose the active robot model, import or export data,
+switch views, and open help. Import supports models, qpos poses, and
+trajectories. Export can save a single committed qpos pose or a timed
+trajectory.
 
-### Target / Pose
+### Target
 
-Choose the active target frame and edit its target pose. The position and
-orientation controls update the same preview system used by the 3D gizmo.
+Choose the logical robot frame to edit, or use **Advanced target** to select
+another body or site exposed by the model.
 
-### Time Slices
+### Editing Mode
+
+Choose **End Effector** to edit the target frame with X, Y, Z, Roll, Pitch, and
+Yaw controls or the 3D transform gizmo. Choose **Joint Angles** to edit the
+active robot's joints directly or move the gizmo through IK while watching the
+joint values update. Both modes update the orange preview and stay synchronized
+as you switch between them.
+
+Both sidebars can be resized from 200 to 400 pixels by dragging their dividers.
+Use the divider arrows or the corresponding **View → Left Sidebar** and
+**View → Right Sidebar** actions to collapse and restore them. Their last
+expanded widths and collapsed states are remembered between sessions.
+
+### Planning
 
 Manage the editable timeline. The active time determines where the next slice is
-stored. Saved slices become the source material for generated trajectories.
+stored. The single Time slider drives both live scrubbing and playback; the
+robot is sampled immediately while dragging, and the derived frame appears as a
+readout beside the time. Releasing the slider commits the selected edit time
+once. Smoothing, collision substeps, playback opacity, and preview opacity are
+configured here. Playback speed changes the viewing rate without changing the
+trajectory's stored timestamps. Saved slices become the source material for
+generated trajectories.
 
-### 3D Quick Toolbar
+### Workflow Toolbar
 
 **Preview** plans/checks the current orange preview path.
 
@@ -87,23 +107,27 @@ stored. Saved slices become the source material for generated trajectories.
 
 **Generate** creates a sampled robot trajectory from saved timeline states.
 
-**Play** plays the active generated or editable timeline.
+**Play/Pause** controls the active generated or editable timeline.
 
 **Reset** returns the active time to the model home pose.
 
 **Clear** clears the editable trajectory.
 
-**Playback** toggles trajectory ghost or playback visibility.
+**Move/Rotate** select the active transform gizmo in either editing mode.
+
+**Gizmo** shows or hides the transform gizmo. Its visibility preference remains
+active when switching editing modes.
+
+**Undo/Redo** navigate recorded editing history.
 
 ### Right Sidebar
 
-**Selected Object** describes the currently selected body, site, or frame.
+**Status** shows the latest important event or problem in a compact summary.
+Expand **Details** to inspect the latest operation's frame, IK result, solver
+metrics, and other diagnostics.
 
 **IK / Constraints** contains solver settings, task weights, collision controls,
 and preview controls.
-
-**Status** shows the active state, selected frame, IK result, root pose, and
-detailed messages.
 
 ## Keyboard / Mouse Shortcuts
 
@@ -112,6 +136,18 @@ detailed messages.
 **T** switches the 3D transform gizmo to translate mode.
 
 **R** switches the 3D transform gizmo to rotate mode.
+
+### Inline Value Sliders
+
+Drag a filled slider for continuous live adjustment.
+
+Click its left or right half to decrease or increase by one logical step.
+
+Use the arrow keys for one step, Page Up/Down for ten steps, and Home/End for
+the minimum or maximum.
+
+Press Enter or F2, or double-click the displayed value, to type directly.
+Enter commits the typed value and Esc cancels it.
 
 **E** or **Esc** cancels the current transform drag.
 
@@ -137,9 +173,9 @@ detailed messages.
 
 ## Import And Export
 
-Use **Setup -> Import** for model, qpos, or trajectory input.
+Use **File -> Import** for model, qpos, or trajectory input.
 
-Use **Setup -> Export** for:
+Use **File -> Export** for:
 
 - **Qpos**: the current committed pose as one headerless qpos row.
 - **Trajectory**: timed qpos rows from the generated trajectory or editable

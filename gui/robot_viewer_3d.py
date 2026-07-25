@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import csv
+from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 
 import numpy as np
 
@@ -14,6 +16,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -21,14 +24,18 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
-    QSlider,
+    QSizePolicy,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from application.paths import CSV_DIR, prepare_csv_save_path
+from application.paths import (
+    QPOS_CSV_DIR,
+    TRAJECTORY_CSV_DIR,
+    prepare_csv_save_path,
+)
 from core.models import (
     RobotStateTimeline,
     TrajectoryGhostRenderer,
@@ -80,10 +87,12 @@ class RobotViewer3D(QWidget):
     generate_requested = Signal()
     clear_trajectory_requested = Signal()
     timeslice_time_changed = Signal(float)
+    timeslice_preview_time_changed = Signal(float)
     timeline_duration_changed = Signal(float)
     accept_timeslice_requested = Signal()
     delete_timeslice_requested = Signal()
     history_action_finished = Signal(str)
+    playback_state_changed = Signal(bool)
 
     def __init__(self, robot_model=None, error=None):
         super().__init__()
@@ -99,8 +108,10 @@ class RobotViewer3D(QWidget):
         # Compatibility alias: external readers historically used robot_state.
         # It now always means the timeline-backed committed state.
         self.robot_state = self.committed_state
+        self.playback_state = robot_model.create_state() if robot_model else None
         self.preview_active = False
         self.current_time = 0.0
+        self.display_time = 0.0
         self.timeline_duration = 5.0
         self.state_timeline = (
             RobotStateTimeline(robot_model, initial_qpos=self.robot_state.get_qpos())
@@ -122,6 +133,9 @@ class RobotViewer3D(QWidget):
         self.robot_trajectory = []
         self.robot_trajectory_times = []
         self._prompt_trajectory_import_dt_on_load = False
+        self.csv_file_dialog = None
+        self.pending_csv_file_selection = None
+        self.csv_file_operation_pending = False
         self.ghost_trajectory = []
         self.ghost_source = None
         self.joint_controls = {}
@@ -136,6 +150,9 @@ class RobotViewer3D(QWidget):
         self.root_lock_target = None
         self._last_ik_status = None
         self._syncing_target = False
+        self._playback_last_tick = None
+        self._resume_playback_after_scrub = False
+        self._pending_scrub_preview_time = None
         self.canvas = RobotCanvas3D()
         self.canvas.geometry_progress.connect(self._on_geometry_progress)
         self.canvas.target_dragged.connect(self.target_dragged.emit)
@@ -152,7 +169,13 @@ class RobotViewer3D(QWidget):
         self.last_valid_target_quaternion = None
         self.play_timer = QTimer(self)
         self.play_timer.setInterval(33)
-        self.play_timer.timeout.connect(self._advance_frame)
+        self.play_timer.timeout.connect(self._advance_playback)
+        self.scrub_preview_timer = QTimer(self)
+        self.scrub_preview_timer.setSingleShot(True)
+        self.scrub_preview_timer.setInterval(16)
+        self.scrub_preview_timer.timeout.connect(
+            self._flush_pending_scrub_preview
+        )
         self._build_ui(error)
         if self.robot_state:
             self.canvas.set_robot_states(
@@ -236,10 +259,10 @@ class RobotViewer3D(QWidget):
         qpos_csv_layout.addWidget(self.save_qpos_button)
         self.qpos_csv_group.setVisible(False)
 
-        self.selection_context_panel = QWidget()
-        target_layout = QFormLayout(self.selection_context_panel)
-        target_layout.setContentsMargins(6, 6, 6, 6)
-        target_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        self.target_context_panel = QWidget()
+        target_layout = QFormLayout(self.target_context_panel)
+        target_layout.setContentsMargins(0, 0, 0, 0)
+        target_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         self.target_box = QComboBox()
         _compact_combo(self.target_box, minimum_chars=12)
         if self.robot_model:
@@ -256,15 +279,7 @@ class RobotViewer3D(QWidget):
                     if (kind, name) not in known and name != "world":
                         self.target_box.addItem(f"{kind}: {name}", (kind, name))
         self.target_box.currentIndexChanged.connect(self._target_selected)
-        self.collision_substeps = QSpinBox()
-        _compact_spinbox(self.collision_substeps)
-        self.collision_substeps.setRange(1, 32)
-        self.collision_substeps.setValue(8)
-        self.collision_substeps.valueChanged.connect(
-            self._set_collision_substeps
-        )
         target_layout.addRow("Advanced target", self.target_box)
-        target_layout.addRow("Collision substeps", self.collision_substeps)
         self.root_pose_label = StatusValueLabel()
         self.root_pose_label.setWordWrap(True)
 
@@ -273,44 +288,38 @@ class RobotViewer3D(QWidget):
         preview_ik_layout.setContentsMargins(4, 4, 4, 4)
         preview_ik_layout.setSpacing(4)
 
-        preview_group = QWidget()
-        preview_layout = QVBoxLayout(preview_group)
-        preview_layout.setContentsMargins(0, 0, 0, 0)
-        self.plan_preview_button = QPushButton("Plan Preview")
-        self.accept_preview_button = QPushButton("Accept Preview")
-        self.cancel_preview_button = QPushButton("Cancel Preview")
-        self.preview_alpha = QDoubleSpinBox()
-        _compact_spinbox(self.preview_alpha)
-        self.preview_alpha.setRange(0.1, 1.0)
-        self.preview_alpha.setSingleStep(0.05)
-        self.preview_alpha.setValue(0.65)
-        self.preview_alpha.valueChanged.connect(self.canvas.set_preview_alpha)
-        self.plan_preview_button.clicked.connect(self.plan_preview)
-        self.accept_preview_button.clicked.connect(self.accept_preview)
-        self.cancel_preview_button.clicked.connect(self.cancel_preview)
-        preview_layout.addWidget(self.plan_preview_button)
-        preview_layout.addWidget(self.accept_preview_button)
-        preview_layout.addWidget(self.cancel_preview_button)
-        alpha_row = QHBoxLayout()
-        self.preview_alpha_label = QLabel("Preview opacity")
-        alpha_row.addWidget(self.preview_alpha_label)
-        alpha_row.addWidget(self.preview_alpha)
-        preview_layout.addLayout(alpha_row)
-        preview_ik_layout.addWidget(preview_group)
-
         self.timeslice_context_panel = QWidget()
         self.timeslice_context_layout = QFormLayout(self.timeslice_context_panel)
         self.timeslice_context_layout.setContentsMargins(6, 6, 6, 6)
         self.timeslice_context_layout.setRowWrapPolicy(
             QFormLayout.RowWrapPolicy.WrapLongRows
         )
+        self.collision_substeps = QSpinBox()
+        _compact_spinbox(self.collision_substeps)
+        self.collision_substeps.setRange(1, 32)
+        self.collision_substeps.setValue(8)
+        self.collision_substeps.valueChanged.connect(
+            self._set_collision_substeps
+        )
+        self.collision_substeps_label = QLabel("Collision substeps")
+        self.timeslice_context_layout.addRow(
+            self.collision_substeps_label, self.collision_substeps
+        )
+        self.playback_speed = QDoubleSpinBox()
+        _compact_spinbox(self.playback_speed)
+        self.playback_speed.setRange(0.10, 4.00)
+        self.playback_speed.setDecimals(2)
+        self.playback_speed.setSingleStep(0.25)
+        self.playback_speed.setValue(1.00)
+        self.playback_speed.setSuffix("×")
+        self.playback_speed_label = QLabel("Playback speed")
+        self.timeslice_context_layout.addRow(
+            self.playback_speed_label, self.playback_speed
+        )
         self.generate_button = QPushButton("Demo trajectory")
         self.generate_button.clicked.connect(self.generate_demo_trajectory)
         self.play_button = QPushButton("Play")
         self.play_button.clicked.connect(self.toggle_playback)
-        self.frame_slider = QSlider(Qt.Orientation.Horizontal)
-        self.frame_slider.setRange(0, 0)
-        self.frame_slider.valueChanged.connect(self.set_trajectory_frame)
         self.ghost_stride = QSpinBox()
         _compact_spinbox(self.ghost_stride)
         self.ghost_stride.setRange(1, 100)
@@ -322,20 +331,31 @@ class RobotViewer3D(QWidget):
         self.ghost_alpha.setSingleStep(0.05)
         self.ghost_alpha.setValue(0.16)
         self.ghost_alpha.valueChanged.connect(self._update_ghost_options)
+        self.preview_alpha = QDoubleSpinBox()
+        _compact_spinbox(self.preview_alpha)
+        self.preview_alpha.setRange(0.1, 1.0)
+        self.preview_alpha.setSingleStep(0.05)
+        self.preview_alpha.setValue(0.65)
+        self.preview_alpha.valueChanged.connect(self.canvas.set_preview_alpha)
         self.ghost_stride_label = QLabel("Playback spacing")
         self.ghost_alpha_label = QLabel("Playback opacity")
+        self.preview_alpha_label = QLabel("Preview opacity")
         self.timeslice_context_layout.addRow(
             self.ghost_stride_label, self.ghost_stride
         )
         self.timeslice_context_layout.addRow(
             self.ghost_alpha_label, self.ghost_alpha
         )
+        self.timeslice_context_layout.addRow(
+            self.preview_alpha_label, self.preview_alpha
+        )
 
         editor_tabs = QTabWidget()
+        editor_tabs.setObjectName("ikEditorTabs")
         editor_tabs.setMinimumWidth(0)
-        editor_tabs.setMaximumWidth(244)
         self.ik_editor_tabs = editor_tabs
         joint_group = QWidget()
+        joint_group.setObjectName("ikEditorTabContent")
         joint_layout = QVBoxLayout(joint_group)
         joint_layout.setContentsMargins(6, 6, 6, 6)
         if self.robot_state:
@@ -352,31 +372,31 @@ class RobotViewer3D(QWidget):
             joint_layout.addWidget(QLabel("Joint controls unavailable."))
         joint_layout.addStretch()
         scroll = QScrollArea()
+        scroll.setObjectName("jointEditorScroll")
+        scroll.viewport().setObjectName("ikEditorViewport")
         scroll.setWidgetResizable(True)
         scroll.setMinimumWidth(0)
-        scroll.setMaximumWidth(244)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(joint_group)
-        editor_tabs.addTab(scroll, "Joint angles")
+        self.joint_angles_page = scroll
         editor_tabs.addTab(self._build_ik_tasks_widget(), "Tasks")
         editor_tabs.addTab(self._build_joint_weights_widget(), "Weights")
         editor_tabs.addTab(self._build_solver_widget(), "Solver")
-        editor_tabs.setCurrentIndex(1)
+        editor_tabs.setCurrentIndex(0)
         preview_ik_layout.addWidget(editor_tabs)
         root.addWidget(self._build_canvas_workspace(), stretch=1)
         root.addWidget(self._build_timeslice_editor())
 
         enabled = self.robot_state is not None
-        self.quick_reset_button.setEnabled(enabled)
         self.load_qpos_button.setEnabled(enabled)
         self.load_trajectory_button.setEnabled(enabled)
         self.trajectory_import_dt.setEnabled(enabled)
         self.save_qpos_button.setEnabled(enabled)
         self.save_trajectory_button.setEnabled(enabled)
-        self.selection_context_panel.setEnabled(enabled)
+        self.target_context_panel.setEnabled(enabled)
         self.timeslice_context_panel.setEnabled(enabled)
-        preview_group.setEnabled(enabled)
-        self.quick_actions_panel.setEnabled(enabled)
+        self.preview_ik_context_panel.setEnabled(enabled)
         self.timeslice_editor.setEnabled(enabled)
 
     def _build_canvas_workspace(self):
@@ -385,86 +405,7 @@ class RobotViewer3D(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.canvas, 0, 0)
-        layout.addWidget(
-            self._build_quick_actions_panel(),
-            0,
-            0,
-            alignment=Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
-        )
         return self.canvas_workspace
-
-    def _build_quick_actions_panel(self):
-        self.quick_actions_panel = QWidget()
-        self.quick_actions_panel.setObjectName("viewerQuickActions")
-        self.quick_actions_panel.setStyleSheet(
-            "#viewerQuickActions {"
-            " background: rgba(245, 247, 250, 220);"
-            " border: 1px solid rgba(90, 105, 125, 120);"
-            " border-radius: 6px;"
-            "}"
-        )
-        layout = QHBoxLayout(self.quick_actions_panel)
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(4)
-
-        self.quick_plan_preview_button = QPushButton("Preview")
-        self.quick_accept_timeslice_button = QPushButton("Slice")
-        self.quick_generate_button = QPushButton("Generate")
-        self.quick_play_button = QPushButton("Play")
-        self.quick_reset_button = QPushButton("Reset")
-        self.quick_clear_button = QPushButton("Clear")
-        self.quick_show_ghosts = QCheckBox("Playback")
-        self.quick_show_ghosts.setChecked(self.show_ghosts.isChecked())
-
-        self.quick_plan_preview_button.setObjectName("planPreviewButton")
-        self.quick_plan_preview_button.setToolTip(
-            "Plan/check the path from the committed pose to the orange preview."
-        )
-        self.quick_accept_timeslice_button.setObjectName("sliceButton")
-        self.quick_accept_timeslice_button.setToolTip(
-            "Accept the current preview, save it at this time, and advance the timeline."
-        )
-        self.quick_generate_button.setObjectName("quickGenerateButton")
-        self.quick_generate_button.setToolTip(
-            "Generate a sampled trajectory from saved timeline states."
-        )
-        self.quick_play_button.setObjectName("quickPlayButton")
-        self.quick_play_button.setToolTip("Play or pause the active trajectory.")
-        self.quick_reset_button.setObjectName("quickResetButton")
-        self.quick_reset_button.setToolTip("Reset the active time to the model home pose.")
-        self.quick_clear_button.setObjectName("quickClearButton")
-        self.quick_clear_button.setToolTip("Clear the editable trajectory.")
-        self.quick_show_ghosts.setObjectName("playbackVisibilityToggle")
-        self.quick_show_ghosts.setToolTip("Show or hide trajectory playback ghosts.")
-
-        for button in (
-            self.quick_plan_preview_button,
-            self.quick_accept_timeslice_button,
-            self.quick_generate_button,
-            self.quick_play_button,
-            self.quick_reset_button,
-            self.quick_clear_button,
-        ):
-            button.setMinimumWidth(0)
-            button.setMaximumWidth(82)
-
-        self.quick_plan_preview_button.clicked.connect(self.plan_preview)
-        self.quick_accept_timeslice_button.clicked.connect(self.accept_timeslice)
-        self.quick_generate_button.clicked.connect(self.generate_requested.emit)
-        self.quick_play_button.clicked.connect(self.toggle_playback)
-        self.quick_reset_button.clicked.connect(self.reset_robot_pose)
-        self.quick_clear_button.clicked.connect(self.clear_trajectory_requested.emit)
-        self.quick_show_ghosts.toggled.connect(self.show_ghosts.setChecked)
-        self.show_ghosts.toggled.connect(self.quick_show_ghosts.setChecked)
-
-        layout.addWidget(self.quick_plan_preview_button)
-        layout.addWidget(self.quick_accept_timeslice_button)
-        layout.addWidget(self.quick_generate_button)
-        layout.addWidget(self.quick_play_button)
-        layout.addWidget(self.quick_reset_button)
-        layout.addWidget(self.quick_clear_button)
-        layout.addWidget(self.quick_show_ghosts)
-        return self.quick_actions_panel
 
     def _build_timeslice_editor(self):
         self.timeslice_editor = QWidget()
@@ -486,6 +427,9 @@ class RobotViewer3D(QWidget):
         self.timeslice_slider.sliderMoved.connect(
             self._preview_timeslice_slider_value
         )
+        self.timeslice_slider.sliderPressed.connect(
+            self._begin_timeslice_scrub
+        )
         self.timeslice_slider.sliderReleased.connect(
             self._emit_timeslice_slider_time
         )
@@ -499,9 +443,13 @@ class RobotViewer3D(QWidget):
         self.timeslice_time_input.editingFinished.connect(
             self._emit_timeslice_input_time
         )
+        self.timeslice_frame_readout = QLabel("Frame —")
+        self.timeslice_frame_readout.setMinimumWidth(82)
+        self.timeslice_frame_readout.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.timeslice_frame_readout.setAccessibleName("Playback frame")
 
-        self.accept_timeslice_button = QPushButton("Accept Slice")
-        self.accept_timeslice_button.clicked.connect(self.accept_timeslice)
         self.delete_timeslice_button = QPushButton("Delete Slice")
         self.delete_timeslice_button.clicked.connect(self.delete_timeslice)
         self.timeslice_step_label = QLabel("Slice step size")
@@ -531,13 +479,7 @@ class RobotViewer3D(QWidget):
         self.timeslice_time_row.addWidget(self.timeslice_label)
         self.timeslice_time_row.addWidget(self.timeslice_slider, stretch=1)
         self.timeslice_time_row.addWidget(self.timeslice_time_input)
-
-        self.timeslice_frame_row = QHBoxLayout()
-        self.timeslice_frame_row.setContentsMargins(0, 0, 0, 0)
-        self.timeslice_frame_row.setSpacing(8)
-        self.timeslice_frame_label = QLabel("Frame")
-        self.timeslice_frame_row.addWidget(self.timeslice_frame_label)
-        self.timeslice_frame_row.addWidget(self.frame_slider, stretch=1)
+        self.timeslice_time_row.addWidget(self.timeslice_frame_readout)
 
         self.timeslice_context_layout.addRow(
             self.timeslice_step_label, self.timeslice_step_input
@@ -554,11 +496,9 @@ class RobotViewer3D(QWidget):
         self.timeslice_scrubber_layout.setContentsMargins(0, 0, 0, 0)
         self.timeslice_scrubber_layout.setSpacing(3)
         self.timeslice_scrubber_layout.addLayout(self.timeslice_time_row)
-        self.timeslice_scrubber_layout.addLayout(self.timeslice_frame_row)
         self.timeslice_action_row = QVBoxLayout()
         self.timeslice_action_row.setContentsMargins(0, 0, 0, 0)
         self.timeslice_action_row.setSpacing(4)
-        self.timeslice_action_row.addWidget(self.accept_timeslice_button)
         self.timeslice_action_row.addWidget(self.delete_timeslice_button)
         self.timeslice_timeline_layout.addLayout(
             self.timeslice_scrubber_layout, stretch=1
@@ -581,8 +521,10 @@ class RobotViewer3D(QWidget):
             return
         if widget.parent() is not self.timeslice_context_panel:
             widget.setParent(self.timeslice_context_panel)
-        widget.setMinimumWidth(max(widget.minimumWidth(), 232))
-        widget.setMaximumWidth(max(widget.maximumWidth(), 240))
+        widget.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            widget.sizePolicy().verticalPolicy(),
+        )
         self.smoothing_widget = widget
         self.timeslice_context_layout.insertRow(0, widget)
 
@@ -619,21 +561,60 @@ class RobotViewer3D(QWidget):
 
     def _preview_timeslice_slider_value(self, raw_value):
         time = raw_value / 100.0
+        if not self.scrub_preview_timer.isActive():
+            self.preview_trajectory_time(time, emit_time_signal=True)
+            self.scrub_preview_timer.start()
+            return
+
+        self._pending_scrub_preview_time = time
         was_blocked = self.timeslice_time_input.blockSignals(True)
         self.timeslice_time_input.setValue(time)
         self.timeslice_time_input.blockSignals(was_blocked)
 
+    def _flush_pending_scrub_preview(self):
+        time = self._pending_scrub_preview_time
+        self._pending_scrub_preview_time = None
+        if time is None:
+            return
+        self.preview_trajectory_time(time, emit_time_signal=True)
+        self.scrub_preview_timer.start()
+
+    def _begin_timeslice_scrub(self):
+        self.scrub_preview_timer.stop()
+        self._pending_scrub_preview_time = None
+        self._resume_playback_after_scrub = self.play_timer.isActive()
+        if self._resume_playback_after_scrub:
+            self.pause_playback(commit_time=False)
+
     def _emit_timeslice_slider_time(self):
-        self.timeslice_time_changed.emit(self.timeslice_slider.value() / 100.0)
+        time = self.timeslice_slider.value() / 100.0
+        self.scrub_preview_timer.stop()
+        self._pending_scrub_preview_time = None
+        self.preview_trajectory_time(time, emit_time_signal=True)
+        self.timeslice_time_changed.emit(time)
+        resume_playback = self._resume_playback_after_scrub
+        self._resume_playback_after_scrub = False
+        if resume_playback:
+            self.start_playback()
 
     def _emit_timeslice_marker_time(self, time):
+        was_playing = self.play_timer.isActive()
+        if was_playing:
+            self.pause_playback(commit_time=False)
         self._set_timeslice_widgets(time)
         self.timeslice_time_changed.emit(float(time))
+        if was_playing:
+            self.start_playback()
 
     def _emit_timeslice_input_time(self):
         time = self.timeslice_time_input.value()
+        was_playing = self.play_timer.isActive()
+        if was_playing:
+            self.pause_playback(commit_time=False)
         self._set_timeslice_widgets(time)
         self.timeslice_time_changed.emit(time)
+        if was_playing:
+            self.start_playback()
 
     def timeslice_step(self):
         return float(self.timeslice_step_input.value())
@@ -658,7 +639,9 @@ class RobotViewer3D(QWidget):
                 self.current_time = self.state_timeline.time_key(duration)
             else:
                 self.current_time = duration
-        self._set_timeslice_widgets(self.current_time)
+        self.display_time = min(self.display_time, duration)
+        self._set_timeslice_widgets(self.display_time)
+        self._update_frame_readout(self.display_time)
         if emit_signal:
             self.timeline_duration_changed.emit(duration)
 
@@ -670,8 +653,31 @@ class RobotViewer3D(QWidget):
         return raw_time / 100.0
 
     def accept_timeslice(self):
-        if self.preview_active and not self.accept_preview():
-            return
+        # Playback and live scrubbing intentionally move display_time without
+        # creating an editable state. Slice must first choose one authoritative
+        # time so its qpos state and logical-target snapshot cannot be written
+        # at two different positions on the timeline.
+        slice_time = max(0.0, min(float(self.display_time), self.timeline_duration))
+        if self.state_timeline is not None:
+            slice_time = self.state_timeline.time_key(slice_time)
+
+        if self.play_timer.isActive():
+            self.pause_playback(commit_time=False)
+
+        if self.preview_active:
+            # Preserve the active preview while moving it to the visible time.
+            # Calling set_current_time() here would discard that preview.
+            self.current_time = slice_time
+            self.display_time = slice_time
+            self._set_timeslice_widgets(slice_time)
+            self.timeslice_preview_time_changed.emit(slice_time)
+            if not self.accept_preview(emit_pose_finished=False):
+                return
+        elif abs(slice_time - self.current_time) > 1e-9:
+            # With no edit preview to preserve, load the visible trajectory pose
+            # as the committed state before taking the logical-target snapshot.
+            self.timeslice_time_changed.emit(slice_time)
+
         self.accept_timeslice_requested.emit()
 
     def delete_timeslice(self):
@@ -683,8 +689,8 @@ class RobotViewer3D(QWidget):
     def robot_context_widget(self):
         return self.robot_context_panel
 
-    def selection_context_widget(self):
-        return self.selection_context_panel
+    def target_context_widget(self):
+        return self.target_context_panel
 
     def trajectory_context_widget(self):
         return None
@@ -705,11 +711,16 @@ class RobotViewer3D(QWidget):
     def preview_ik_context_widget(self):
         return self.preview_ik_context_panel
 
+    def joint_editor_widget(self):
+        return self.joint_angles_page
+
     def _make_ik_scroll_area(self, content):
         scroll = QScrollArea()
+        scroll.setObjectName("ikEditorScroll")
+        scroll.viewport().setObjectName("ikEditorViewport")
+        content.setObjectName(content.objectName() or "ikEditorTabContent")
         scroll.setWidgetResizable(True)
         scroll.setMinimumWidth(0)
-        scroll.setMaximumWidth(244)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(content)
         return scroll
@@ -776,7 +787,9 @@ class RobotViewer3D(QWidget):
         defaults = {
             "tcp_position": (True, 1.0),
             "tcp_orientation": (
-                self.robot_model.model_type != "quadruped", 0.25
+                self.robot_model.model_type != "quadruped"
+                or self.robot_model.info.key == "go2",
+                0.25,
             ),
             # Secondary pose objectives are opt-in. Enabling them by default
             # makes an ordinary TCP drag settle at a weighted compromise and
@@ -951,12 +964,42 @@ class RobotViewer3D(QWidget):
         self.begin_preview()
         self.preview_state.set_joint_value(name, value)
         self._set_target_to_selected_pose()
-        self.status_label.setText(
-            f"Preview FK: {name} = {value:+.3f} rad; Accept Preview to commit"
-        )
+        collisions = self._update_preview_collisions()
+        if self.last_valid_target_position is not None:
+            roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
+            self.target_pose_dragged.emit(
+                *map(float, self.last_valid_target_position),
+                roll,
+                pitch,
+                yaw,
+            )
+        if collisions:
+            names = ", ".join(
+                f"{item.geom1} ↔ {item.geom2}" for item in collisions[:2]
+            )
+            self.status_label.setText(
+                f"Collision warning: {names}; "
+                f"Preview FK: {name} = {value:+.3f} rad; "
+                "adjust the pose before Slice"
+            )
+        else:
+            self.status_label.setText(
+                f"Preview FK: {name} = {value:+.3f} rad; use Slice to commit"
+            )
 
-    def _sync_joint_controls(self):
-        state = self.preview_state if self.preview_active else self.committed_state
+    def _update_preview_collisions(self, collisions=None):
+        if collisions is None:
+            collisions = (
+                self.collision_checker.get_collisions(self.preview_state)
+                if self.collision_checker and self.preview_state else []
+            )
+        collisions = list(collisions)
+        self.canvas.set_preview_collisions(collisions)
+        return collisions
+
+    def _sync_joint_controls(self, state=None):
+        if state is None:
+            state = self.preview_state if self.preview_active else self.committed_state
         for name, control in self.joint_controls.items():
             control.set_value(state.get_joint_value(name))
 
@@ -1093,6 +1136,7 @@ class RobotViewer3D(QWidget):
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self._capture_secondary_targets()
         self.preview_active = True
+        self.canvas.set_preview_collisions([])
         self.canvas.set_preview_visible(True)
         self._update_root_pose_label()
 
@@ -1147,11 +1191,16 @@ class RobotViewer3D(QWidget):
             self.last_valid_target_position = result.position.copy()
             self.last_valid_target_quaternion = result.quaternion.copy()
 
-        # Whether fully accepted, clamped, or rejected, snap the handle back to
-        # the last collision-free pose rather than displaying an invalid target.
+        # Collision is a preview warning rather than a drag constraint. IK
+        # failures can still leave the handle at the last solvable substep.
         self.canvas.set_target_pose(
             self.last_valid_target_position,
             self.last_valid_target_quaternion,
+        )
+        self._update_preview_collisions(
+            result.collisions
+            if result.success or result.collisions
+            else None
         )
         self._sync_joint_controls()
         logical_frame = self.reverse_bindings.get((kind, name), name)
@@ -1279,7 +1328,7 @@ class RobotViewer3D(QWidget):
         )
         self.history_action_finished.emit("Plan preview")
 
-    def accept_preview(self):
+    def accept_preview(self, *, emit_pose_finished=True):
         if not self.preview_active:
             self.status_label.setText("No preview changes to accept.")
             return False
@@ -1294,6 +1343,7 @@ class RobotViewer3D(QWidget):
             if self.collision_checker else []
         )
         if collisions:
+            self.canvas.set_preview_collisions(collisions)
             names = ", ".join(
                 f"{item.geom1} ↔ {item.geom2}" for item in collisions[:2]
             )
@@ -1305,6 +1355,7 @@ class RobotViewer3D(QWidget):
         self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
+        self.canvas.set_preview_collisions([])
         self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
@@ -1312,7 +1363,7 @@ class RobotViewer3D(QWidget):
         self.status_label.setText(
             f"Accepted preview into committed keyframe at t={self.current_time:.2f} s"
         )
-        if self.last_valid_target_position is not None:
+        if emit_pose_finished and self.last_valid_target_position is not None:
             roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
             self.target_pose_drag_finished.emit(
                 *map(float, self.last_valid_target_position), roll, pitch, yaw
@@ -1324,6 +1375,7 @@ class RobotViewer3D(QWidget):
             return
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
+        self.canvas.set_preview_collisions([])
         self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
@@ -1350,6 +1402,118 @@ class RobotViewer3D(QWidget):
     def get_current_time(self):
         return self.current_time
 
+    def _trajectory_sample(self, time):
+        """Return an interpolated playback qpos and its nearest frame index."""
+        if not self.robot_trajectory:
+            return None, None
+
+        times = self.robot_trajectory_times
+        if len(times) != len(self.robot_trajectory):
+            times = [float(index) for index in range(len(self.robot_trajectory))]
+
+        time = float(time)
+        if len(times) == 1 or time <= times[0]:
+            return self.robot_trajectory[0].copy(), 0
+        if time >= times[-1]:
+            last = len(self.robot_trajectory) - 1
+            return self.robot_trajectory[last].copy(), last
+
+        upper = bisect_right(times, time)
+        lower = max(0, upper - 1)
+        upper = min(len(times) - 1, upper)
+        lower_time = times[lower]
+        upper_time = times[upper]
+        if upper_time <= lower_time:
+            return self.robot_trajectory[upper].copy(), upper
+
+        fraction = (time - lower_time) / (upper_time - lower_time)
+        qpos = self.state_timeline._interpolate(
+            self.robot_trajectory[lower],
+            self.robot_trajectory[upper],
+            fraction,
+        )
+        nearest = (
+            lower
+            if time - lower_time <= upper_time - time
+            else upper
+        )
+        return qpos, nearest
+
+    def _update_frame_readout(self, time=None, frame_index=None):
+        if not self.robot_trajectory:
+            self.timeslice_frame_readout.setText("Frame —")
+            return
+        if frame_index is None:
+            _qpos, frame_index = self._trajectory_sample(
+                self.display_time if time is None else time
+            )
+        self.timeslice_frame_readout.setText(
+            f"Frame {int(frame_index) + 1} / {len(self.robot_trajectory)}"
+        )
+
+    def _set_canvas_target_from_state(self, state):
+        kind, name = self._selected_target()
+        if not name:
+            return
+        try:
+            position, quaternion = state.get_body_pose(name, kind)
+        except KeyError:
+            return
+        self.canvas.set_target_pose(position, quaternion)
+
+    def _emit_selected_target_pose(self):
+        if (
+            self.last_valid_target_position is None
+            or self.last_valid_target_quaternion is None
+        ):
+            return
+        roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
+        self.target_pose_dragged.emit(
+            *map(float, self.last_valid_target_position),
+            roll,
+            pitch,
+            yaw,
+        )
+
+    def _use_editor_canvas_states(self):
+        if not self.robot_state:
+            return
+        self.canvas.set_robot_states(
+            self.committed_state, self.preview_state, self.ghost_renderer
+        )
+        self.canvas.set_preview_visible(self.preview_active)
+
+    def preview_trajectory_time(self, time, emit_time_signal=False):
+        """Display a timeline pose without creating an editable qpos state."""
+        if not self.robot_state:
+            return None
+        time = max(0.0, min(float(time), self.timeline_duration))
+        self.display_time = time
+        self._set_timeslice_widgets(time)
+
+        qpos, frame_index = self._trajectory_sample(time)
+        if qpos is None and self.state_timeline:
+            qpos = self.state_timeline.sample_state(
+                time,
+                fallback_qpos=self.committed_state.get_qpos(),
+            )
+
+        if qpos is not None and self.playback_state is not None:
+            self.playback_state.set_qpos(qpos)
+            self.canvas.set_robot_states(
+                self.playback_state, self.preview_state, self.ghost_renderer
+            )
+            self.canvas.set_preview_visible(False)
+            self._sync_joint_controls(state=self.playback_state)
+            self._set_canvas_target_from_state(self.playback_state)
+            self.canvas.update()
+
+        self._update_frame_readout(time, frame_index)
+        self._update_timeline_label(time)
+        if emit_time_signal:
+            self.timeslice_preview_time_changed.emit(time)
+        return None if qpos is None else qpos.copy()
+
     def get_current_keyframe(self):
         if not self.state_timeline:
             return None
@@ -1366,9 +1530,11 @@ class RobotViewer3D(QWidget):
     def set_robot_state_for_current_time(self, qpos):
         if not self.robot_state:
             return
+        self._use_editor_canvas_states()
         self.committed_state.set_qpos(qpos)
         self.preview_state.set_qpos(qpos)
         self.preview_active = False
+        self.canvas.set_preview_collisions([])
         self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
@@ -1388,10 +1554,22 @@ class RobotViewer3D(QWidget):
     def set_current_time(self, time):
         if not self.state_timeline:
             return
+        self.scrub_preview_timer.stop()
+        self._pending_scrub_preview_time = None
+        time = max(0.0, min(float(time), self.timeline_duration))
         self.current_time = self.state_timeline.time_key(time)
+        self.display_time = self.current_time
         self._set_timeslice_widgets(self.current_time)
-        qpos = self.ensure_keyframe_at_current_time()
+        qpos, _frame_index = self._trajectory_sample(self.current_time)
+        if qpos is not None:
+            # Releasing the unified scrubber commits exactly the pose that was
+            # shown during live trajectory sampling.
+            self.state_timeline.set_state(self.current_time, qpos)
+        else:
+            qpos = self.ensure_keyframe_at_current_time()
         self.set_robot_state_for_current_time(qpos)
+        self._emit_selected_target_pose()
+        self._update_frame_readout(self.current_time)
         self._refresh_timeline_trajectory()
         self._update_timeline_label()
         self.status_label.setText(
@@ -1406,11 +1584,12 @@ class RobotViewer3D(QWidget):
         # timer is active, pause first so its next tick cannot overwrite the
         # just-reset editing frame, and cancel any in-progress gizmo gesture.
         was_playing = self.play_timer.isActive()
-        self.pause_playback()
+        self.pause_playback(commit_time=was_playing)
         self.canvas.cancel_transform_drag()
         self.committed_state.reset_to_default()
         self.preview_state.set_qpos(self.committed_state.get_qpos())
         self.preview_active = False
+        self.canvas.set_preview_collisions([])
         self.canvas.set_preview_visible(False)
         self._clear_ghost_overlay(source="preview_path")
         self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
@@ -1428,62 +1607,130 @@ class RobotViewer3D(QWidget):
             )
 
     def choose_qpos_csv(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Load robot qpos",
-            str(CSV_DIR),
-            "CSV files (*.csv);;All files (*)",
+        self._open_csv_file_dialog(
+            title="Load robot qpos",
+            directory=QPOS_CSV_DIR,
+            selected=self._load_selected_qpos_csv,
         )
-        if path:
-            try:
-                self.load_qpos_csv(path)
-            except (OSError, ValueError) as exc:
-                self.status_label.setText(f"Could not load qpos CSV: {exc}")
 
     def choose_trajectory_csv(self, prompt_import_dt=False):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Load robot trajectory",
-            str(CSV_DIR),
-            "CSV files (*.csv);;All files (*)",
+        self._open_csv_file_dialog(
+            title="Load robot trajectory",
+            directory=TRAJECTORY_CSV_DIR,
+            selected=lambda path: self._load_selected_trajectory_csv(
+                path, prompt_import_dt
+            ),
         )
-        if path:
-            try:
-                self._prompt_trajectory_import_dt_on_load = bool(prompt_import_dt)
-                self.load_trajectory_csv(path)
-            except (OSError, ValueError) as exc:
-                self._prompt_trajectory_import_dt_on_load = False
-                self.status_label.setText(
-                    f"Could not load trajectory CSV: {exc}"
-                )
 
     def choose_qpos_save_path(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save robot qpos",
-            str(CSV_DIR / "updated_qpos.csv"),
-            "CSV files (*.csv);;All files (*)",
+        self._open_csv_file_dialog(
+            title="Save robot qpos",
+            directory=QPOS_CSV_DIR,
+            selected=self._save_selected_qpos_csv,
+            save=True,
+            filename="updated_qpos.csv",
         )
-        if path:
-            try:
-                self.save_qpos_csv(path)
-            except OSError as exc:
-                self.status_label.setText(f"Could not save qpos CSV: {exc}")
 
     def choose_trajectory_save_path(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save robot trajectory",
-            str(CSV_DIR / "robot_trajectory.csv"),
-            "CSV files (*.csv);;All files (*)",
+        self._open_csv_file_dialog(
+            title="Save robot trajectory",
+            directory=TRAJECTORY_CSV_DIR,
+            selected=self._save_selected_trajectory_csv,
+            save=True,
+            filename="robot_trajectory.csv",
         )
-        if path:
-            try:
-                self.save_trajectory_csv(path)
-            except (OSError, ValueError) as exc:
-                self.status_label.setText(
-                    f"Could not save trajectory CSV: {exc}"
-                )
+
+    def _open_csv_file_dialog(
+        self,
+        *,
+        title,
+        directory,
+        selected,
+        save=False,
+        filename=None,
+    ):
+        if (
+            self.csv_file_dialog is not None
+            or self.csv_file_operation_pending
+        ):
+            return
+
+        dialog = QFileDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setDirectory(str(directory))
+        dialog.setNameFilter("CSV files (*.csv);;All files (*)")
+        dialog.setAcceptMode(
+            QFileDialog.AcceptMode.AcceptSave
+            if save
+            else QFileDialog.AcceptMode.AcceptOpen
+        )
+        dialog.setFileMode(
+            QFileDialog.FileMode.AnyFile
+            if save
+            else QFileDialog.FileMode.ExistingFile
+        )
+        if save:
+            dialog.setDefaultSuffix("csv")
+            if filename:
+                dialog.selectFile(filename)
+        dialog.fileSelected.connect(
+            lambda path: self._on_csv_file_selected(selected, path)
+        )
+        dialog.finished.connect(self._on_csv_file_dialog_finished)
+        self.csv_file_dialog = dialog
+        dialog.open()
+
+    def _on_csv_file_selected(self, selected, path):
+        self.pending_csv_file_selection = (selected, path)
+        self.csv_file_operation_pending = True
+
+    def _on_csv_file_dialog_finished(self, _result):
+        dialog = self.csv_file_dialog
+        selection = self.pending_csv_file_selection
+        self.csv_file_dialog = None
+        self.pending_csv_file_selection = None
+        if dialog is not None:
+            dialog.deleteLater()
+        if selection is None:
+            self.csv_file_operation_pending = False
+            return
+        selected, path = selection
+        QTimer.singleShot(
+            0,
+            lambda: self._run_csv_file_operation(selected, path),
+        )
+
+    def _run_csv_file_operation(self, selected, path):
+        try:
+            selected(path)
+        finally:
+            self.csv_file_operation_pending = False
+
+    def _load_selected_qpos_csv(self, path):
+        try:
+            self.load_qpos_csv(path)
+        except (OSError, ValueError) as exc:
+            self.status_label.setText(f"Could not load qpos CSV: {exc}")
+
+    def _load_selected_trajectory_csv(self, path, prompt_import_dt=False):
+        try:
+            self._prompt_trajectory_import_dt_on_load = bool(prompt_import_dt)
+            self.load_trajectory_csv(path)
+        except (OSError, ValueError) as exc:
+            self._prompt_trajectory_import_dt_on_load = False
+            self.status_label.setText(f"Could not load trajectory CSV: {exc}")
+
+    def _save_selected_qpos_csv(self, path):
+        try:
+            self.save_qpos_csv(path)
+        except OSError as exc:
+            self.status_label.setText(f"Could not save qpos CSV: {exc}")
+
+    def _save_selected_trajectory_csv(self, path):
+        try:
+            self.save_trajectory_csv(path)
+        except (OSError, ValueError) as exc:
+            self.status_label.setText(f"Could not save trajectory CSV: {exc}")
 
     def load_qpos_csv(self, csv_path):
         """Load one headerless MuJoCo qpos row into the active keyframe."""
@@ -1563,7 +1810,9 @@ class RobotViewer3D(QWidget):
                 self.state_timeline.set_state(time, qpos)
             self.set_defined_timeslices(times)
             self.current_time = self.state_timeline.time_key(times[0])
+            self.display_time = self.current_time
             self._set_timeslice_widgets(self.current_time)
+            self._update_frame_readout(self.current_time)
             self._update_timeline_label()
         duration = times[-1] if times else 0.0
         self.status_label.setText(
@@ -1639,10 +1888,11 @@ class RobotViewer3D(QWidget):
         # the overlay from preview/playback into keyframe ghosts.
         self._update_timeline_label()
 
-    def _update_timeline_label(self):
+    def _update_timeline_label(self, display_time=None):
         count = len(self.state_timeline.states) if self.state_timeline else 0
+        time = self.current_time if display_time is None else float(display_time)
         self.timeline_state_label.setText(
-            f"3D state time: {self.current_time:.2f} s ({count} keyframes)"
+            f"3D state time: {time:.2f} s ({count} keyframes)"
         )
 
     def _update_root_pose_label(self):
@@ -1662,6 +1912,8 @@ class RobotViewer3D(QWidget):
     def set_robot_trajectory(self, qposes, times=None, activate_first_frame=True):
         if not self.robot_state:
             return
+        self.scrub_preview_timer.stop()
+        self._pending_scrub_preview_time = None
         valid = []
         valid_times = []
         times = list(times) if times is not None else None
@@ -1675,30 +1927,39 @@ class RobotViewer3D(QWidget):
                 continue
         if times is None or len(valid_times) != len(valid):
             valid_times = [float(index) for index in range(len(valid))]
+        elif any(
+            earlier > later
+            for earlier, later in zip(valid_times, valid_times[1:])
+        ):
+            ordered = sorted(zip(valid_times, valid), key=lambda item: item[0])
+            valid_times = [item[0] for item in ordered]
+            valid = [item[1] for item in ordered]
         self.robot_trajectory = valid
         self.robot_trajectory_times = valid_times
         if valid_times:
             self.set_timeline_duration(max(self.timeline_duration, max(valid_times)))
-        signals_were_blocked = self.frame_slider.blockSignals(
-            not activate_first_frame
-        )
-        self.frame_slider.setRange(0, max(0, len(valid) - 1))
-        self.frame_slider.setValue(0)
-        self.frame_slider.blockSignals(signals_were_blocked)
         self._clear_ghost_overlay(source="preview_path")
         self._sync_playback_pose_ghosts()
         if valid and activate_first_frame:
-            self.set_trajectory_frame(0)
+            self.set_current_time(valid_times[0])
             self.status_label.setText(f"Loaded {len(valid)} robot trajectory states.")
+        else:
+            self._update_frame_readout(self.display_time)
 
     def clear_robot_trajectory(self):
         self.pause_playback()
+        self.scrub_preview_timer.stop()
+        self._pending_scrub_preview_time = None
         self.robot_trajectory = []
         self.robot_trajectory_times = []
         self.ghost_trajectory = []
         self.ghost_source = None
-        self.frame_slider.setRange(0, 0)
-        self.frame_slider.setValue(0)
+        self.display_time = self.current_time
+        self._set_timeslice_widgets(self.display_time)
+        self._update_frame_readout()
+        self._use_editor_canvas_states()
+        self._sync_joint_controls()
+        self._set_target_to_selected_pose()
         if self.ghost_renderer:
             self.ghost_renderer.clear()
         self._update_ghost_options()
@@ -1714,6 +1975,7 @@ class RobotViewer3D(QWidget):
         )
         if reset_time is not None:
             self.current_time = self.state_timeline.time_key(reset_time)
+            self.display_time = self.current_time
             self._set_timeslice_widgets(self.current_time)
         self.state_timeline.reset(self.current_time, qpos)
         self.set_robot_state_for_current_time(qpos)
@@ -1750,7 +2012,10 @@ class RobotViewer3D(QWidget):
         joint = self.robot_model.joints[name]
         lo, hi = joint.limits or (-1.0, 1.0)
         target[joint.qpos_address] = max(lo, min(hi, start[joint.qpos_address] + 0.35))
-        self.set_robot_trajectory(interpolate_qpos(start, target, 60))
+        qposes = interpolate_qpos(start, target, 60)
+        frame_period = self.play_timer.interval() / 1000.0
+        times = [index * frame_period for index in range(len(qposes))]
+        self.set_robot_trajectory(qposes, times=times)
         self.history_action_finished.emit("Demo trajectory")
 
     def _rebuild_ghosts(self):
@@ -1795,36 +2060,72 @@ class RobotViewer3D(QWidget):
         self.canvas.set_ghost_options(visible, self.ghost_alpha.value())
 
     def set_trajectory_frame(self, index):
+        """Compatibility entry point that selects a trajectory frame by time."""
         if not self.robot_trajectory:
             return
         index = max(0, min(len(self.robot_trajectory) - 1, int(index)))
-        self.committed_state.set_qpos(self.robot_trajectory[index])
-        self.preview_state.set_qpos(self.committed_state.get_qpos())
-        self.preview_active = False
-        self.canvas.set_preview_visible(False)
-        self._clear_ghost_overlay(source="preview_path")
-        self._sync_joint_controls()
-        self._set_target_to_selected_pose()
+        self.set_current_time(self.robot_trajectory_times[index])
 
     def toggle_playback(self):
         if self.play_timer.isActive():
-            self.pause_playback()
-        elif self.robot_trajectory:
-            self.play_timer.start()
-            self._set_playback_button_text("Pause")
+            self.pause_playback(commit_time=True)
+        else:
+            self.start_playback()
 
-    def pause_playback(self):
+    def start_playback(self):
+        if not self.robot_trajectory:
+            return
+        start_time = self.robot_trajectory_times[0]
+        end_time = self.robot_trajectory_times[-1]
+        if end_time <= start_time:
+            self.preview_trajectory_time(start_time, emit_time_signal=True)
+            return
+        if self.display_time < start_time or self.display_time >= end_time:
+            self.preview_trajectory_time(start_time, emit_time_signal=True)
+        self._playback_last_tick = monotonic()
+        self.play_timer.start()
+        self._set_playback_button_text("Pause")
+        self.playback_state_changed.emit(True)
+
+    def pause_playback(self, commit_time=False):
         self.play_timer.stop()
+        self._playback_last_tick = None
         self._set_playback_button_text("Play")
+        self.playback_state_changed.emit(False)
+        if commit_time and abs(self.display_time - self.current_time) > 1e-9:
+            self.timeslice_time_changed.emit(self.display_time)
 
     def _set_playback_button_text(self, text):
         self.play_button.setText(text)
-        if hasattr(self, "quick_play_button"):
-            self.quick_play_button.setText(text)
+
+    def _advance_playback(self, elapsed=None):
+        if not self.robot_trajectory:
+            self.pause_playback()
+            return
+        start_time = self.robot_trajectory_times[0]
+        end_time = self.robot_trajectory_times[-1]
+        if end_time <= start_time:
+            self.preview_trajectory_time(start_time, emit_time_signal=True)
+            self.pause_playback(commit_time=True)
+            return
+
+        if elapsed is None:
+            now = monotonic()
+            if self._playback_last_tick is None:
+                elapsed = self.play_timer.interval() / 1000.0
+            else:
+                elapsed = max(0.0, now - self._playback_last_tick)
+            self._playback_last_tick = now
+        else:
+            elapsed = max(0.0, float(elapsed))
+
+        elapsed *= self.playback_speed.value()
+        next_time = self.display_time + elapsed
+        duration = end_time - start_time
+        if next_time > end_time:
+            next_time = start_time + ((next_time - start_time) % duration)
+        self.preview_trajectory_time(next_time, emit_time_signal=True)
 
     def _advance_frame(self):
-        if not self.robot_trajectory:
-            self.toggle_playback()
-            return
-        next_frame = (self.frame_slider.value() + 1) % len(self.robot_trajectory)
-        self.frame_slider.setValue(next_frame)
+        """Backward-compatible alias for elapsed-time playback advancement."""
+        self._advance_playback()
