@@ -27,7 +27,12 @@ import mujoco.viewer
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MODEL_PATH = PROJECT_ROOT / "models" / "g1_29dof.xml"
+try:
+    from core.resources import resource_path
+except ImportError:
+    MODEL_PATH = PROJECT_ROOT / "models" / "g1_29dof.xml"
+else:
+    MODEL_PATH = resource_path("models/g1_29dof.xml")
 
 
 def default_playback_cache_path():

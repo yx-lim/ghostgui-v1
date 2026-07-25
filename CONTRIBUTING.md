@@ -42,6 +42,12 @@ in one pull request unless they are required for the same outcome.
 
 - Follow the surrounding Python style and keep application, core, and GUI
   responsibilities separated.
+- Read [`docs/architecture.md`](docs/architecture.md) before moving ownership
+  across layers.
+- Route editor mutations through typed commands and keep compatibility facades
+  thin.
+- Implement reusable visualization behavior as a display, tool, panel, or
+  frame-pose service with an explicit lifecycle.
 - Put file and workflow logic in `application/` rather than directly in Qt
   callbacks when a reusable service is appropriate.
 - Keep model-specific knowledge in the model registry or adapter instead of
@@ -74,17 +80,22 @@ reason. Do not expose legacy internal names in new user-facing copy.
 Run the complete suite:
 
 ```bash
-python3 -m unittest discover -s tests -v
+python3 scripts/run_test_suite.py
 ```
 
-Run documentation validation:
+Run the static, architecture, and documentation gates:
 
 ```bash
+python3 -m compileall -q application core gui scripts tests
+python3 scripts/check_architecture.py
 python3 scripts/check_docs.py
 ```
 
 Use the focused commands and manual GUI checklist in
 [`docs/testing.md`](docs/testing.md) while developing.
+
+Changes to persistence, resources, packaging, rendering, or startup also require
+the applicable recovery, installed-wheel, or Xvfb gates documented there.
 
 ## Documentation
 
@@ -104,6 +115,8 @@ model support, or file formats change.
 
 - [ ] The change has one clear purpose.
 - [ ] New behavior has automated tests where practical.
+- [ ] Focused tests passed before the complete isolated suite.
+- [ ] Architecture and documentation validation passed.
 - [ ] Relevant manual GUI checks were completed.
 - [ ] Public commands and links were verified.
 - [ ] User-facing terminology is consistent.

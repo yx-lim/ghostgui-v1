@@ -5,7 +5,6 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
-from time import monotonic
 
 import numpy as np
 
@@ -34,6 +33,7 @@ from application.paths import (
     TRAJECTORY_CSV_DIR,
 )
 from application.background_jobs import SerializedBackgroundJobs
+from application.playback import PlaybackClock
 from application.csv_io import (
     TrajectoryExport,
     read_qpos_csv,
@@ -49,6 +49,7 @@ from core.models import (
 from core.ik import CollisionAwareIKSolver, CollisionChecker
 from core.trajectory import quat_to_rpy, rpy_to_quat
 from gui.file_selection import SynchronousFileSelectionStage
+from gui.viewers import ik_panels
 from gui.viewers.robot_canvas_3d import RobotCanvas3D
 from core.ik import (
     FootLockTask,
@@ -58,7 +59,7 @@ from core.ik import (
 )
 from .widgets.compact import compact_combo as _compact_combo
 from .widgets.compact import compact_spinbox as _compact_spinbox
-from .widgets.joint_controls import IKInfluenceControl, JointControl
+from .widgets.joint_controls import JointControl
 from .widgets.status import StatusValueLabel
 from .widgets.timeline import TimesliceSlider
 
@@ -99,6 +100,15 @@ class RobotViewer3D(QWidget):
     delete_timeslice_requested = Signal()
     history_action_finished = Signal(str)
     playback_state_changed = Signal(bool)
+
+    @property
+    def _playback_last_tick(self):
+        """Compatibility view of the extracted playback clock."""
+        return self.playback_clock.last_tick
+
+    @_playback_last_tick.setter
+    def _playback_last_tick(self, value):
+        self.playback_clock.last_tick = value
 
     def __init__(
         self,
@@ -151,11 +161,14 @@ class RobotViewer3D(QWidget):
             if file_selection_stage is not None
             else SynchronousFileSelectionStage(self)
         )
+        self._owns_file_selection_stage = file_selection_stage is None
         self.background_jobs = (
             background_jobs
             if background_jobs is not None
             else SerializedBackgroundJobs(self)
         )
+        self._owns_background_jobs = background_jobs is None
+        self._shutdown = False
         self.ghost_trajectory = []
         self.ghost_source = None
         self.joint_controls = {}
@@ -170,7 +183,7 @@ class RobotViewer3D(QWidget):
         self.root_lock_target = None
         self._last_ik_status = None
         self._syncing_target = False
-        self._playback_last_tick = None
+        self.playback_clock = PlaybackClock()
         self._resume_playback_after_scrub = False
         self._pending_scrub_preview_time = None
         self.canvas = RobotCanvas3D()
@@ -202,6 +215,25 @@ class RobotViewer3D(QWidget):
                 self.committed_state, self.preview_state, self.ghost_renderer
             )
             self._set_target_to_selected_pose()
+
+    def shutdown(self):
+        """Stop timers, selectors, jobs, and GL resources idempotently."""
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self.play_timer.stop()
+        self.scrub_preview_timer.stop()
+        self.playback_clock.stop()
+        self._pending_scrub_preview_time = None
+        if self._owns_file_selection_stage:
+            self.csv_file_selection_stage.cancel()
+        if self._owns_background_jobs:
+            self.background_jobs.shutdown()
+        self.canvas.shutdown()
+
+    def closeEvent(self, event):
+        self.shutdown()
+        super().closeEvent(event)
 
     def _build_ui(self, error):
         root = QVBoxLayout(self)
@@ -330,7 +362,7 @@ class RobotViewer3D(QWidget):
         self.playback_speed.setRange(0.10, 4.00)
         self.playback_speed.setDecimals(2)
         self.playback_speed.setSingleStep(0.25)
-        self.playback_speed.setValue(0.20)
+        self.playback_speed.setValue(1.00)
         self.playback_speed.setSuffix("×")
         self.playback_speed_label = QLabel("Playback speed")
         self.timeslice_context_layout.addRow(
@@ -740,147 +772,16 @@ class RobotViewer3D(QWidget):
         return self.joint_angles_page
 
     def _make_ik_scroll_area(self, content):
-        scroll = QScrollArea()
-        scroll.setObjectName("ikEditorScroll")
-        scroll.viewport().setObjectName("ikEditorViewport")
-        content.setObjectName(content.objectName() or "ikEditorTabContent")
-        scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(0)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(content)
-        return scroll
+        return ik_panels.make_ik_scroll_area(content)
 
     def _build_solver_widget(self):
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-
-        solver_group = QGroupBox("Solver")
-        solver_group.setMinimumWidth(0)
-        solver_layout = QFormLayout(solver_group)
-        solver_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
-        self.ik_damping = QDoubleSpinBox()
-        _compact_spinbox(self.ik_damping)
-        self.ik_damping.setRange(0.001, 1.0)
-        self.ik_damping.setDecimals(4)
-        self.ik_damping.setValue(0.04)
-        self.ik_max_iterations = QSpinBox()
-        _compact_spinbox(self.ik_max_iterations)
-        self.ik_max_iterations.setRange(1, 300)
-        self.ik_max_iterations.setValue(80)
-        self.ik_step_size = QDoubleSpinBox()
-        _compact_spinbox(self.ik_step_size)
-        self.ik_step_size.setRange(0.01, 1.0)
-        self.ik_step_size.setValue(0.7)
-        self.ik_max_step = QDoubleSpinBox()
-        _compact_spinbox(self.ik_max_step)
-        self.ik_max_step.setRange(0.001, 0.5)
-        self.ik_max_step.setDecimals(3)
-        self.ik_max_step.setValue(0.08)
-        self.ik_position_tolerance = QDoubleSpinBox()
-        _compact_spinbox(self.ik_position_tolerance)
-        self.ik_position_tolerance.setRange(0.0001, 0.1)
-        self.ik_position_tolerance.setDecimals(4)
-        self.ik_position_tolerance.setValue(0.005)
-        self.ik_orientation_tolerance = QDoubleSpinBox()
-        _compact_spinbox(self.ik_orientation_tolerance)
-        self.ik_orientation_tolerance.setRange(0.001, 1.0)
-        self.ik_orientation_tolerance.setDecimals(3)
-        self.ik_orientation_tolerance.setValue(0.03)
-        solver_layout.addRow("Damping", self.ik_damping)
-        solver_layout.addRow("Max iterations", self.ik_max_iterations)
-        solver_layout.addRow("Step size", self.ik_step_size)
-        solver_layout.addRow("Max joint step", self.ik_max_step)
-        solver_layout.addRow("Position tolerance", self.ik_position_tolerance)
-        solver_layout.addRow("Orientation tolerance", self.ik_orientation_tolerance)
-        layout.addWidget(solver_group)
-        layout.addStretch()
-        return self._make_ik_scroll_area(content)
+        return ik_panels.build_solver_widget(self)
 
     def _build_ik_tasks_widget(self):
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-
-        task_group = QGroupBox("IK Tasks")
-        task_group.setMinimumWidth(0)
-        task_layout = QFormLayout(task_group)
-        task_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
-        self.ik_task_controls = {}
-        defaults = {
-            "tcp_position": (True, 1.0),
-            "tcp_orientation": (
-                self.robot_model.model_type != "quadruped"
-                or self.robot_model.info.key == "go2",
-                0.25,
-            ),
-            # Secondary pose objectives are opt-in. Enabling them by default
-            # makes an ordinary TCP drag settle at a weighted compromise and
-            # look like an artificial range limit.
-            "posture": (False, 0.05),
-            "foot_lock": (False, 0.5),
-            "root_orientation": (True, 0.1),
-            "regularization": (False, 0.01),
-        }
-        labels = {
-            "tcp_position": "TCP position",
-            "tcp_orientation": "TCP orientation",
-            "posture": "Posture preservation",
-            "foot_lock": "Foot lock",
-            "root_orientation": "Root/base upright",
-            "regularization": "Joint regularization",
-        }
-        for key, (enabled, weight) in defaults.items():
-            checkbox = QCheckBox()
-            checkbox.setChecked(enabled)
-            spin = QDoubleSpinBox()
-            _compact_spinbox(spin)
-            spin.setRange(0.0, 10.0)
-            spin.setDecimals(3)
-            spin.setValue(weight)
-            row = QWidget()
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.addWidget(checkbox)
-            row_layout.addWidget(spin)
-            self.ik_task_controls[key] = (checkbox, spin)
-            task_layout.addRow(labels[key], row)
-        layout.addWidget(task_group)
-        layout.addStretch()
-        return self._make_ik_scroll_area(content)
+        return ik_panels.build_ik_tasks_widget(self)
 
     def _build_joint_weights_widget(self):
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-
-        influence_group = QGroupBox("Joint Weights")
-        influence_group.setMinimumWidth(0)
-        influence_layout = QVBoxLayout(influence_group)
-        self.ik_preset_box = QComboBox()
-        _compact_combo(self.ik_preset_box, minimum_chars=8)
-        presets = ["All joints normal", "Root locked", "Selected limb only", "Feet planted"]
-        if self.robot_model.model_type == "humanoid":
-            presets.extend(("Upper body only", "Legs only"))
-        elif self.robot_model.model_type == "quadruped":
-            presets.append("Quadruped legs only")
-        self.ik_preset_box.addItems(presets)
-        apply_preset = QPushButton("Apply")
-        apply_preset.clicked.connect(self.apply_ik_preset)
-        influence_layout.addWidget(self.ik_preset_box)
-        influence_layout.addWidget(apply_preset)
-        for name in self.robot_model.get_joint_names():
-            control = IKInfluenceControl(name, 1.0)
-            control.value_changed.connect(self._ik_influence_changed)
-            self.ik_influence_controls[name] = control
-            influence_layout.addWidget(control)
-        influence_layout.addStretch()
-        layout.addWidget(influence_group)
-        layout.addStretch()
-        return self._make_ik_scroll_area(content)
+        return ik_panels.build_joint_weights_widget(self)
 
     def _on_geometry_progress(self, complete, total):
         if total <= 0:
@@ -2100,14 +2001,14 @@ class RobotViewer3D(QWidget):
             return
         if self.display_time < start_time or self.display_time >= end_time:
             self.preview_trajectory_time(start_time, emit_time_signal=True)
-        self._playback_last_tick = monotonic()
+        self.playback_clock.start()
         self.play_timer.start()
         self._set_playback_button_text("Pause")
         self.playback_state_changed.emit(True)
 
     def pause_playback(self, commit_time=False):
         self.play_timer.stop()
-        self._playback_last_tick = None
+        self.playback_clock.stop()
         self._set_playback_button_text("Play")
         self.playback_state_changed.emit(False)
         if commit_time and abs(self.display_time - self.current_time) > 1e-9:
@@ -2127,21 +2028,17 @@ class RobotViewer3D(QWidget):
             self.pause_playback(commit_time=True)
             return
 
-        if elapsed is None:
-            now = monotonic()
-            if self._playback_last_tick is None:
-                elapsed = self.play_timer.interval() / 1000.0
-            else:
-                elapsed = max(0.0, now - self._playback_last_tick)
-            self._playback_last_tick = now
-        else:
-            elapsed = max(0.0, float(elapsed))
-
-        elapsed *= self.playback_speed.value()
-        next_time = self.display_time + elapsed
-        duration = end_time - start_time
-        if next_time > end_time:
-            next_time = start_time + ((next_time - start_time) % duration)
+        elapsed = self.playback_clock.elapsed(
+            self.play_timer.interval() / 1000.0,
+            supplied=elapsed,
+        )
+        next_time = self.playback_clock.advance(
+            self.display_time,
+            start_time,
+            end_time,
+            elapsed,
+            self.playback_speed.value(),
+        )
         self.preview_trajectory_time(next_time, emit_time_signal=True)
 
     def _advance_frame(self):

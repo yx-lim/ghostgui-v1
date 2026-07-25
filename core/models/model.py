@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
+from core.resources import bundled_resource_root
+from core.robotics import QposContract, validate_trajectory_arrays
+
 try:
     import mujoco
     import numpy as np
@@ -14,7 +17,7 @@ except ImportError:  # The rest of GhostGUI remains usable without MuJoCo.
     np = None
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = bundled_resource_root()
 DEFAULT_MODEL_PATH = PROJECT_ROOT / "models" / "g1_29dof.xml"
 
 
@@ -242,9 +245,7 @@ class RobotState3D:
             self.forward_kinematics()
 
     def set_qpos(self, qpos: Iterable[float]) -> None:
-        qpos = np.asarray(qpos, dtype=float)
-        if qpos.shape != (self.mj_model.nq,):
-            raise ValueError(f"Expected qpos shape ({self.mj_model.nq},), got {qpos.shape}.")
+        qpos = QposContract(self.mj_model.nq).validate(qpos)
         self.mj_data.qpos[:] = qpos
         self._clamp_joints()
         self.forward_kinematics()
@@ -547,11 +548,11 @@ class RobotStateTimeline:
         return round(float(time), 6)
 
     def set_state(self, time, qpos):
-        qpos = np.asarray(qpos, dtype=float)
-        expected = (self.robot_model.mj_model.nq,)
-        if qpos.shape != expected:
-            raise ValueError(f"Expected qpos shape {expected}, got {qpos.shape}")
-        self.states[self.time_key(time)] = qpos.copy()
+        key = self.time_key(time)
+        if not np.isfinite(key) or key < 0.0:
+            raise ValueError("timeline time must be finite and nonnegative")
+        qpos = QposContract(self.robot_model.mj_model.nq).validate(qpos)
+        self.states[key] = qpos
 
     def get_state(self, time):
         state = self.states.get(self.time_key(time))
@@ -634,6 +635,11 @@ class RobotStateTimeline:
         """Load exact time-keyed qpos states from a GhostGUI project."""
         path = Path(path).expanduser()
         with np.load(path, allow_pickle=False) as data:
+            schema_version = int(np.asarray(data["schema_version"]).flat[0])
+            if schema_version != 1:
+                raise ValueError(
+                    f"Unsupported qpos timeline schema: {schema_version}"
+                )
             times = np.asarray(data["times"], dtype=float)
             qpos = np.asarray(data["qpos"], dtype=float)
 
@@ -646,14 +652,25 @@ class RobotStateTimeline:
             )
         if qpos.shape[0] != times.shape[0]:
             raise ValueError("timeline times and qpos rows must have equal length")
-        if len(times) and np.any(np.diff(times) < 0):
-            raise ValueError("timeline times must be nondecreasing")
+        normalized_times, normalized_qpos = validate_trajectory_arrays(
+            times,
+            qpos,
+            expected_width,
+        )
+        if len(normalized_times) and any(
+            earlier == later
+            for earlier, later in zip(
+                normalized_times,
+                normalized_times[1:],
+            )
+        ):
+            raise ValueError("timeline times must be strictly increasing")
 
         self.states.clear()
-        if not len(times):
+        if not len(normalized_times):
             self.reset()
             return
-        for time, state in zip(times, qpos):
+        for time, state in zip(normalized_times, normalized_qpos):
             self.set_state(float(time), state)
 
 

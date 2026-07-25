@@ -7,6 +7,7 @@ import math
 
 import numpy as np
 
+from core.math3d import normalize_quaternion, quaternion_slerp
 
 class GizmoInteractionState(Enum):
     NONE = auto()
@@ -55,14 +56,6 @@ DRAG_ROTATE = {
 }
 
 
-def normalize_quaternion(quaternion):
-    quaternion = np.asarray(quaternion, dtype=float)
-    norm = float(np.linalg.norm(quaternion))
-    if norm < 1e-12:
-        return np.array([1.0, 0.0, 0.0, 0.0])
-    return quaternion / norm
-
-
 def quaternion_multiply(left, right):
     w1, x1, y1, z1 = normalize_quaternion(left)
     w2, x2, y2, z2 = normalize_quaternion(right)
@@ -79,23 +72,6 @@ def axis_angle_quaternion(axis, angle):
     axis /= max(1e-12, float(np.linalg.norm(axis)))
     half = 0.5 * angle
     return np.array([math.cos(half), *(axis * math.sin(half))])
-
-
-def quaternion_slerp(start, end, fraction):
-    start = normalize_quaternion(start)
-    end = normalize_quaternion(end)
-    dot = float(np.dot(start, end))
-    if dot < 0.0:
-        end = -end
-        dot = -dot
-    dot = min(1.0, max(-1.0, dot))
-    if dot > 0.9995:
-        return normalize_quaternion(start + fraction * (end - start))
-    theta = math.acos(dot)
-    return (
-        math.sin((1.0 - fraction) * theta) * start
-        + math.sin(fraction * theta) * end
-    ) / math.sin(theta)
 
 
 def _point_segment_distance(point, start, end):

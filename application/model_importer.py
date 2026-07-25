@@ -16,6 +16,8 @@ from core.models import (
     RobotModelInfo,
     resolve_mesh_path,
 )
+from core.resources import is_source_checkout
+from application.paths import ghostgui_user_data_dir
 
 
 SUPPORTED_MODEL_EXTENSIONS = {".urdf", ".xml"}
@@ -42,7 +44,9 @@ DESCRIPTOR_TOKENS = {"description", "robot", "model", "urdf", "mjcf", "xml"}
 
 
 def default_model_library_root():
-    return PROJECT_ROOT / "models"
+    if is_source_checkout(PROJECT_ROOT):
+        return PROJECT_ROOT / "models"
+    return ghostgui_user_data_dir() / "models"
 
 
 def _slug(value):

@@ -5,8 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.resources import bundled_resource_root
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Compatibility name retained for callers that treated the checkout as the
+# resource root. In an installed wheel this points at ``share/ghostgui``.
+PROJECT_ROOT = bundled_resource_root()
 
 
 @dataclass(frozen=True)

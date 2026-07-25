@@ -4,6 +4,10 @@ GhostGUI uses MuJoCo position and rotation Jacobians with weighted,
 damped-least-squares inverse kinematics. The **IK / Constraints** sidebar
 controls the solver used for the orange preview.
 
+Interactive preview and generated-trajectory solving share the same weighted
+task implementation and validated solver settings. Positions are meters,
+angles are radians, and quaternions use MuJoCo `w, x, y, z` order throughout.
+
 ## Solver Controls
 
 | Control | Purpose | Default |
@@ -74,6 +78,20 @@ Two later checks protect saved motion:
   limits or collide.
 - **Commit Keyframe** rejects a final orange preview that contains a collision
   or non-finite qpos values.
+
+Model-aware contact policy distinguishes shallow intended foot support from
+penetrating ground collision. Support contacts within the numerical tolerance
+are allowed; deeper penetration and non-support environment contact still
+block a commit.
+
+## Backend Selection
+
+The normal trajectory backend is the shared MuJoCo weighted pose solver. An
+approximate analytic backend exists for degraded environments, but it has no
+exact-qpos or whole-body-IK guarantee. Using it requires the
+`allow_approximate` fallback policy, emits a runtime warning, and is identified
+as approximate in the status output. Unexpected solver exceptions are never
+converted into fallback results.
 
 Inspect the **Status** details for the selected frame, error, singularity
 metrics, and collision names when a solve fails.

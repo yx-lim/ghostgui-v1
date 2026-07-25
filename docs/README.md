@@ -25,6 +25,11 @@ GhostGUI.
 ## Develop GhostGUI
 
 - [Architecture](architecture.md) maps the source tree and data flow.
+- [Migration Guide](migration.md) covers project and integration upgrades.
+- [Operations Guide](operations.md) covers runtime paths, recovery, and health
+  checks.
+- [Reliability And Quality Gates](reliability.md) records the baseline and
+  automated release contracts.
 - [Testing](testing.md) lists automated and manual validation.
 - [Contributing](../CONTRIBUTING.md) defines the development and review
   workflow.

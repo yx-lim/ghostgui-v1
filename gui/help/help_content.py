@@ -3,8 +3,9 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.resources import resource_path
 
-USER_GUIDE_PATH = Path(__file__).resolve().parents[2] / "docs" / "user_guide.md"
+USER_GUIDE_PATH = resource_path("docs/user_guide.md")
 
 
 @dataclass(frozen=True)

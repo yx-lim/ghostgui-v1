@@ -9,6 +9,7 @@ from PySide6.QtCore import QEvent, QObject, QTimer, Qt
 from PySide6.QtGui import QFont, QIcon, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
 
+from core.resources import resource_path
 
 @dataclass(frozen=True)
 class Theme:
@@ -92,7 +93,7 @@ DARK_THEME = Theme(
     icon_variant="dark",
 )
 
-THEME_ASSET_DIR = Path(__file__).resolve().parent / "assets" / "theme"
+THEME_ASSET_DIR = resource_path("gui/assets/theme")
 
 
 def _icon_url(theme: Theme, name: str) -> str:

@@ -19,6 +19,8 @@ from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QMatrix4x4, QSurfaceFormat, QVector3D
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
+from gui.render_scheduler import RenderRequestCoalescer
+from .camera import OrbitCamera
 from .trajectory_colors import gl_color_for_frame
 from core.trajectory import rpy_to_quat
 from .transform_gizmo import GizmoInteractionState, TransformGizmo
@@ -36,6 +38,38 @@ class RobotCanvas3D(QOpenGLWidget):
     geometry_progress = Signal(int, int)
     body_double_clicked = Signal(str)
     camera_changed = Signal()
+
+    @property
+    def camera_distance(self):
+        return self.camera_controller.distance
+
+    @camera_distance.setter
+    def camera_distance(self, value):
+        self.camera_controller.distance = float(value)
+
+    @property
+    def camera_yaw(self):
+        return self.camera_controller.yaw
+
+    @camera_yaw.setter
+    def camera_yaw(self, value):
+        self.camera_controller.yaw = float(value)
+
+    @property
+    def camera_pitch(self):
+        return self.camera_controller.pitch
+
+    @camera_pitch.setter
+    def camera_pitch(self, value):
+        self.camera_controller.pitch = float(value)
+
+    @property
+    def camera_center(self):
+        return self.camera_controller.center
+
+    @camera_center.setter
+    def camera_center(self, value):
+        self.camera_controller.center = np.asarray(value, dtype=float)
 
     def __init__(self):
         super().__init__()
@@ -61,10 +95,8 @@ class RobotCanvas3D(QOpenGLWidget):
         self.target_z = 0.9
         self.target_yaw = 0.0
 
-        self.camera_distance = 5.0
-        self.camera_yaw = 38.0
-        self.camera_pitch = 24.0
-        self.camera_center = np.array([0.0, 0.0, 0.75], dtype=float)
+        self.camera_controller = OrbitCamera()
+        self.render_requests = RenderRequestCoalescer(self.update, self)
 
         self.dragging_target = False
         self.rotating_camera = False
@@ -102,6 +134,8 @@ class RobotCanvas3D(QOpenGLWidget):
         self._geometry_timer = QTimer(self)
         self._geometry_timer.setInterval(0)
         self._geometry_timer.timeout.connect(self._compile_next_geometry)
+        self._shutdown = False
+        self._resource_context = None
 
     def set_robot_state(self, robot_state, ghost_renderer=None):
         self.set_robot_states(robot_state, None, ghost_renderer)
@@ -221,13 +255,19 @@ class RobotCanvas3D(QOpenGLWidget):
                 ),
             )
 
-        self.update()
+        self.request_render()
+
+    def request_render(self):
+        """Schedule one repaint for any number of same-turn invalidations."""
+        return self.render_requests.request()
 
     # ============================================================
     # OpenGL lifecycle
     # ============================================================
 
     def initializeGL(self):
+        self._shutdown = False
+        self._connect_context_lifecycle()
         GL.glClearColor(0.08, 0.09, 0.10, 1.0)
         GL.glEnable(GL.GL_DEPTH_TEST)
         GL.glEnable(GL.GL_POINT_SMOOTH)
@@ -248,6 +288,75 @@ class RobotCanvas3D(QOpenGLWidget):
         self._mesh_display_lists = {}
         self._geometry_queue = []
         self._build_robot_geometry()
+
+    def _connect_context_lifecycle(self):
+        context = self.context()
+        if context is None or context is self._resource_context:
+            return
+        self._resource_context = context
+        context.aboutToBeDestroyed.connect(
+            self._on_context_about_to_be_destroyed,
+            Qt.ConnectionType.DirectConnection,
+        )
+
+    def _on_context_about_to_be_destroyed(self):
+        self.cleanup_gl_resources()
+
+    def cleanup_gl_resources(self, *, context_current=False):
+        """Release display lists and GLU objects exactly once per context."""
+        self._geometry_timer.stop()
+        self._geometry_queue = []
+        list_ids = {
+            int(list_id)
+            for list_id in (
+                *self._geom_lists,
+                *self._mesh_display_lists.values(),
+            )
+            if list_id
+        }
+        quadric = self._quadric
+        if not list_ids and quadric is None:
+            self._geom_lists = []
+            self._mesh_display_lists = {}
+            return
+
+        made_current = False
+        can_delete = bool(context_current)
+        if not can_delete and self.isValid():
+            try:
+                self.makeCurrent()
+                made_current = True
+                can_delete = True
+            except RuntimeError:
+                can_delete = False
+        try:
+            if can_delete:
+                for list_id in list_ids:
+                    GL.glDeleteLists(list_id, 1)
+                if quadric is not None:
+                    GLU.gluDeleteQuadric(quadric)
+        finally:
+            self._geom_lists = []
+            self._mesh_display_lists = {}
+            self._quadric = None
+            if made_current:
+                try:
+                    self.doneCurrent()
+                except RuntimeError:
+                    pass
+
+    def shutdown(self):
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self.render_requests.shutdown()
+        self._geometry_timer.stop()
+        self.cancel_transform_drag()
+        self.cleanup_gl_resources()
+
+    def closeEvent(self, event):
+        self.shutdown()
+        super().closeEvent(event)
 
     def resizeGL(self, width, height):
         GL.glViewport(0, 0, width, height)
@@ -303,7 +412,7 @@ class RobotCanvas3D(QOpenGLWidget):
         if not self._geometry_queue:
             self._geometry_timer.stop()
             return
-        if not self.isValid() or self.robot_state is None:
+        if self._shutdown or not self.isValid() or self.robot_state is None:
             return
         geom_id = self._geometry_queue.pop(0)
         model = self.robot_state.mj_model
@@ -932,51 +1041,26 @@ class RobotCanvas3D(QOpenGLWidget):
             GL.glRotatef(-90.0, 1.0, 0.0, 0.0)
 
     def _camera_eye(self):
-        return self.camera_center + self._camera_offset()
+        return self.camera_controller.eye()
 
     def _camera_offset(self):
-        yaw = math.radians(self.camera_yaw)
-        pitch = math.radians(self.camera_pitch)
-        return np.array([
-            self.camera_distance * math.cos(pitch) * math.sin(yaw),
-            -self.camera_distance * math.cos(pitch) * math.cos(yaw),
-            self.camera_distance * math.sin(pitch),
-        ], dtype=float)
+        return self.camera_controller.offset()
 
     def _camera_basis(self):
-        forward = self.camera_center - self._camera_eye()
-        forward /= max(1e-12, float(np.linalg.norm(forward)))
-        world_up = np.array([0.0, 0.0, 1.0], dtype=float)
-        right = np.cross(forward, world_up)
-        if float(np.linalg.norm(right)) < 1e-8:
-            right = np.array([1.0, 0.0, 0.0], dtype=float)
-        else:
-            right /= float(np.linalg.norm(right))
-        up = np.cross(right, forward)
-        up /= max(1e-12, float(np.linalg.norm(up)))
-        return right, up, forward
+        return self.camera_controller.basis()
 
     def _orbit_camera(self, dx, dy):
-        self.camera_yaw -= float(dx) * 0.4
-        self.camera_pitch = max(
-            -85.0,
-            min(85.0, self.camera_pitch + float(dy) * 0.3),
-        )
+        self.camera_controller.orbit(dx, dy)
 
     def _pan_camera(self, dx, dy):
-        right, up, _ = self._camera_basis()
-        view_height = 2.0 * self.camera_distance * math.tan(math.radians(45.0) * 0.5)
-        units_per_pixel = view_height / max(1, self.height())
-        self.camera_center += (
-            -right * float(dx) * units_per_pixel
-            + up * float(dy) * units_per_pixel
+        self.camera_controller.pan(
+            dx,
+            dy,
+            viewport_height=self.height(),
         )
 
     def _zoom_camera(self, amount):
-        self.camera_distance = max(
-            0.5,
-            min(10.0, self.camera_distance + float(amount)),
-        )
+        self.camera_controller.zoom(amount)
 
     # ============================================================
     # Mouse editing

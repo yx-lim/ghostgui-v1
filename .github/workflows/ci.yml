@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - clean-up
+
+permissions:
+  contents: read
+
+jobs:
+  test-package-visual:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    env:
+      QT_QPA_PLATFORM: offscreen
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GHOSTGUI_CONFIG_DIR: ${{ runner.temp }}/ghostgui/config
+      GHOSTGUI_CACHE_DIR: ${{ runner.temp }}/ghostgui/cache
+      GHOSTGUI_PROJECTS_DIR: ${{ runner.temp }}/ghostgui/projects
+      GHOSTGUI_USER_DATA_DIR: ${{ runner.temp }}/ghostgui/data
+      XDG_CONFIG_HOME: ${{ runner.temp }}/ghostgui/xdg-config
+      XDG_DATA_HOME: ${{ runner.temp }}/ghostgui/xdg-data
+      XDG_CACHE_HOME: ${{ runner.temp }}/ghostgui/xdg-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install runtime and headless rendering dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libegl1 \
+            libgl1 \
+            libgl1-mesa-dri \
+            libxkbcommon-x11-0 \
+            xauth \
+            xvfb
+          python -m pip install --upgrade pip
+          python -m pip install .
+          python -m pip check
+
+      - name: Static, architecture, and documentation guardrails
+        run: |
+          python -m compileall -q application core gui scripts tests
+          python scripts/check_architecture.py
+          python scripts/check_docs.py
+
+      - name: Isolated automated suite
+        run: python scripts/run_test_suite.py
+
+      - name: Build and inspect wheel
+        if: matrix.python-version == '3.13'
+        run: |
+          mkdir -p wheelhouse
+          python -m pip wheel . \
+            --no-deps \
+            --no-build-isolation \
+            --wheel-dir wheelhouse
+          python scripts/check_wheel.py \
+            --require-resources \
+            wheelhouse/*.whl
+
+      - name: Smoke-test installed wheel outside checkout
+        if: matrix.python-version == '3.13'
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -m venv --system-site-packages wheel-smoke
+          wheel-smoke/bin/python -m pip install \
+            --no-deps \
+            "$GITHUB_WORKSPACE"/wheelhouse/*.whl
+          wheel-smoke/bin/python \
+            "$GITHUB_WORKSPACE"/scripts/smoke_installed_package.py \
+            --load-model \
+            --gui
+
+      - name: Xvfb software-OpenGL visual regression smoke
+        if: matrix.python-version == '3.13'
+        env:
+          QT_QPA_PLATFORM: xcb
+          GHOSTGUI_VISUAL_TESTS: "1"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          xvfb-run -a \
+            --server-args="-screen 0 1280x1024x24" \
+            python -m unittest tests.test_visual_smoke -v

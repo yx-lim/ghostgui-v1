@@ -8,6 +8,7 @@ import mujoco
 import numpy as np
 
 from core.math3d import quaternion_slerp
+from .solver import IKSolverSettings
 from .tasks import TCPOrientationTask, TCPPositionTask
 
 
@@ -25,19 +26,106 @@ class Collision:
     body2_id: int | None = None
 
 
+@dataclass(frozen=True)
+class CollisionPolicy:
+    """Model-aware distinction between support contact and collision."""
+
+    allowed_contact_pairs: frozenset[frozenset[str]] = frozenset()
+    support_body_ids: frozenset[int] = frozenset()
+    support_penetration_tolerance: float = 0.01
+
+    @classmethod
+    def for_robot_model(
+        cls,
+        robot_model,
+        *,
+        allowed_contact_pairs=None,
+        support_penetration_tolerance=0.01,
+    ):
+        model = robot_model.mj_model
+        support_body_ids = set()
+        for logical_name, binding in getattr(
+            robot_model,
+            "logical_frame_bindings",
+            {},
+        ).items():
+            if not any(
+                token in logical_name.lower()
+                for token in ("foot", "ankle")
+            ):
+                continue
+            kind, object_name = binding
+            object_type = (
+                mujoco.mjtObj.mjOBJ_SITE
+                if kind == "site"
+                else mujoco.mjtObj.mjOBJ_BODY
+            )
+            object_id = mujoco.mj_name2id(model, object_type, object_name)
+            if object_id < 0:
+                continue
+            body_id = (
+                int(model.site_bodyid[object_id])
+                if kind == "site"
+                else int(object_id)
+            )
+            support_body_ids.add(body_id)
+        return cls(
+            allowed_contact_pairs=frozenset(
+                frozenset(pair) for pair in (allowed_contact_pairs or ())
+            ),
+            support_body_ids=frozenset(support_body_ids),
+            support_penetration_tolerance=float(
+                support_penetration_tolerance
+            ),
+        )
+
+    def allows(
+        self,
+        geom1,
+        geom2,
+        body1_id,
+        body2_id,
+        distance,
+    ):
+        if frozenset((geom1, geom2)) in self.allowed_contact_pairs:
+            return True
+        if 0 not in (body1_id, body2_id):
+            return False
+        robot_body_id = body2_id if body1_id == 0 else body1_id
+        return (
+            robot_body_id in self.support_body_ids
+            and float(distance) >= -self.support_penetration_tolerance
+        )
+
+
 class CollisionChecker:
     """Reports penetrating MuJoCo contacts with configurable allowed pairs."""
 
-    def __init__(self, robot_model, allowed_contact_pairs=None, tolerance=0.0):
+    def __init__(
+        self,
+        robot_model,
+        allowed_contact_pairs=None,
+        tolerance=0.0,
+        policy=None,
+    ):
         self.robot_model = robot_model
         self.model = robot_model.mj_model
         self.tolerance = float(tolerance)
-        self.allowed_contact_pairs = {
-            frozenset(pair) for pair in (allowed_contact_pairs or [])
-        }
+        self.policy = policy or CollisionPolicy.for_robot_model(
+            robot_model,
+            allowed_contact_pairs=allowed_contact_pairs,
+        )
+        self.allowed_contact_pairs = set(self.policy.allowed_contact_pairs)
 
     def allow_contact(self, geom1, geom2):
         self.allowed_contact_pairs.add(frozenset((geom1, geom2)))
+        self.policy = CollisionPolicy(
+            allowed_contact_pairs=frozenset(self.allowed_contact_pairs),
+            support_body_ids=self.policy.support_body_ids,
+            support_penetration_tolerance=(
+                self.policy.support_penetration_tolerance
+            ),
+        )
 
     def get_collisions(self, state):
         # mj_forward runs broad/narrow-phase collision and populates data.contact.
@@ -50,10 +138,16 @@ class CollisionChecker:
             geom1_id, geom2_id = int(contact.geom1), int(contact.geom2)
             geom1 = self._name(mujoco.mjtObj.mjOBJ_GEOM, geom1_id, "geom")
             geom2 = self._name(mujoco.mjtObj.mjOBJ_GEOM, geom2_id, "geom")
-            if frozenset((geom1, geom2)) in self.allowed_contact_pairs:
-                continue
             body1_id = int(self.model.geom_bodyid[geom1_id])
             body2_id = int(self.model.geom_bodyid[geom2_id])
+            if self.policy.allows(
+                geom1,
+                geom2,
+                body1_id,
+                body2_id,
+                float(contact.dist),
+            ):
+                continue
             body1 = self._name(mujoco.mjtObj.mjOBJ_BODY, body1_id, "body")
             body2 = self._name(mujoco.mjtObj.mjOBJ_BODY, body2_id, "body")
             kind = "environment" if 0 in (body1_id, body2_id) else "self"
@@ -146,6 +240,25 @@ class CollisionAwareIKSolver:
             self.orientation_weight
             if tcp_orientation_weight is None else float(tcp_orientation_weight)
         )
+        if (
+            not np.isfinite(tcp_position_weight)
+            or not np.isfinite(orientation_weight)
+            or tcp_position_weight < 0.0
+            or orientation_weight < 0.0
+        ):
+            raise ValueError("IK task weights must be finite and nonnegative")
+        ik_settings = IKSolverSettings.from_mapping(
+            settings,
+            position_tolerance=settings.get(
+                "position_tolerance",
+                self.ik_tolerance,
+            ),
+            orientation_tolerance=settings.get(
+                "orientation_tolerance",
+                0.03,
+            ),
+            orientation_weight=orientation_weight,
+        )
         if tcp_position_weight <= 0.0 and orientation_weight <= 0.0:
             return DragSolveResult(
                 accepted_qpos,
@@ -200,10 +313,13 @@ class CollisionAwareIKSolver:
                     ),
                     candidate_quaternion if orientation_weight > 0.0 else None,
                     kind=resolved_kind,
-                    tolerance=float(settings.get(
-                        "position_tolerance", self.ik_tolerance
-                    )),
+                    max_iterations=ik_settings.max_iterations,
+                    tolerance=ik_settings.position_tolerance,
+                    orientation_tolerance=ik_settings.orientation_tolerance,
                     orientation_weight=orientation_weight,
+                    damping=ik_settings.damping,
+                    step_size=ik_settings.step_size,
+                    max_step=ik_settings.max_step,
                 )
             elif hasattr(self.candidate_state, "solve_weighted_tasks"):
                 tasks = [TCPPositionTask(
@@ -211,9 +327,7 @@ class CollisionAwareIKSolver:
                     weight=float(tcp_position_weight),
                     priority=2,
                     required=True,
-                    tolerance=float(settings.get(
-                        "position_tolerance", self.ik_tolerance
-                    )),
+                    tolerance=ik_settings.position_tolerance,
                     object_name=object_name,
                     kind=resolved_kind,
                     target_position=candidate_position,
@@ -224,9 +338,7 @@ class CollisionAwareIKSolver:
                         weight=orientation_weight,
                         priority=2,
                         required=True,
-                        tolerance=float(settings.get(
-                            "orientation_tolerance", 0.03
-                        )),
+                        tolerance=ik_settings.orientation_tolerance,
                         object_name=object_name,
                         kind=resolved_kind,
                         target_quaternion=candidate_quaternion,
@@ -235,10 +347,10 @@ class CollisionAwareIKSolver:
                 ik_result = self.candidate_state.solve_weighted_tasks(
                     tasks,
                     joint_weights=joint_weights,
-                    max_iterations=int(settings.get("max_iterations", 80)),
-                    damping=float(settings.get("damping", 0.04)),
-                    step_size=float(settings.get("step_size", 0.7)),
-                    max_step=float(settings.get("max_step", 0.08)),
+                    max_iterations=ik_settings.max_iterations,
+                    damping=ik_settings.damping,
+                    step_size=ik_settings.step_size,
+                    max_step=ik_settings.max_step,
                 )
             last_error = ik_result.error
             if not ik_result.success:

@@ -375,6 +375,25 @@ class Mujoco3DViewerPanel(QWidget):
         self.log_box.append("Closing MuJoCo viewer...")
         self.process.terminate()
 
+    def shutdown(self, timeout_ms=1000):
+        """Terminate the child viewer and escalate to kill after a timeout."""
+        process = self.process
+        if process is None:
+            return True
+        process.terminate()
+        if not process.waitForFinished(max(0, int(timeout_ms))):
+            process.kill()
+            process.waitForFinished(max(0, int(timeout_ms)))
+        stopped = process.state() == QProcess.ProcessState.NotRunning
+        if stopped:
+            self.process = None
+            self.stdout_buffer = ""
+        return stopped
+
+    def closeEvent(self, event):
+        self.shutdown()
+        super().closeEvent(event)
+
     def send_command(self, command):
         if self.process is None:
             self.log_box.append("Open the MuJoCo viewer before playback.")
