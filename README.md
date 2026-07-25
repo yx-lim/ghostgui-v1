@@ -89,15 +89,6 @@ world-aligned, and imported models may require manual mesh-path selection.
 For current constraints and workarounds, see
 [Troubleshooting](docs/troubleshooting.md).
 
-## Contributing
-
-Development setup, test commands, documentation expectations, and the pull
-request checklist are in [CONTRIBUTING.md](CONTRIBUTING.md).
-
 ## Citation
 
 Research users can cite the project using [CITATION.cff](CITATION.cff).
-
-## License
-
-GhostGUI is available under the [MIT License](LICENSE).
