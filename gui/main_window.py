@@ -31,7 +31,6 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QSizePolicy,
     QProgressBar,
-    QFileDialog,
     QInputDialog,
     QMessageBox,
     QToolBar,
@@ -45,6 +44,9 @@ from core.trajectory import (
     rpy_to_quat,
 )
 from application import model_sessions, timeslice_service, trajectory_generation
+from application.background_jobs import SerializedBackgroundJobs
+from application.csv_io import write_trajectory_csv
+from application.paths import mujoco_playback_cache_path
 from application.project_manager import (
     GhostGUIProject,
     available_default_project_root_from_name,
@@ -55,6 +57,7 @@ from application.project_manager import (
     ghostgui_config_dir,
 )
 from .controls import TrajectoryControlPanel
+from .file_selection import SynchronousFileSelectionStage
 from gui.viewers.reference_frame_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
 from .widgets.status import StatusEvent, status_event_from_text
@@ -288,6 +291,10 @@ class RobotGuiMainWindow(QMainWindow):
         for info in discover_imported_models(self.model_library_root).values():
             self.register_model_info(info)
         self.import_mesh_folder = None
+        self.background_jobs = SerializedBackgroundJobs(self)
+        self.file_selection_stage = SynchronousFileSelectionStage(self)
+        # Compatibility name retained for existing callers and tests.
+        self.model_file_selection_stage = self.file_selection_stage
         self.model_key = model_key
         self.robot_model_3d = None
         self.robot_model_error = None
@@ -345,9 +352,14 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_3d = RobotViewer3D(
             robot_model=self.robot_model_3d,
             error=self.robot_model_error,
+            background_jobs=self.background_jobs,
+            file_selection_stage=self.file_selection_stage,
         )
         self.viewer_2d_stickman = Stickman2DViewer(self.robot_model_3d)
         self.viewer_3d_mujoco = Mujoco3DViewerPanel(self.robot_model_3d)
+        self.viewer_3d_mujoco.set_trajectory_regenerator(
+            self.regenerate_mujoco_playback_cache
+        )
         self.model_sessions = {
                 model_key: model_sessions.RobotModelSession(
                 adapter=self.robot_model_3d,
@@ -370,8 +382,6 @@ class RobotGuiMainWindow(QMainWindow):
         self.render_progress_viewer = None
         self.render_progress_restore_widget = None
         self.pending_initial_render_progress = None
-        self.model_file_dialog = None
-        self.pending_model_import_path = None
         self.undo_stack = []
         self.redo_stack = []
         self._history_restoring = False
@@ -1256,6 +1266,8 @@ class RobotGuiMainWindow(QMainWindow):
             event.ignore()
             return
         self.save_ui_settings()
+        self.model_file_selection_stage.cancel()
+        self.background_jobs.shutdown()
         super().closeEvent(event)
 
     def on_autosave_timer(self):
@@ -1494,13 +1506,26 @@ class RobotGuiMainWindow(QMainWindow):
             QMessageBox.warning(self, "Create project failed", str(exc))
 
     def on_browse_project_folder(self):
-        path = QFileDialog.getExistingDirectory(
-            self,
-            "Open GhostGUI Project",
-            str(Path.home()),
+        if self.background_jobs.is_busy():
+            self.show_status_message(
+                "Wait for the current import or export to finish."
+            )
+            return
+        if self.file_selection_stage.is_active():
+            self.show_status_message("A file selector is already open.")
+            return
+        self.model_file_selection_stage.select_file(
+            mode="directory",
+            title="Open GhostGUI Project",
+            directory=Path.home(),
+            name_filter="Folders (*)",
+            selected=lambda path: self.open_project_path(
+                path, source="folder_dialog"
+            ),
+            failed=lambda message: QMessageBox.warning(
+                self, "Open project failed", message
+            ),
         )
-        if path:
-            self.open_project_path(path, source="folder_dialog")
 
     def on_save_project(self):
         if self.current_project is None:
@@ -1534,6 +1559,8 @@ class RobotGuiMainWindow(QMainWindow):
             self.trajectory.clear()
             self.active_index = -1
             viewer.clear_robot_trajectory()
+            self.viewer_3d_mujoco.clear_trajectory()
+            self.backend_interface.clear_last_solution()
             viewer.clear_editable_timeline(keep_current_pose=False, reset_time=0.0)
             viewer.preview_active = False
             viewer.canvas.set_preview_visible(False)
@@ -1804,6 +1831,8 @@ class RobotGuiMainWindow(QMainWindow):
         viewer.pause_playback()
         viewer.canvas.cancel_transform_drag()
         viewer.clear_robot_trajectory()
+        self.viewer_3d_mujoco.clear_trajectory()
+        self.backend_interface.clear_last_solution()
         try:
             self.trajectory.load_project_dict(trajectory_data)
         except (TypeError, ValueError) as exc:
@@ -2314,8 +2343,15 @@ class RobotGuiMainWindow(QMainWindow):
                         times=snapshot.robot_trajectory_times,
                         activate_first_frame=False,
                     )
+                    self.viewer_3d_mujoco.clear_trajectory()
+                    self.viewer_3d_mujoco.set_trajectory_metadata(
+                        mujoco_playback_cache_path(),
+                        snapshot.robot_trajectory_times,
+                    )
                 else:
                     viewer.clear_robot_trajectory()
+                    self.viewer_3d_mujoco.clear_trajectory()
+                    self.backend_interface.clear_last_solution()
                 self.set_editor_timeline_duration(snapshot.timeline_duration)
                 show_ghosts_blocked = viewer.show_ghosts.blockSignals(True)
                 try:
@@ -2530,6 +2566,20 @@ class RobotGuiMainWindow(QMainWindow):
         """Swap model-owned widgets while retaining the surrounding app."""
         if model_key == self.model_key:
             return
+        if (
+            self.background_jobs.is_busy()
+            or self.file_selection_stage.is_active()
+        ):
+            self.show_status_message(
+                "Wait for the current file operation to finish before "
+                "changing robot models."
+            )
+            index = self.controls.model_box.findData(self.model_key)
+            self.controls.model_box.blockSignals(True)
+            self.controls.model_box.setCurrentIndex(index)
+            self.controls.model_box.blockSignals(False)
+            self.sync_robot_menu()
+            return
         model_info = self.model_registry.get(model_key)
         if model_info is None:
             self.show_status_message(f"Unknown robot model: {model_key}")
@@ -2558,7 +2608,12 @@ class RobotGuiMainWindow(QMainWindow):
         self.model_loaders.pop(model_key, None)
         backend = BackendInterface(mj_model=adapter.mj_model, adapter=adapter)
         reference = MujocoReferenceFrames(adapter=adapter)
-        viewer_3d = RobotViewer3D(adapter, adapter.load_warning)
+        viewer_3d = RobotViewer3D(
+            adapter,
+            adapter.load_warning,
+            background_jobs=self.background_jobs,
+            file_selection_stage=self.file_selection_stage,
+        )
         viewer_2d_skeleton = Stickman2DViewer(adapter)
         self.connect_model_viewer_signals(viewer_3d, viewer_2d_skeleton)
         self.viewer_3d_stack.addWidget(viewer_3d)
@@ -2592,32 +2647,24 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.model_box.blockSignals(False)
 
     def on_open_model_file(self):
-        if self.model_file_dialog is not None:
+        if self.background_jobs.is_busy():
+            self.show_status_message(
+                "Wait for the current import or export to finish."
+            )
             return
-
-        dialog = QFileDialog(self)
-        dialog.setWindowTitle("Open robot model")
-        dialog.setDirectory(str(Path.home()))
-        dialog.setNameFilter("Robot model files (*.urdf *.xml)")
-        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
-        dialog.fileSelected.connect(self._on_model_file_selected)
-        dialog.finished.connect(self._on_model_file_dialog_finished)
-        self.model_file_dialog = dialog
-        dialog.open()
-
-    def _on_model_file_selected(self, path):
-        self.pending_model_import_path = path
-
-    def _on_model_file_dialog_finished(self, _result):
-        dialog = self.model_file_dialog
-        path = self.pending_model_import_path
-        self.model_file_dialog = None
-        self.pending_model_import_path = None
-        if dialog is not None:
-            dialog.deleteLater()
-        if path:
-            QTimer.singleShot(0, lambda: self.import_model_file(path))
+        if self.file_selection_stage.is_active():
+            self.show_status_message("A file selector is already open.")
+            return
+        self.model_file_selection_stage.select_file(
+            mode="open",
+            title="Open robot model",
+            directory=Path.home(),
+            name_filter="Robot model files (*.urdf *.xml)",
+            selected=self.import_model_file,
+            failed=lambda message: self.show_status_message(
+                f"Could not open robot model selector: {message}"
+            ),
+        )
 
     def on_setup_import_requested(self, action):
         if action == "model":
@@ -2634,64 +2681,126 @@ class RobotGuiMainWindow(QMainWindow):
             self.viewer_3d.choose_trajectory_save_path()
 
     def on_choose_mesh_folder(self):
-        path = QFileDialog.getExistingDirectory(
-            self,
-            "Choose Mesh Folder (.stl)",
-            str(Path.home()),
-        )
-        if not path:
+        if self.background_jobs.is_busy():
+            self.show_status_message(
+                "Wait for the current import or export to finish."
+            )
             return
+        if self.file_selection_stage.is_active():
+            self.show_status_message("A file selector is already open.")
+            return
+        self.model_file_selection_stage.select_file(
+            mode="directory",
+            title="Choose Mesh Folder (.stl)",
+            directory=Path.home(),
+            name_filter="Folders (*)",
+            selected=self._set_import_mesh_folder,
+            failed=lambda message: self.show_status_message(
+                f"Could not open mesh-folder selector: {message}"
+            ),
+        )
+
+    def _set_import_mesh_folder(self, path):
         self.import_mesh_folder = Path(path).expanduser().resolve()
         self.show_status_message(f"Mesh folder: {self.import_mesh_folder}")
 
-    def _prompt_for_mesh_folder(self):
-        path = QFileDialog.getExistingDirectory(
-            self,
-            "Choose Mesh Folder (.stl)",
-            str(Path.home()),
-        )
-        if not path:
-            return None
-        self.import_mesh_folder = Path(path).expanduser().resolve()
-        return self.import_mesh_folder
-
     def import_model_file(self, path):
-        mesh_roots = [self.import_mesh_folder] if self.import_mesh_folder else []
+        mesh_roots = (
+            (self.import_mesh_folder,) if self.import_mesh_folder else ()
+        )
+        self._queue_model_import(path, mesh_roots, allow_mesh_prompt=True)
+
+    def _queue_model_import(
+        self,
+        path,
+        mesh_roots,
+        *,
+        allow_mesh_prompt,
+    ):
+        if self.background_jobs.is_busy():
+            self.show_status_message(
+                "Wait for the current import or export to finish."
+            )
+            return
+
+        source_path = Path(path).expanduser().resolve()
+        library_root = Path(self.model_library_root).expanduser().resolve()
+        resolved_mesh_roots = tuple(
+            Path(root).expanduser().resolve() for root in mesh_roots
+        )
         self.begin_render_progress(
             "Importing robot model",
-            f"Copying and preparing {Path(path).name}...",
+            f"Copying and preparing {source_path.name}...",
         )
-        QApplication.processEvents()
-        try:
-            try:
-                info = import_robot_model(
-                    path, self.model_library_root, mesh_roots=mesh_roots
-                )
-            except RuntimeError:
-                self.finish_render_progress()
-                mesh_folder = self._prompt_for_mesh_folder()
-                if mesh_folder is None:
-                    raise
-                self.begin_render_progress(
-                    "Importing robot model",
-                    f"Copying and preparing {Path(path).name}...",
-                )
-                QApplication.processEvents()
-                info = import_robot_model(
-                    path, self.model_library_root, mesh_roots=[mesh_folder]
-                )
-            info = self.register_model_info(info)
-        except Exception as exc:
+
+        submitted = self.background_jobs.submit(
+            "import robot model",
+            lambda: import_robot_model(
+                source_path,
+                library_root,
+                mesh_roots=resolved_mesh_roots,
+            ),
+            self._on_model_import_completed,
+            lambda error: self._on_model_import_failed(
+                source_path,
+                error,
+                allow_mesh_prompt=allow_mesh_prompt,
+            ),
+        )
+        if not submitted:
             self.finish_render_progress()
-            message = f"Could not import model: {exc}"
-            self.show_status_message(message)
-            QMessageBox.warning(self, "Import model failed", message)
-            return
+            self.show_status_message("Robot model import was not started.")
+
+    def _on_model_import_completed(self, info):
+        self.finish_render_progress()
+        info = self.register_model_info(info)
         self.show_status_message(
             f"Imported {info.display_name} to {info.model_path}"
         )
         self.controls.add_model(info.key, info.display_name, select=True)
         self.refresh_robot_menu()
+
+    def _on_model_import_failed(
+        self,
+        source_path,
+        error,
+        *,
+        allow_mesh_prompt,
+    ):
+        self.finish_render_progress()
+        if isinstance(error, RuntimeError) and allow_mesh_prompt:
+            self.show_status_message(
+                "The model needs an external mesh folder. Choose it to retry."
+            )
+            self.model_file_selection_stage.select_file(
+                mode="directory",
+                title="Choose Mesh Folder (.stl)",
+                directory=Path.home(),
+                name_filter="Folders (*)",
+                selected=lambda folder: self._retry_model_import_with_meshes(
+                    source_path, folder
+                ),
+                failed=lambda message: self._show_model_import_error(
+                    f"Could not open mesh-folder selector: {message}"
+                ),
+                cancelled=lambda: self.show_status_message(
+                    "Robot model import cancelled."
+                ),
+            )
+            return
+        self._show_model_import_error(f"Could not import model: {error}")
+
+    def _retry_model_import_with_meshes(self, source_path, folder):
+        self._set_import_mesh_folder(folder)
+        self._queue_model_import(
+            source_path,
+            (self.import_mesh_folder,),
+            allow_mesh_prompt=False,
+        )
+
+    def _show_model_import_error(self, message):
+        self.show_status_message(message)
+        QMessageBox.warning(self, "Import model failed", message)
 
     def finish_model_loading_ui(self):
         self.controls.model_box.setEnabled(True)
@@ -2718,6 +2827,12 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_3d_stack.setCurrentWidget(self.viewer_3d)
         self.viewer_2d_skeleton_stack.setCurrentWidget(self.viewer_2d_stickman)
         self.viewer_3d_mujoco.set_model_adapter(session.adapter)
+        self.viewer_3d_mujoco.clear_trajectory()
+        if self.viewer_3d.robot_trajectory:
+            self.viewer_3d_mujoco.set_trajectory_metadata(
+                mujoco_playback_cache_path(),
+                self.viewer_3d.robot_trajectory_times,
+            )
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
         self.set_editor_timeline_duration(self.viewer_3d.timeline_duration)
         self.model_source_label.setText(self.model_source_text(session.adapter))
@@ -2742,11 +2857,71 @@ class RobotGuiMainWindow(QMainWindow):
         self.restore_pending_project_if_ready()
 
     def on_trajectory_csv_loaded(self, csv_path):
-        self.viewer_3d_mujoco.set_trajectory_csv(csv_path)
+        self.viewer_3d_mujoco.set_trajectory_metadata(
+            csv_path,
+            self.viewer_3d.robot_trajectory_times,
+        )
         if self.viewer_3d.consume_trajectory_import_dt_prompt_request():
             self.prompt_trajectory_import_dt()
-        count = self.import_loaded_robot_trajectory_as_keyframes()
         import_dt = self.viewer_3d.trajectory_import_dt.value()
+        if self.viewer_3d.consume_background_trajectory_postprocess_request():
+            qposes = tuple(
+                qpos.copy() for qpos in self.viewer_3d.robot_trajectory
+            )
+            times = tuple(self.viewer_3d.robot_trajectory_times)
+            phase = self.controls.phase_box.currentText()
+            frame_names = tuple(self.editable_logical_frame_names())
+            frame_bindings = dict(self.viewer_3d.frame_bindings)
+            robot_model = self.viewer_3d.robot_model
+            self.show_status_message(
+                f"Loaded trajectory CSV: {csv_path}\n"
+                "Computing editable target-frame keyframes..."
+            )
+            submitted = self.background_jobs.submit(
+                "compute imported trajectory target frames",
+                lambda: timeslice_service.build_loaded_trajectory_target_frames(
+                    robot_model,
+                    times,
+                    qposes,
+                    interval=import_dt,
+                    phase=phase,
+                    frame_names=frame_names,
+                    frame_bindings=frame_bindings,
+                ),
+                lambda result: self._finish_trajectory_csv_import(
+                    csv_path,
+                    result,
+                    import_dt,
+                ),
+                lambda error: self.show_status_message(
+                    f"Loaded trajectory CSV, but could not compute editable "
+                    f"target frames: {error}"
+                ),
+            )
+            if submitted:
+                return
+
+        count = self.import_loaded_robot_trajectory_as_keyframes()
+        self._show_trajectory_csv_import_completed(
+            csv_path,
+            count,
+            import_dt,
+        )
+
+    def _finish_trajectory_csv_import(self, csv_path, result, import_dt):
+        count = self._apply_loaded_trajectory_targets(result)
+        self._show_trajectory_csv_import_completed(
+            csv_path,
+            count,
+            import_dt,
+        )
+
+    def _show_trajectory_csv_import_completed(
+        self,
+        csv_path,
+        count,
+        import_dt,
+    ):
         self.show_status_message(
             f"Loaded trajectory CSV: {csv_path}\n"
             f"Imported {count} editable target-frame keyframes from FK "
@@ -2925,62 +3100,55 @@ class RobotGuiMainWindow(QMainWindow):
         if not qposes:
             return 0
 
-        state = self.viewer_3d.committed_state
-        if state is None:
+        if self.viewer_3d.robot_model is None:
             return 0
 
+        result = timeslice_service.build_loaded_trajectory_target_frames(
+            self.viewer_3d.robot_model,
+            times,
+            qposes,
+            interval=self.viewer_3d.trajectory_import_dt.value(),
+            phase=self.controls.phase_box.currentText(),
+            frame_names=self.editable_logical_frame_names(),
+            frame_bindings=self.viewer_3d.frame_bindings,
+        )
+        return self._apply_loaded_trajectory_targets(result)
+
+    def _apply_loaded_trajectory_targets(self, result):
         self.trajectory.clear()
-        self.active_index = -1
-        phase = self.controls.phase_box.currentText()
         selected_frame_name = self.controls.frame_box.currentText()
         selected_frame = None
-        selected_index = -1
-        last_index = -1
-        count = 0
+        for frame in result.frames:
+            self.trajectory.ensure_track(frame.frame_name)
+            self.trajectory.tracks[frame.frame_name].append(frame)
+            if (
+                selected_frame is None
+                and frame.frame_name == selected_frame_name
+                and abs(
+                    frame.time - self.viewer_3d.get_current_time()
+                ) <= 1e-6
+            ):
+                selected_frame = frame
+        for track in self.trajectory.tracks.values():
+            track.sort(key=lambda frame: frame.time)
 
-        frame_names = self.editable_logical_frame_names()
-        import_samples = self.selected_loaded_trajectory_import_samples(times, qposes)
-        for time, qpos in import_samples:
-            state.set_qpos(qpos)
-            for frame_name in frame_names:
-                binding = self.viewer_3d.frame_bindings.get(frame_name)
-                if binding is None:
-                    continue
-                kind, object_name = binding
-                try:
-                    position, quaternion = state.get_body_pose(object_name, kind)
-                except KeyError:
-                    continue
-                roll, pitch, yaw = quat_to_rpy(quaternion)
-                frame = TargetFrame(
-                    time=float(time),
-                    phase=phase,
-                    frame_name=frame_name,
-                    x=float(position[0]),
-                    y=float(position[1]),
-                    z=float(position[2]),
-                    roll=roll,
-                    pitch=pitch,
-                    yaw=yaw,
-                )
-                last_index = self.trajectory.upsert_frame(frame)
-                if (
-                    selected_frame is None
-                    and frame_name == selected_frame_name
-                    and abs(float(time) - self.viewer_3d.get_current_time()) <= 1e-6
-                ):
-                    selected_frame = frame
-                    selected_index = last_index
-                count += 1
-
-        if qposes:
-            state.set_qpos(qposes[0])
+        qposes = self.viewer_3d.robot_trajectory
+        times = self.viewer_3d.robot_trajectory_times
+        if qposes and times:
+            self.viewer_3d.committed_state.set_qpos(qposes[0])
             self.viewer_3d.preview_state.set_qpos(qposes[0])
             self.viewer_3d.preview_active = False
             self.viewer_3d.canvas.set_preview_visible(False)
             self.controls.time_slider.set_value(float(times[0]))
 
-        self.active_index = selected_index if selected_index >= 0 else last_index
+        if selected_frame is not None:
+            self.active_index = self.trajectory.index_of_frame(selected_frame)
+        elif result.frames:
+            self.active_index = self.trajectory.index_of_frame(
+                result.frames[-1]
+            )
+        else:
+            self.active_index = -1
         if selected_frame is not None:
             self.controls.set_position_values(
                 x=selected_frame.x,
@@ -2991,10 +3159,9 @@ class RobotGuiMainWindow(QMainWindow):
                 yaw=selected_frame.yaw,
                 emit_pose_changed=False,
             )
-        imported_times = [time for time, _ in import_samples]
-        self.viewer_3d.set_defined_timeslices(imported_times)
+        self.viewer_3d.set_defined_timeslices(result.imported_times)
         self.refresh_display()
-        return count
+        return len(result.frames)
 
     def selected_loaded_trajectory_import_samples(self, times, qposes):
         return timeslice_service.selected_loaded_trajectory_import_samples(
@@ -3157,6 +3324,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.trajectory.clear()
         self.active_index = -1
         self.viewer_3d.clear_robot_trajectory()
+        self.viewer_3d_mujoco.clear_trajectory()
+        self.backend_interface.clear_last_solution()
         self.viewer_3d.clear_editable_timeline(
             keep_current_pose=True,
             reset_time=0.0,
@@ -3255,6 +3424,17 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_3d_mujoco.set_trajectory_csv(result.csv_path)
         self.show_status_message(result.status_text)
         self.record_history_action("Generate trajectory")
+
+    def regenerate_mujoco_playback_cache(self):
+        """Recreate the disposable viewer CSV from the current solved states."""
+        playback_path = mujoco_playback_cache_path()
+        if self.viewer_3d.robot_trajectory:
+            export = self.viewer_3d._trajectory_export_snapshot()
+            return write_trajectory_csv(playback_path, export)
+        if self.backend_interface.has_last_solution():
+            self.backend_interface.export_last_solution_csv(playback_path)
+            return playback_path.resolve()
+        raise RuntimeError("Generate or import a trajectory first.")
 
     # ============================================================
     # Display update

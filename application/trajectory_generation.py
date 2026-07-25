@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from application.paths import TRAJECTORY_CSV_DIR, prepare_csv_save_path
+from application.paths import (
+    mujoco_playback_cache_path,
+    prepare_csv_save_path,
+)
 from core.trajectory import SampledTrajectory
 
 
@@ -21,8 +24,10 @@ def generate_trajectory_status(
     *,
     smoothing,
     export_dt=0.01,
-    csv_path=TRAJECTORY_CSV_DIR / "mujoco_playback.csv",
+    csv_path=None,
 ):
+    if csv_path is None:
+        csv_path = mujoco_playback_cache_path()
     csv_path = prepare_csv_save_path(csv_path)
     sampled_tracks = trajectory.sample_tracks_uniform_dt(
         dt=export_dt,

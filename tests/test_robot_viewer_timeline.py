@@ -33,6 +33,7 @@ from application.project_manager import (
     ghostgui_projects_dir,
     load_recent_projects,
 )
+from application.paths import mujoco_playback_cache_path
 from gui.main_window import (
     INITIAL_RENDER_PROGRESS_DELAY_MS,
     LEFT_SIDEBAR_MIN_WIDTH,
@@ -60,6 +61,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 ),
                 "GHOSTGUI_PROJECTS_DIR": str(
                     Path(self.config_dir.name) / "projects"
+                ),
+                "GHOSTGUI_CACHE_DIR": str(
+                    Path(self.config_dir.name) / "cache"
                 ),
             },
         )
@@ -2115,13 +2119,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
             ) as guard, patch(
                 "gui.main_window.QInputDialog.getText",
                 return_value=("fresh project", True),
-            ), patch(
-                "gui.main_window.QFileDialog.getExistingDirectory"
-            ) as get_directory:
+            ):
                 self.window.on_new_project()
 
             guard.assert_called_once_with("create a new project")
-            get_directory.assert_not_called()
 
             projects_root = Path(os.environ["GHOSTGUI_PROJECTS_DIR"]).resolve()
             self.assertEqual(self.window.current_project.root_dir.parent, projects_root)
@@ -2195,12 +2196,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
         with patch(
             "gui.main_window.QInputDialog.getText",
             return_value=("saved workspace", True),
-        ), patch(
-            "gui.main_window.QFileDialog.getExistingDirectory"
-        ) as get_directory:
+        ):
             self.window.on_save_project()
 
-        get_directory.assert_not_called()
         projects_root = Path(os.environ["GHOSTGUI_PROJECTS_DIR"]).resolve()
         self.assertEqual(self.window.current_project.root_dir.parent, projects_root)
         self.assertEqual(len(self.window.trajectory.frames), 1)
@@ -2896,6 +2894,48 @@ class RobotViewerTimelineTests(unittest.TestCase):
         np.testing.assert_allclose(saved, self.viewer.committed_state.get_qpos())
         self.assertFalse(np.allclose(saved, expected))
 
+    def test_missing_playback_cache_is_rebuilt_from_loaded_trajectory(self):
+        first = self.viewer.robot_model.home_qpos.copy()
+        second = first.copy()
+        second[-1] += 0.05
+        self.viewer.set_robot_trajectory(
+            [first, second],
+            times=[0.0, 0.1],
+        )
+
+        cache_path = mujoco_playback_cache_path()
+        panel = self.window.viewer_3d_mujoco
+        panel.set_trajectory_metadata(cache_path, [0.0, 0.1])
+        self.assertFalse(cache_path.exists())
+        self.assertFalse(panel.play_button.isEnabled())
+
+        self.assertTrue(panel._ensure_trajectory_file())
+        self.assertTrue(cache_path.exists())
+        self.assertTrue(panel.play_button.isEnabled())
+        _, rows = load_trajectory_csv(
+            cache_path,
+            qpos_width=self.viewer.robot_model.mj_model.nq,
+        )
+        np.testing.assert_allclose(rows[0][RAW_QPOS_KEY], first)
+        np.testing.assert_allclose(rows[1][RAW_QPOS_KEY], second)
+
+        cache_path.unlink()
+        self.assertTrue(panel._ensure_trajectory_file())
+        self.assertTrue(cache_path.exists())
+
+    def test_playback_is_disabled_without_cache_or_solved_trajectory(self):
+        panel = self.window.viewer_3d_mujoco
+        panel.clear_trajectory()
+        self.viewer.clear_robot_trajectory()
+        self.window.backend_interface.clear_last_solution()
+
+        self.assertFalse(panel._ensure_trajectory_file())
+        self.assertFalse(panel.play_button.isEnabled())
+        self.assertIn(
+            "Generate or import a trajectory first",
+            panel.log_box.toPlainText(),
+        )
+
     def test_save_timeline_as_headerless_time_plus_qpos_csv(self):
         at_zero = self.viewer.get_current_keyframe()
         self.viewer.set_current_time(0.2)
@@ -3028,6 +3068,11 @@ class RobotViewerTimelineTests(unittest.TestCase):
             ):
                 self.window.on_setup_import_requested("trajectory")
                 open_dialog.call_args.kwargs["selected"](str(source))
+                for _attempt in range(500):
+                    if not self.window.background_jobs.is_busy():
+                        break
+                    QTest.qWait(10)
+                self.assertFalse(self.window.background_jobs.is_busy())
 
         prompt.assert_called_once()
         self.assertAlmostEqual(self.viewer.trajectory_import_dt.value(), 0.05)

@@ -14,7 +14,7 @@ import csv
 import shutil
 import sys
 
-from application.paths import TRAJECTORY_CSV_DIR
+from application.paths import mujoco_playback_cache_path
 from PySide6.QtCore import QProcess, Qt
 from PySide6.QtWidgets import (
     QWidget,
@@ -33,6 +33,8 @@ class Mujoco3DViewerPanel(QWidget):
         super().__init__()
 
         self.process = None
+        self._trajectory_regenerator = None
+        self._missing_trajectory_notice_shown = False
 
         self.project_root = Path(__file__).resolve().parents[2]
         self.viewer_script = self.project_root / "scripts" / "view_g1_mujoco.py"
@@ -41,7 +43,7 @@ class Mujoco3DViewerPanel(QWidget):
             adapter.runtime_model_path if adapter is not None
             else self.project_root / "models" / "g1_29dof.xml"
         )
-        self.trajectory_csv_path = TRAJECTORY_CSV_DIR / "mujoco_playback.csv"
+        self.trajectory_csv_path = mujoco_playback_cache_path()
         self.trajectory_times = []
         self._syncing_timeline = False
         self.stdout_buffer = ""
@@ -101,7 +103,10 @@ class Mujoco3DViewerPanel(QWidget):
 
         layout.addWidget(self.title)
         layout.addWidget(self.model_label)
-        layout.addWidget(QLabel(f"Trajectory CSV: {self.trajectory_csv_path}"))
+        self.trajectory_label = QLabel(
+            f"Trajectory CSV: {self.trajectory_csv_path}"
+        )
+        layout.addWidget(self.trajectory_label)
         layout.addLayout(window_row)
         layout.addWidget(self.time_label)
         layout.addWidget(self.timeline_slider)
@@ -120,14 +125,21 @@ class Mujoco3DViewerPanel(QWidget):
         if adapter.load_warning:
             self.log_box.append(adapter.load_warning)
 
+    def set_trajectory_regenerator(self, callback):
+        self._trajectory_regenerator = callback
+
     def load_timeline_metadata(self, csv_path):
-        self.trajectory_csv_path = Path(csv_path)
+        self.trajectory_csv_path = Path(csv_path).expanduser().resolve()
+        self.trajectory_label.setText(
+            f"Trajectory CSV: {self.trajectory_csv_path}"
+        )
         self.trajectory_times = []
 
         if not self.trajectory_csv_path.exists():
             self.timeline_slider.setMaximum(0)
             self.timeline_slider.setValue(0)
             self.time_label.setText("Time: 0.000 / 0.000 s")
+            self._update_playback_availability()
             return
 
         try:
@@ -142,6 +154,8 @@ class Mujoco3DViewerPanel(QWidget):
         self.timeline_slider.setMaximum(max_index)
         self.timeline_slider.setValue(0)
         self.update_time_label(0)
+        self._missing_trajectory_notice_shown = False
+        self._update_playback_availability()
 
     def _active_qpos_width(self):
         if self.adapter is None:
@@ -204,6 +218,86 @@ class Mujoco3DViewerPanel(QWidget):
         if self.process is not None:
             self.send_command(f"load {Path(csv_path).resolve()}")
 
+    def set_trajectory_metadata(self, csv_path, times):
+        """Apply already parsed metadata without reading the CSV again."""
+        self.trajectory_csv_path = Path(csv_path).expanduser().resolve()
+        self.trajectory_label.setText(
+            f"Trajectory CSV: {self.trajectory_csv_path}"
+        )
+        self.trajectory_times = [float(time) for time in times]
+        max_index = max(0, len(self.trajectory_times) - 1)
+        self.timeline_slider.setMaximum(max_index)
+        self.timeline_slider.setValue(0)
+        self.update_time_label(0)
+        self._missing_trajectory_notice_shown = False
+        self._update_playback_availability()
+        if self.process is not None and self.trajectory_csv_path.exists():
+            self.send_command(f"load {self.trajectory_csv_path}")
+
+    def clear_trajectory(self):
+        playback_cache = mujoco_playback_cache_path().resolve()
+        try:
+            playback_cache.unlink(missing_ok=True)
+        except OSError as exc:
+            self.log_box.append(f"Could not clear playback cache: {exc}")
+        self.trajectory_csv_path = playback_cache
+        self.trajectory_times = []
+        self.trajectory_label.setText(
+            f"Trajectory CSV: {self.trajectory_csv_path}"
+        )
+        self.timeline_slider.setMaximum(0)
+        self.timeline_slider.setValue(0)
+        self.time_label.setText("Time: 0.000 / 0.000 s")
+        self._update_playback_availability()
+        if self.process is not None:
+            self.send_command("clear")
+
+    def _update_playback_availability(self):
+        available = bool(
+            self.trajectory_times and self.trajectory_csv_path.exists()
+        )
+        self.play_button.setEnabled(available)
+        self.pause_button.setEnabled(available)
+        self.timeline_slider.setEnabled(available)
+        self.speed_box.setEnabled(available)
+
+    def _ensure_trajectory_file(self):
+        if self.trajectory_csv_path.exists():
+            if self.trajectory_times:
+                return True
+            self.load_timeline_metadata(self.trajectory_csv_path)
+            if self.trajectory_times:
+                return True
+
+        if self._trajectory_regenerator is not None:
+            try:
+                regenerated_path = self._trajectory_regenerator()
+            except Exception as exc:
+                if not self._missing_trajectory_notice_shown:
+                    self.log_box.append(
+                        f"Playback cache could not be restored: {exc}"
+                    )
+                regenerated_path = None
+            if regenerated_path:
+                candidate = Path(regenerated_path).expanduser().resolve()
+                if candidate.exists():
+                    self.load_timeline_metadata(candidate)
+                    if self.process is not None:
+                        self.send_command(f"load {candidate}")
+                    self.log_box.append(
+                        f"Restored playback cache: {candidate}"
+                    )
+                    return True
+
+        if not self._missing_trajectory_notice_shown:
+            self.log_box.append(
+                "No playback trajectory is available. Generate or import "
+                "a trajectory first."
+            )
+            self._missing_trajectory_notice_shown = True
+        self._update_playback_availability()
+        return False
+
     def update_time_label(self, index):
         if not self.trajectory_times:
             self.time_label.setText("Time: 0.000 / 0.000 s")
@@ -229,6 +323,7 @@ class Mujoco3DViewerPanel(QWidget):
             self.log_box.append("MuJoCo viewer is already running.")
             return
 
+        trajectory_available = self._ensure_trajectory_file()
         self.process = QProcess(self)
 
         self.process.readyReadStandardOutput.connect(self.read_stdout)
@@ -238,7 +333,7 @@ class Mujoco3DViewerPanel(QWidget):
         self.log_box.append("Launching MuJoCo viewer...")
 
         arguments = [str(self.viewer_script), "--model", str(self.model_path)]
-        if self.trajectory_csv_path.exists():
+        if trajectory_available:
             arguments.extend(["--csv", str(self.trajectory_csv_path)])
 
         executable = self._viewer_python_executable()
@@ -288,6 +383,8 @@ class Mujoco3DViewerPanel(QWidget):
         self.process.write((command + "\n").encode("utf-8"))
 
     def play(self):
+        if not self._ensure_trajectory_file():
+            return
         self.send_command("play")
 
     def pause(self):
@@ -295,11 +392,12 @@ class Mujoco3DViewerPanel(QWidget):
 
     def refresh_viewer(self):
         index = self.timeline_slider.value()
+        trajectory_available = self._ensure_trajectory_file()
         self.load_timeline_metadata(self.trajectory_csv_path)
         index = min(index, self.timeline_slider.maximum())
         self.timeline_slider.setValue(index)
 
-        if self.trajectory_csv_path.exists():
+        if trajectory_available:
             self.send_command(f"load {self.trajectory_csv_path.resolve()}")
 
         self.send_command(f"seek {index}")
