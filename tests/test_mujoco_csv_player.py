@@ -15,7 +15,7 @@ class MujocoCsvPlayerTests(unittest.TestCase):
         cls.model = mujoco.MjModel.from_xml_path(str(model_path))
 
     def test_loads_headerless_qpos_pose(self):
-        source = Path("csv/crawl_home_qpos_t0.5.csv").resolve()
+        source = Path("csv/qpos/g1-crawl-qpos1.csv").resolve()
         _, rows = load_trajectory_csv(source)
         self.assertEqual(len(rows), 1)
         self.assertEqual(len(rows[0][RAW_QPOS_KEY]), self.model.nq)

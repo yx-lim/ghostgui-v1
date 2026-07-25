@@ -45,6 +45,8 @@ from core.trajectory import (
 )
 from application import model_sessions, timeslice_service, trajectory_generation
 from application.background_jobs import SerializedBackgroundJobs
+from application.csv_io import write_trajectory_csv
+from application.paths import mujoco_playback_cache_path
 from application.project_manager import (
     GhostGUIProject,
     available_default_project_root_from_name,
@@ -355,6 +357,9 @@ class RobotGuiMainWindow(QMainWindow):
         )
         self.viewer_2d_stickman = Stickman2DViewer(self.robot_model_3d)
         self.viewer_3d_mujoco = Mujoco3DViewerPanel(self.robot_model_3d)
+        self.viewer_3d_mujoco.set_trajectory_regenerator(
+            self.regenerate_mujoco_playback_cache
+        )
         self.model_sessions = {
                 model_key: model_sessions.RobotModelSession(
                 adapter=self.robot_model_3d,
@@ -1554,6 +1559,8 @@ class RobotGuiMainWindow(QMainWindow):
             self.trajectory.clear()
             self.active_index = -1
             viewer.clear_robot_trajectory()
+            self.viewer_3d_mujoco.clear_trajectory()
+            self.backend_interface.clear_last_solution()
             viewer.clear_editable_timeline(keep_current_pose=False, reset_time=0.0)
             viewer.preview_active = False
             viewer.canvas.set_preview_visible(False)
@@ -1824,6 +1831,8 @@ class RobotGuiMainWindow(QMainWindow):
         viewer.pause_playback()
         viewer.canvas.cancel_transform_drag()
         viewer.clear_robot_trajectory()
+        self.viewer_3d_mujoco.clear_trajectory()
+        self.backend_interface.clear_last_solution()
         try:
             self.trajectory.load_project_dict(trajectory_data)
         except (TypeError, ValueError) as exc:
@@ -2334,8 +2343,15 @@ class RobotGuiMainWindow(QMainWindow):
                         times=snapshot.robot_trajectory_times,
                         activate_first_frame=False,
                     )
+                    self.viewer_3d_mujoco.clear_trajectory()
+                    self.viewer_3d_mujoco.set_trajectory_metadata(
+                        mujoco_playback_cache_path(),
+                        snapshot.robot_trajectory_times,
+                    )
                 else:
                     viewer.clear_robot_trajectory()
+                    self.viewer_3d_mujoco.clear_trajectory()
+                    self.backend_interface.clear_last_solution()
                 self.set_editor_timeline_duration(snapshot.timeline_duration)
                 show_ghosts_blocked = viewer.show_ghosts.blockSignals(True)
                 try:
@@ -2811,6 +2827,12 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_3d_stack.setCurrentWidget(self.viewer_3d)
         self.viewer_2d_skeleton_stack.setCurrentWidget(self.viewer_2d_stickman)
         self.viewer_3d_mujoco.set_model_adapter(session.adapter)
+        self.viewer_3d_mujoco.clear_trajectory()
+        if self.viewer_3d.robot_trajectory:
+            self.viewer_3d_mujoco.set_trajectory_metadata(
+                mujoco_playback_cache_path(),
+                self.viewer_3d.robot_trajectory_times,
+            )
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
         self.set_editor_timeline_duration(self.viewer_3d.timeline_duration)
         self.model_source_label.setText(self.model_source_text(session.adapter))
@@ -3302,6 +3324,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.trajectory.clear()
         self.active_index = -1
         self.viewer_3d.clear_robot_trajectory()
+        self.viewer_3d_mujoco.clear_trajectory()
+        self.backend_interface.clear_last_solution()
         self.viewer_3d.clear_editable_timeline(
             keep_current_pose=True,
             reset_time=0.0,
@@ -3400,6 +3424,17 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_3d_mujoco.set_trajectory_csv(result.csv_path)
         self.show_status_message(result.status_text)
         self.record_history_action("Generate trajectory")
+
+    def regenerate_mujoco_playback_cache(self):
+        """Recreate the disposable viewer CSV from the current solved states."""
+        playback_path = mujoco_playback_cache_path()
+        if self.viewer_3d.robot_trajectory:
+            export = self.viewer_3d._trajectory_export_snapshot()
+            return write_trajectory_csv(playback_path, export)
+        if self.backend_interface.has_last_solution():
+            self.backend_interface.export_last_solution_csv(playback_path)
+            return playback_path.resolve()
+        raise RuntimeError("Generate or import a trajectory first.")
 
     # ============================================================
     # Display update

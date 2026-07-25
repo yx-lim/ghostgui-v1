@@ -16,6 +16,7 @@ The GUI launches this script as a subprocess and sends simple stdin commands:
 from pathlib import Path
 import argparse
 import csv
+import os
 import queue
 import sys
 import threading
@@ -27,7 +28,28 @@ import mujoco.viewer
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = PROJECT_ROOT / "models" / "g1_29dof.xml"
-DEFAULT_CSV_PATH = PROJECT_ROOT / "csv" / "trajectory" / "mujoco_playback.csv"
+
+
+def default_playback_cache_path():
+    override = os.environ.get("GHOSTGUI_CACHE_DIR")
+    if override:
+        cache_root = Path(override).expanduser()
+    elif sys.platform == "darwin":
+        cache_root = Path.home() / "Library" / "Caches" / "GhostGUI"
+    elif sys.platform.startswith("win") and os.environ.get("LOCALAPPDATA"):
+        cache_root = (
+            Path(os.environ["LOCALAPPDATA"]) / "GhostGUI" / "Cache"
+        )
+    elif os.environ.get("XDG_CACHE_HOME"):
+        cache_root = (
+            Path(os.environ["XDG_CACHE_HOME"]).expanduser() / "ghostgui"
+        )
+    else:
+        cache_root = Path.home() / ".cache" / "ghostgui"
+    return cache_root / "playback" / "mujoco_playback.csv"
+
+
+DEFAULT_CSV_PATH = default_playback_cache_path()
 
 
 BASE_COLUMNS = [
@@ -242,6 +264,13 @@ class TrajectoryPlayer:
         try:
             if action == "load":
                 self.load_csv(argument)
+            elif action == "clear":
+                self.rows = []
+                self.csv_path = None
+                self.index = 0
+                self.playing = False
+                self.current_time = 0.0
+                self.print_status(force=True)
             elif action == "play":
                 if self.rows and self.index >= len(self.rows) - 1:
                     self.seek_index(0)

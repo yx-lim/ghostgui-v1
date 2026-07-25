@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from application.paths import prepare_csv_save_path
+from application.paths import atomic_text_writer, prepare_csv_save_path
 
 
 @dataclass(frozen=True)
@@ -107,7 +107,7 @@ def read_trajectory_csv(csv_path, expected_qpos_count):
 def write_qpos_csv(csv_path, qpos):
     path = prepare_csv_save_path(csv_path)
     values = np.asarray(qpos, dtype=float)
-    with path.open("w", newline="") as handle:
+    with atomic_text_writer(path, newline="") as handle:
         csv.writer(handle).writerow(f"{value:.18e}" for value in values)
     return path
 
@@ -115,7 +115,7 @@ def write_qpos_csv(csv_path, qpos):
 def write_trajectory_csv(csv_path, export):
     path = prepare_csv_save_path(csv_path)
     expected = int(export.expected_qpos_count)
-    with path.open("w", newline="") as handle:
+    with atomic_text_writer(path, newline="") as handle:
         writer = csv.writer(handle)
         for time_value, qpos in zip(export.times, export.qposes):
             if qpos is None or len(qpos) != expected:

@@ -1870,7 +1870,7 @@ class RobotViewer3D(QWidget):
                 times = tuple(float(index) for index in range(len(qposes)))
         else:
             self.state_timeline.set_state(
-      n           self.current_time, self.committed_state.get_qpos()
+                self.current_time, self.committed_state.get_qpos()
             )
             times = tuple(float(time) for time in self.state_timeline.times())
             qposes = tuple(

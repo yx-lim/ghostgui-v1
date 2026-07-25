@@ -15,7 +15,7 @@ import csv
 import math
 from pathlib import Path
 
-from application.paths import prepare_csv_save_path
+from application.paths import atomic_text_writer, prepare_csv_save_path
 
 try:
     import mujoco
@@ -456,7 +456,7 @@ class PythonTrajectoryBackend:
             "base_qz",
         ] + self.joint_names
 
-        with open(csv_path, "w", newline="") as f:
+        with atomic_text_writer(csv_path, newline="") as f:
             writer = csv.writer(f)
             writer.writerow(header)
 
@@ -935,3 +935,34 @@ class BackendInterface:
     def export_last_solution_csv(self, csv_path):
         backend = self.last_backend or self.backend
         backend.export_last_solution_csv(csv_path)
+
+    def has_last_solution(self):
+        backend = self.last_backend
+        if backend is None:
+            return False
+        solution = getattr(backend, "last_solution", None)
+        if solution is None:
+            # Some compiled backends keep their solved trajectory internally.
+            return True
+        return bool(solution)
+
+    def clear_last_solution(self):
+        backends = {
+            id(backend): backend
+            for backend in (
+                self.backend,
+                self.grouped_fallback_backend,
+                self.last_backend,
+            )
+            if backend is not None
+        }
+        for backend in backends.values():
+            solution = getattr(backend, "last_solution", None)
+            if hasattr(solution, "clear"):
+                solution.clear()
+            elif solution is not None:
+                try:
+                    backend.last_solution = []
+                except (AttributeError, TypeError):
+                    pass
+        self.last_backend = None
