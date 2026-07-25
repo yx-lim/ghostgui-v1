@@ -580,7 +580,7 @@ class TrajectoryControlPanel(QGroupBox):
         self.generate_button = QPushButton("Generate / Simulate")
         self.generate_button.setObjectName("generateTrajectoryButton")
         self.generate_button.setToolTip(
-            "Generate a sampled robot trajectory from saved slices/keyframes."
+            "Generate a sampled robot trajectory from saved keyframes."
         )
 
         self.add_button.clicked.connect(self.add_keyframe_clicked.emit)

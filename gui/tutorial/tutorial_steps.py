@@ -18,7 +18,7 @@ FIRST_MOTION_TUTORIAL = [
         title="First Motion Walkthrough",
         body=(
             "This guided tour follows the main GhostGUI workflow: select a "
-            "frame, move it into an orange preview, save a slice, generate a "
+            "frame, move it into an orange preview, commit a keyframe, generate a "
             "trajectory, and export the result."
         ),
         before_show="show_3d_view",
@@ -57,9 +57,9 @@ FIRST_MOTION_TUTORIAL = [
     ),
     TutorialStep(
         id="preview_path",
-        title="Preview Checks The Path",
+        title="Preview Path Checks Motion",
         body=(
-            "Preview plans or checks the path from the committed pose to the "
+            "Preview Path validates the path from the committed pose to the "
             "orange preview. It does not save the pose by itself."
         ),
         target="planPreviewButton",
@@ -67,11 +67,10 @@ FIRST_MOTION_TUTORIAL = [
     ),
     TutorialStep(
         id="slice_pose",
-        title="Slice Saves The Pose",
+        title="Commit Keyframe Saves The Pose",
         body=(
-            "Slice accepts the current preview if needed, records the committed "
-            "pose at the active time, and advances the timeline by the slice "
-            "step."
+            "Commit Keyframe records the preview at the active time and advances "
+            "the timeline by the keyframe interval."
         ),
         target="sliceButton",
         before_show="show_3d_view",
@@ -80,7 +79,7 @@ FIRST_MOTION_TUTORIAL = [
         id="generate",
         title="Generate The Trajectory",
         body=(
-            "After you have saved one or more slices, Generate samples the "
+            "After you have saved one or more keyframes, Generate samples the "
             "timeline into a robot trajectory for playback and export."
         ),
         target="quickGenerateButton",

@@ -230,7 +230,7 @@ class RobotGuiMainWindow(QMainWindow):
         if app is not None:
             ensure_application_theme(app)
 
-        self.setWindowTitle("Reference Frame Trajectory GUI")
+        self.setWindowTitle("GhostGui")
         self.ui_settings = QSettings(
             str(ghostgui_config_dir() / UI_SETTINGS_FILENAME),
             QSettings.Format.IniFormat,
@@ -325,7 +325,7 @@ class RobotGuiMainWindow(QMainWindow):
                     )
         if self.robot_model_3d is not None:
             self.setWindowTitle(
-                f"Reference Frame Trajectory GUI — {self.robot_model_3d.model_name}"
+                f"GhostGui — {self.robot_model_3d.model_name}"
             )
 
         shared_mj_model = (
@@ -707,20 +707,20 @@ class RobotGuiMainWindow(QMainWindow):
         self._toolbar_icon_actions = {}
         self.preview_action = self._toolbar_action(
             toolbar,
-            "Preview",
+            "Preview Path",
             "preview",
             "planPreviewButton",
-            "Plan/check the path from the committed pose to the orange preview.",
+            "Validate the path from the committed pose to the orange preview.",
         )
         self.preview_action.triggered.connect(
             lambda checked=False: self.viewer_3d.plan_preview()
         )
         self.slice_action = self._toolbar_action(
             toolbar,
-            "Slice",
+            "Commit Keyframe",
             "slice",
             "sliceButton",
-            "Accept the current pose at this time and advance the timeline.",
+            "Commit the current pose as a keyframe and advance the timeline.",
         )
         self.slice_action.triggered.connect(
             lambda checked=False: self.viewer_3d.accept_timeslice()
@@ -1282,7 +1282,7 @@ class RobotGuiMainWindow(QMainWindow):
         return f"before_{clean or 'transition'}"
 
     def update_project_chrome(self):
-        title = "Reference Frame Trajectory GUI"
+        title = "GhostGui"
         if self.current_project is not None:
             title = f"{title} - {self.current_project.project_name}"
         elif self.robot_model_3d is not None:
@@ -3019,11 +3019,11 @@ class RobotGuiMainWindow(QMainWindow):
         else:
             advance_note = " already at the timeline end."
         message = (
-            f"Accepted slice at t={time:.2f} s; captured {count} logical targets "
+            f"Committed keyframe at t={time:.2f} s; captured {count} logical targets "
             f"from the committed solved pose;{advance_note}"
         )
         self.viewer_3d.status_label.setText(message)
-        self.record_history_action("Accept slice")
+        self.record_history_action("Commit keyframe")
 
     def on_delete_timeslice_requested(self):
         time = self.viewer_3d.get_current_time()
@@ -3033,7 +3033,7 @@ class RobotGuiMainWindow(QMainWindow):
             deleted_qpos = self.viewer_3d.state_timeline.delete_state(time)
 
         if deleted_targets <= 0 and not deleted_qpos:
-            message = f"No defined slice found at t={time:.2f} s."
+            message = f"No keyframe found at t={time:.2f} s."
             self.viewer_3d.status_label.setText(message)
             return
 
@@ -3054,9 +3054,9 @@ class RobotGuiMainWindow(QMainWindow):
         if deleted_qpos:
             parts.append("robot qpos")
         detail = " and ".join(parts)
-        message = f"Deleted slice at t={time:.2f} s ({detail})."
+        message = f"Deleted keyframe at t={time:.2f} s ({detail})."
         self.viewer_3d.status_label.setText(message)
-        self.record_history_action("Delete slice")
+        self.record_history_action("Delete keyframe")
 
     def define_timeslice_from_committed_pose(self):
         """Snapshot every editable logical target from the committed MuJoCo pose."""

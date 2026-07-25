@@ -1,213 +1,185 @@
 # GhostGUI User Guide
 
-GhostGUI helps you create robot motion by editing target frames, previewing IK
-results on the live MuJoCo model, saving time slices, generating trajectories,
-and exporting qpos data for validation or downstream tools.
+GhostGUI creates robot motion by editing target frames or joint angles,
+previewing the result on a live MuJoCo model, committing keyframes, and
+generating a trajectory for playback or export.
 
 ## Launch
 
-From the repository checkout:
-
-```bash
-python3 scripts/run_gui.py --model g1
-```
-
-If GhostGUI is installed as an editable package, you can also run:
+From an installed checkout:
 
 ```bash
 ghostgui --model g1
 ```
 
-Common bundled models include `g1`, `go2`, `h2`, and `z1`.
+The bundled model keys are `g1`, `go2`, `h2`, and `z1`. See
+[Installation](install.md) for complete setup and launch instructions.
 
 ## Core Concepts
 
-**Robot model** controls the available bodies, sites, joints, logical frames,
-home pose, and MuJoCo geometry.
+**Robot model** determines the available bodies, sites, joints, logical target
+frames, home pose, and 3D geometry.
 
-**Target robot frame** is the frame you are editing. For a humanoid this might
-be `left_hand`, `right_hand`, `left_foot`, `right_foot`, `torso`, or `pelvis`.
+**Target robot frame** is the body, site, or logical frame being edited, such as
+`left_hand`, `right_foot`, `base`, or `tool`.
 
-**Preview state** is the orange robot. It is a temporary IK result from dragging
-the gizmo or changing pose controls.
+**Orange preview** is the temporary robot pose produced by the transform gizmo,
+pose controls, or joint controls. It is not saved automatically.
 
-**Committed state** is the accepted robot pose at the active time. The timeline,
-generation, and exports use committed states, not unsaved previews.
+**Committed state** is the accepted robot pose at the active time. Keyframes,
+trajectory generation, and exports use committed states.
 
-**Preview** checks or plans the path from the committed pose to the orange
-preview. It does not save the pose.
+**Preview Path** validates the transition from the committed state to the orange
+preview. It displays a ghost path but does not save anything.
 
-**Slice** accepts the current preview if needed, records the committed pose at
-the active time, and advances the timeline by the configured slice step.
+**Commit Keyframe** records the current pose at the active time and advances by
+the configured keyframe interval.
 
-**Generated trajectory** is a sampled sequence made from saved time slices and
-IK. This is the usual export target.
+For the complete state model, see [Preview And Keyframe Concepts](concepts.md).
 
 ## First Motion Workflow
 
 1. Choose a robot from the **Robot** menu.
 2. Select a **Target robot frame**, such as `left_hand`.
-3. Move the target with the 3D transform gizmo or the pose sliders.
-4. Inspect the orange preview robot.
-5. Click **Preview** if you want to plan/check the path before storing it.
-6. Click **Slice** to commit the preview and save it at the current time.
-7. Move to another time, adjust the frame again, and click **Slice** again.
-8. Click **Generate** or **Generate / Simulate**.
-9. Use **File -> Export -> Trajectory** to save timed qpos rows.
+3. Move the target with the 3D transform gizmo or the pose controls.
+4. Inspect the orange preview and the **Status** panel.
+5. Optionally select **Preview Path** to validate the transition.
+6. Select **Commit Keyframe** to save the pose at the active time.
+7. Move to another time and commit another keyframe.
+8. Select **Generate**.
+9. Use playback to inspect the motion.
+10. Use **File → Export** to save a pose or trajectory.
 
-The beginner workflow is:
+The main workflow is:
 
 ```text
-select frame -> move target -> orange preview -> Slice -> Generate -> Export
+select target → edit → orange preview → Commit Keyframe → Generate → Export
 ```
 
-## GUI Sections
+## Interface
 
 ### Menu Bar
 
-Create/open/save projects, choose the active robot model, import or export data,
-switch views, and open help. Import supports models, qpos poses, and
-trajectories. Export can save a single committed qpos pose or a timed
-trajectory.
+Use the menu bar to create, open, and save projects; select the active robot;
+import or export data; switch views; and open help.
 
 ### Target
 
-Choose the logical robot frame to edit, or use **Advanced target** to select
-another body or site exposed by the model.
+Choose a registered logical frame or use **Advanced target** to select another
+body or site exposed by the active MuJoCo model.
 
 ### Editing Mode
 
-Choose **End Effector** to edit the target frame with X, Y, Z, Roll, Pitch, and
-Yaw controls or the 3D transform gizmo. Choose **Joint Angles** to edit the
-active robot's joints directly or move the gizmo through IK while watching the
-joint values update. Both modes update the orange preview and stay synchronized
-as you switch between them.
+Use **End Effector** to edit the target frame with X, Y, Z, Roll, Pitch, and Yaw
+controls or the 3D transform gizmo.
 
-Both sidebars can be resized from 200 to 400 pixels by dragging their dividers.
-Use the divider arrows or the corresponding **View → Left Sidebar** and
-**View → Right Sidebar** actions to collapse and restore them. Their last
-expanded widths and collapsed states are remembered between sessions.
+Use **Joint Angles** to edit joints directly. The controls and 3D view remain
+synchronized when switching modes, and both modes update the orange preview.
 
 ### Planning
 
-Manage the editable timeline. The active time determines where the next slice is
-stored. The single Time slider drives both live scrubbing and playback; the
-robot is sampled immediately while dragging, and the derived frame appears as a
-readout beside the time. Releasing the slider commits the selected edit time
-once. Smoothing, collision substeps, playback opacity, and preview opacity are
-configured here. Playback speed changes the viewing rate without changing the
-trajectory's stored timestamps. Saved slices become the source material for
-generated trajectories.
+The active time determines where the next keyframe is stored. The time slider
+supports live scrubbing and playback. Releasing the slider selects an editable
+time.
+
+Planning controls include the keyframe interval, timeline duration, playback
+speed, smoothing, collision substeps, and preview/playback opacity.
 
 ### Workflow Toolbar
 
-**Preview** plans/checks the current orange preview path.
+**Preview Path** validates the transition to the orange preview without saving
+it.
 
-**Slice** commits the current preview and stores it at the active time.
+**Commit Keyframe** records the current pose at the active time.
 
-**Generate** creates a sampled robot trajectory from saved timeline states.
+**Generate** samples the saved keyframes into a robot trajectory.
 
 **Play/Pause** controls the active generated or editable timeline.
 
-**Reset** returns the active time to the model home pose.
+**Reset** restores the model home pose at the active time.
 
 **Clear** clears the editable trajectory.
 
-**Move/Rotate** select the active transform gizmo in either editing mode.
+**Move/Rotate** select the transform-gizmo mode.
 
-**Gizmo** shows or hides the transform gizmo. Its visibility preference remains
-active when switching editing modes.
+**Gizmo** shows or hides the transform gizmo.
 
 **Undo/Redo** navigate recorded editing history.
 
-### Right Sidebar
+### Sidebars
 
-**Status** shows the latest important event or problem in a compact summary.
-Expand **Details** to inspect the latest operation's frame, IK result, solver
-metrics, and other diagnostics.
+Drag the dividers to resize the sidebars. Use the divider arrows or
+**View → Left Sidebar** and **View → Right Sidebar** to collapse or restore them.
+GhostGUI remembers the expanded widths and collapsed states.
 
-**IK / Constraints** contains solver settings, task weights, collision controls,
-and preview controls.
+The right sidebar contains a compact **Status** summary and the
+**IK / Constraints** controls. Expand **Details** to inspect solver and
+operation diagnostics.
 
-## Keyboard / Mouse Shortcuts
+## Keyboard And Mouse
 
-### Editing
+### Transform Editing
 
-**T** switches the 3D transform gizmo to translate mode.
+- **T** switches the transform gizmo to translation.
+- **R** switches the transform gizmo to rotation.
+- **E** or **Esc** cancels the current transform drag.
+- **Shift + drag** enables finer movement.
+- **Ctrl + drag** snaps movement.
 
-**R** switches the 3D transform gizmo to rotate mode.
+### Inline Values
 
-### Inline Value Sliders
-
-Drag a filled slider for continuous live adjustment.
-
-Click its left or right half to decrease or increase by one logical step.
-
-Use the arrow keys for one step, Page Up/Down for ten steps, and Home/End for
-the minimum or maximum.
-
-Press Enter or F2, or double-click the displayed value, to type directly.
-Enter commits the typed value and Esc cancels it.
-
-**E** or **Esc** cancels the current transform drag.
-
-**Shift + drag** gives finer gizmo movement.
-
-**Ctrl + drag** snaps gizmo movement.
+- Drag a filled value control for continuous adjustment.
+- Click either half to move by one logical step.
+- Use arrow keys for one step and Page Up/Down for ten steps.
+- Use Home/End for the minimum or maximum.
+- Press Enter or F2, or double-click the value, to type directly.
+- Press Enter to commit typed input or Esc to cancel it.
 
 ### History
 
-**Ctrl+Z** undoes the last recorded action.
+- **Ctrl+Z** undoes the last recorded action.
+- **Ctrl+Shift+Z** redoes the last undone action.
 
-**Ctrl+Shift+Z** redoes the last undone action.
+### Camera
 
-### 3D Camera
-
-**Left drag** orbits the camera unless a gizmo handle is active.
-
-**Right drag** pans the camera.
-
-**Middle drag** zooms the camera.
-
-**Mouse wheel** zooms the camera.
+- **Left drag** orbits unless a gizmo handle is active.
+- **Right drag** pans.
+- **Middle drag** or the mouse wheel zooms.
 
 ## Import And Export
 
-Use **File -> Import** for model, qpos, or trajectory input.
+Use **File → Import** for MuJoCo XML/URDF models, qpos poses, or trajectories.
 
-Use **File -> Export** for:
+Use **File → Export** for:
 
-- **Qpos**: the current committed pose as one headerless qpos row.
-- **Trajectory**: timed qpos rows from the generated trajectory or editable
-  timeline.
+- **Qpos**: the committed pose as one headerless qpos row.
+- **Trajectory**: time plus qpos values for each trajectory row.
 
-GhostGUI deliberately does not export an unaccepted orange preview. Click
-**Slice** first when the current preview should become part of the output.
+An uncommitted orange preview is not exported. Select **Commit Keyframe** first
+when the pose should become part of the saved motion.
 
-## Troubleshooting
+See [Data Formats](data_formats.md) and [Adding Models](adding_models.md) for the
+file contracts and import requirements.
 
-### The orange robot changed, but export did not
+## Common Problems
 
-The orange robot is still only a preview. Click **Slice** to commit and record
-the pose before exporting.
+If the orange robot changed but an export did not, the pose is still only a
+preview. Commit a keyframe and export again.
 
-### Preview fails or only moves partway
+If an edit stops or fails, check **Status** and **IK / Constraints** for joint
+limits, singularities, or collisions.
 
-IK, joint limits, singularity checks, or collision checks may be blocking the
-motion. Check **Status** and **IK / Constraints**.
+If generation does not match the intended motion, verify the keyframe times and
+active target frame, then inspect playback before exporting.
 
-### Generate does not match the intended motion
-
-Check the saved slice times and the active target frame. Use playback ghosts to
-inspect the generated path before exporting.
-
-### A model has different target frames
-
-Target frames come from the active model. After switching models, re-check the
-**Target robot frame** selector and the selected object details.
+See [Troubleshooting](troubleshooting.md) for installation, rendering, model,
+and workflow diagnostics.
 
 ## Known Limitations
 
-The first help system is static. It explains the workflow but does not yet
-highlight widgets or verify each action. Future guided tutorials can build on
-the same concepts with an overlay and action-aware completion checks.
+- Linux/Ubuntu is the primary tested platform.
+- The transform gizmo is world-aligned; local-frame controls are not available.
+- Imported models depend on resolvable mesh files and may require mesh-folder
+  selection.
+- IK priority numbers are descriptive metadata; the current solver uses one
+  weighted task stack rather than strict null-space priority projection.

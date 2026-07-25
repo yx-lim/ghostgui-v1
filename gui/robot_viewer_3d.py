@@ -330,7 +330,7 @@ class RobotViewer3D(QWidget):
         self.playback_speed.setRange(0.10, 4.00)
         self.playback_speed.setDecimals(2)
         self.playback_speed.setSingleStep(0.25)
-        self.playback_speed.setValue(1.00)
+        self.playback_speed.setValue(0.20)
         self.playback_speed.setSuffix("×")
         self.playback_speed_label = QLabel("Playback speed")
         self.timeslice_context_layout.addRow(
@@ -470,9 +470,9 @@ class RobotViewer3D(QWidget):
         )
         self.timeslice_frame_readout.setAccessibleName("Playback frame")
 
-        self.delete_timeslice_button = QPushButton("Delete Slice")
+        self.delete_timeslice_button = QPushButton("Delete Keyframe")
         self.delete_timeslice_button.clicked.connect(self.delete_timeslice)
-        self.timeslice_step_label = QLabel("Slice step size")
+        self.timeslice_step_label = QLabel("Keyframe interval")
         self.timeslice_step_input = QDoubleSpinBox()
         _compact_spinbox(self.timeslice_step_input, width=72)
         self.timeslice_step_input.setRange(0.01, 5.0)
@@ -674,7 +674,7 @@ class RobotViewer3D(QWidget):
 
     def accept_timeslice(self):
         # Playback and live scrubbing intentionally move display_time without
-        # creating an editable state. Slice must first choose one authoritative
+        # creating an editable state. Commit Keyframe must first choose one authoritative
         # time so its qpos state and logical-target snapshot cannot be written
         # at two different positions on the timeline.
         slice_time = max(0.0, min(float(self.display_time), self.timeline_duration))
@@ -1005,11 +1005,12 @@ class RobotViewer3D(QWidget):
             self.status_label.setText(
                 f"Collision warning: {names}; "
                 f"Preview FK: {name} = {value:+.3f} rad; "
-                "adjust the pose before Slice"
+                "adjust the pose before Commit Keyframe"
             )
         else:
             self.status_label.setText(
-                f"Preview FK: {name} = {value:+.3f} rad; use Slice to commit"
+                f"Preview FK: {name} = {value:+.3f} rad; "
+                "use Commit Keyframe to save"
             )
 
     def _update_preview_collisions(self, collisions=None):
@@ -1334,7 +1335,7 @@ class RobotViewer3D(QWidget):
 
     def plan_preview(self):
         if not self.preview_active:
-            self.status_label.setText("No preview changes to plan.")
+            self.status_label.setText("No preview changes to validate.")
             return
         start = self.committed_state.get_qpos()
         goal = self.preview_state.get_qpos()
@@ -1342,25 +1343,25 @@ class RobotViewer3D(QWidget):
         if not validation.ok:
             self._clear_ghost_overlay(source="preview_path")
             self.status_label.setText(
-                f"Cannot plan preview: {validation.message}."
+                f"Cannot preview path: {validation.message}."
             )
             return
         self.ghost_trajectory = [qpos.copy() for qpos in planned]
         self.ghost_source = "preview_path"
         self._rebuild_ghosts()
         self.status_label.setText(
-            "Planned committed-to-preview path; no timeline state was changed."
+            "Preview path is valid; no keyframe was changed."
         )
-        self.history_action_finished.emit("Plan preview")
+        self.history_action_finished.emit("Preview path")
 
     def accept_preview(self, *, emit_pose_finished=True):
         if not self.preview_active:
-            self.status_label.setText("No preview changes to accept.")
+            self.status_label.setText("No preview changes to commit.")
             return False
         preview_qpos = self.preview_state.get_qpos()
         if not np.all(np.isfinite(preview_qpos)):
             self.status_label.setText(
-                "Cannot accept preview: preview pose contains non-finite qpos values."
+                "Cannot commit keyframe: preview pose contains non-finite qpos values."
             )
             return False
         collisions = (
@@ -1373,7 +1374,7 @@ class RobotViewer3D(QWidget):
                 f"{item.geom1} ↔ {item.geom2}" for item in collisions[:2]
             )
             self.status_label.setText(
-                f"Cannot accept preview: collision detected ({names})."
+                f"Cannot commit keyframe: collision detected ({names})."
             )
             return False
         self.committed_state.set_qpos(preview_qpos)
@@ -1386,7 +1387,7 @@ class RobotViewer3D(QWidget):
         self._sync_joint_controls()
         self._set_target_to_selected_pose()
         self.status_label.setText(
-            f"Accepted preview into committed keyframe at t={self.current_time:.2f} s"
+            f"Committed keyframe at t={self.current_time:.2f} s"
         )
         if emit_pose_finished and self.last_valid_target_position is not None:
             roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)

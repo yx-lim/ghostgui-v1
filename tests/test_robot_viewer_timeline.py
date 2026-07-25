@@ -411,7 +411,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
         self.assertEqual(self.viewer.robot_trajectory, [])
         self.assertEqual(self.viewer.ghost_trajectory, [])
-        self.assertIn("Cannot plan preview", self.viewer.status_label.text())
+        self.assertIn("Cannot preview path", self.viewer.status_label.text())
         self.assertIn("collision at path sample", self.viewer.status_label.text())
 
     def test_plan_preview_rejects_raw_joint_limit_violation_before_clamp(self):
@@ -430,7 +430,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
         self.assertEqual(self.viewer.robot_trajectory, [])
         self.assertEqual(self.viewer.ghost_trajectory, [])
-        self.assertIn("Cannot plan preview", self.viewer.status_label.text())
+        self.assertIn("Cannot preview path", self.viewer.status_label.text())
         self.assertIn("outside limits", self.viewer.status_label.text())
 
     def test_accept_preview_is_timeline_local(self):
@@ -495,7 +495,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
         self.assertFalse(self.viewer.accept_preview())
         self.assertTrue(self.viewer.preview_active)
-        self.assertIn("Cannot accept preview", self.viewer.status_label.text())
+        self.assertIn("Cannot commit keyframe", self.viewer.status_label.text())
 
         class NoCollisionChecker:
             def get_collisions(self, _state):
@@ -705,7 +705,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
     def test_timeslice_bar_uses_single_compact_time_display(self):
         self.assertEqual(self.viewer.timeslice_label.text(), "Time")
         self.assertEqual(self.viewer.timeslice_time_input.suffix(), " s")
-        self.assertEqual(self.viewer.timeslice_step_label.text(), "Slice step size")
+        self.assertEqual(self.viewer.timeslice_step_label.text(), "Keyframe interval")
         self.assertEqual(self.viewer.timeslice_step_input.suffix(), " s")
         self.assertAlmostEqual(self.viewer.timeslice_step_input.value(), 0.10)
         self.assertEqual(self.viewer.timeslice_duration_label.text(), "Max time")
@@ -715,7 +715,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertFalse(hasattr(self.viewer, "frame_slider"))
         self.assertFalse(hasattr(self.viewer, "timeslice_time_label"))
         self.assertFalse(hasattr(self.viewer, "accept_timeslice_button"))
-        self.assertEqual(self.viewer.delete_timeslice_button.text(), "Delete Slice")
+        self.assertEqual(
+            self.viewer.delete_timeslice_button.text(), "Delete Keyframe"
+        )
 
     def test_timeline_duration_updates_bottom_and_sidebar_time_ranges(self):
         self.viewer.timeslice_duration_input.setValue(8.0)
@@ -1058,8 +1060,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(
             [action.text() for action in actions],
             [
-                "Preview",
-                "Slice",
+                "Preview Path",
+                "Commit Keyframe",
                 "Generate",
                 "Play",
                 "Reset",
@@ -1373,8 +1375,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
             for button in self.window.app_toolbar.findChildren(QToolButton)
             if button.objectName()
         }
-        self.assertEqual(toolbar_buttons["planPreviewButton"], "Preview")
-        self.assertEqual(toolbar_buttons["sliceButton"], "Slice")
+        self.assertEqual(toolbar_buttons["planPreviewButton"], "Preview Path")
+        self.assertEqual(toolbar_buttons["sliceButton"], "Commit Keyframe")
         self.assertEqual(toolbar_buttons["quickGenerateButton"], "Generate")
         self.assertEqual(toolbar_buttons["playbackToolbarButton"], "Play")
         self.assertEqual(toolbar_buttons["resetToolbarButton"], "Reset")

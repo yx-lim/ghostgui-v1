@@ -1,5 +1,8 @@
 # 3D reset, timeline editing, and pelvis diagnosis
 
+> Historical note: this diagnosis may not describe the current implementation.
+> See [Preview And Keyframe Concepts](../concepts.md) for supported behavior.
+
 ## Architecture
 
 - `gui/viewer_3d.py::RobotCanvas3D` handles gizmo mouse interaction and drawing.

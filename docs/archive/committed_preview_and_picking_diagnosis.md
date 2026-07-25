@@ -1,5 +1,8 @@
 # Committed/preview and 3D picking diagnosis
 
+> Historical note: this diagnosis may not describe the current implementation.
+> See [Preview And Keyframe Concepts](../concepts.md) for supported behavior.
+
 `RobotViewer3D` currently owns one `RobotState3D` named `robot_state`. That one
 state is used as the IK seed, overwritten after every accepted drag substep,
 drawn as the main robot by `RobotCanvas3D`, exposed through the joint sliders,

@@ -1,82 +1,103 @@
-# GhostGUI Installation Notes
+# Installing GhostGUI
 
-Linux/Ubuntu is the primary tested platform for GhostGUI. macOS and Windows
-support is currently experimental unless verified on the target machine.
+Linux/Ubuntu is the primary tested platform. The macOS and Windows installers
+are provided for convenience but remain experimental until verified on those
+platforms.
 
-## Install Flow
+## Requirements
 
-GhostGUI uses `pyproject.toml` for Python package metadata and dependencies.
-The platform scripts create or reuse `.venv`, install or check the platform
-setup, upgrade `pip`, `setuptools`, and `wheel`, then run:
+- Python 3.10 or newer
+- A working OpenGL environment
+- Git
+- Platform packages installed by the scripts below
+
+GhostGUI uses the dependencies declared in `pyproject.toml`. Each platform
+installer creates or reuses `.venv`, upgrades the Python packaging tools, and
+installs the checkout in editable mode:
 
 ```bash
 python -m pip install -e .
 ```
 
-Editable installation is intentional for version `0.1.0`: the registered robot
-models and bundled mesh assets are loaded from the cloned repository.
+Editable installation keeps the registered model and mesh paths anchored to the
+repository checkout.
 
-## Commands
-
-Linux:
+## Linux / Ubuntu
 
 ```bash
+git clone https://github.com/yx-lim/ghostgui.git
+cd ghostgui
 bash scripts/install_linux.sh
 bash scripts/run_linux.sh
 ```
 
-macOS:
+The installer uses `apt` to install Python, Qt/XCB runtime libraries, and
+OpenGL/EGL libraries before creating the virtual environment.
+
+## macOS
 
 ```bash
+git clone https://github.com/yx-lim/ghostgui.git
+cd ghostgui
 bash scripts/install_macos.sh
 bash scripts/run_macos.sh
 ```
 
-The macOS installer supports both native Mac architectures: `arm64` for Apple
-Silicon and `x86_64` for Intel Macs. A virtual environment does not change
-Python architecture; it inherits the interpreter used to create it. The script
-therefore checks that Python, `.venv`, and `mjpython` match the native Mac
-architecture. On Apple Silicon, it prefers `/opt/homebrew/bin/python3` and stops
-with instructions if it detects an Intel/Rosetta `x86_64` Python or venv.
+The installer checks that Python, `.venv`, and `mjpython` use the Mac's native
+architecture. It supports Apple Silicon (`arm64`) and Intel (`x86_64`); on Apple
+Silicon it prefers Homebrew Python at `/opt/homebrew/bin/python3`.
 
-The standalone MuJoCo viewer uses `mujoco.viewer.launch_passive()`. On macOS,
-MuJoCo requires that passive viewer scripts run through `mjpython`, which is
-installed by the `mujoco` package. GhostGUI uses `mjpython` automatically for
-that subprocess on macOS.
+MuJoCo passive-viewer subprocesses must run through `mjpython` on macOS. The
+installer verifies that command after installing the Python dependencies.
 
-Windows PowerShell:
+## Windows PowerShell
 
 ```powershell
+git clone https://github.com/yx-lim/ghostgui.git
+cd ghostgui
 powershell -ExecutionPolicy Bypass -File scripts/install_windows.ps1
 powershell -ExecutionPolicy Bypass -File scripts/run_windows.ps1
 ```
 
-## Troubleshooting
+The installer uses the Python launcher (`py -3`) when available and falls back
+to `python`.
 
-If Qt fails to initialize on Linux, confirm the system packages from
-`scripts/install_linux.sh` were installed. Missing `libxcb-cursor0`,
-`libxcb-xinerama0`, `libxcb-xinput0`, `libxkbcommon-x11-0`, `libgl1`, or
-`libegl1` commonly appears as a Qt platform plugin or OpenGL initialization
-failure.
+## Launching An Installed Checkout
 
-If MuJoCo fails to open an OpenGL context, confirm the machine has working GPU
-drivers or a valid software OpenGL stack. Remote desktops, containers, and WSL
-may need additional display/OpenGL configuration.
+Activate the environment and run the packaged command.
 
-If model loading fails, run GhostGUI from an editable install created from the
-cloned repository. The current model registry expects the `models/` directory to
-live beside the source tree.
-
-If the `ghostgui` command is not found, activate the virtual environment first:
-
-Linux/macOS:
+Linux or macOS:
 
 ```bash
 source .venv/bin/activate
+ghostgui
 ```
 
 Windows PowerShell:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
+ghostgui
 ```
+
+Select a bundled model at startup:
+
+```bash
+ghostgui --model g1
+ghostgui --model go2
+ghostgui --model h2
+ghostgui --model z1
+```
+
+For development checkouts, the compatibility launcher remains available:
+
+```bash
+python3 scripts/run_gui.py --model g1
+```
+
+## Next Steps
+
+- Follow the [first motion workflow](user_guide.md#first-motion-workflow).
+- Read [Troubleshooting](troubleshooting.md) if Qt, OpenGL, MuJoCo, or a model
+  fails to initialize.
+- Use the [contributor setup](../CONTRIBUTING.md) when changing the codebase.

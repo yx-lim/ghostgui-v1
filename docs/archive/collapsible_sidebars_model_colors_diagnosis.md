@@ -1,5 +1,8 @@
 # Collapsible sidebars and model-color diagnosis
 
+> Historical note: this diagnosis may not describe the current implementation.
+> See the [User Guide](../user_guide.md) for supported behavior.
+
 ## Sidebars
 
 `RobotGuiMainWindow` places `TrajectoryControlPanel`, the viewer tabs, and the

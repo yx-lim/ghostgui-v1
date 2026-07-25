@@ -1,5 +1,8 @@
 # Go2 mesh and preview transparency diagnosis
 
+> Historical note: this diagnosis may not describe the current implementation.
+> See [Models](../models.md) for supported behavior.
+
 G1 is registered directly to `models/g1_29dof.xml`. Its MJCF compiler points
 `meshdir` at `models/assets-g1`, declares 35 STL mesh assets, and assigns those
 meshes to visual group 2. `RobotModel3D` lets MuJoCo resolve those paths relative
