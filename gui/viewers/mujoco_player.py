@@ -204,6 +204,17 @@ class Mujoco3DViewerPanel(QWidget):
         if self.process is not None:
             self.send_command(f"load {Path(csv_path).resolve()}")
 
+    def set_trajectory_metadata(self, csv_path, times):
+        """Apply already parsed metadata without reading the CSV again."""
+        self.trajectory_csv_path = Path(csv_path).expanduser().resolve()
+        self.trajectory_times = [float(time) for time in times]
+        max_index = max(0, len(self.trajectory_times) - 1)
+        self.timeline_slider.setMaximum(max_index)
+        self.timeline_slider.setValue(0)
+        self.update_time_label(0)
+        if self.process is not None:
+            self.send_command(f"load {self.trajectory_csv_path}")
+
     def update_time_label(self, index):
         if not self.trajectory_times:
             self.time_label.setText("Time: 0.000 / 0.000 s")

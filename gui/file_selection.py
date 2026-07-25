@@ -19,6 +19,7 @@ class SynchronousFileSelectionStage(QObject):
         self._process = None
         self._selected_callback = None
         self._failed_callback = None
+        self._cancelled_callback = None
         self._callback_pending = False
         app = QCoreApplication.instance()
         if app is not None:
@@ -36,6 +37,7 @@ class SynchronousFileSelectionStage(QObject):
         name_filter,
         selected,
         failed=None,
+        cancelled=None,
         filename=None,
     ):
         if self.is_active():
@@ -74,6 +76,7 @@ class SynchronousFileSelectionStage(QObject):
         self._process = process
         self._selected_callback = selected
         self._failed_callback = failed
+        self._cancelled_callback = cancelled
         self.active_changed.emit(True)
         process.start()
         return True
@@ -82,17 +85,16 @@ class SynchronousFileSelectionStage(QObject):
         process = self._process
         self._selected_callback = None
         self._failed_callback = None
+        self._cancelled_callback = None
         self._callback_pending = False
         if process is None:
             self.active_changed.emit(False)
             return
         self._process = None
         process.finished.connect(process.deleteLater)
-        process.terminate()
-        QTimer.singleShot(
-            1000,
-            lambda candidate=process: self._kill_if_running(candidate),
-        )
+        # This process owns only a picker. Kill it immediately during app
+        # shutdown so a stuck desktop portal cannot outlive or delay GhostGUI.
+        process.kill()
         self.active_changed.emit(False)
 
     def _on_finished(self, process, exit_code, _exit_status):
@@ -122,8 +124,10 @@ class SynchronousFileSelectionStage(QObject):
 
         selected_callback = self._selected_callback
         failed_callback = self._failed_callback
+        cancelled_callback = self._cancelled_callback
         self._selected_callback = None
         self._failed_callback = None
+        self._cancelled_callback = None
 
         if selected_path and selected_callback is not None:
             self._callback_pending = True
@@ -136,6 +140,8 @@ class SynchronousFileSelectionStage(QObject):
             return
         if error_message and failed_callback is not None:
             failed_callback(error_message)
+        elif not error_message and cancelled_callback is not None:
+            cancelled_callback()
         self.active_changed.emit(False)
 
     def _on_process_error(self, process, _error):
@@ -148,6 +154,7 @@ class SynchronousFileSelectionStage(QObject):
         self._process = None
         self._selected_callback = None
         self._failed_callback = None
+        self._cancelled_callback = None
         process.deleteLater()
         if failed_callback is not None:
             failed_callback(message)
@@ -161,12 +168,3 @@ class SynchronousFileSelectionStage(QObject):
         finally:
             self._callback_pending = False
             self.active_changed.emit(False)
-
-    @staticmethod
-    def _kill_if_running(process):
-        try:
-            if process.state() != QProcess.ProcessState.NotRunning:
-                process.kill()
-        except RuntimeError:
-            # The process may already have finished and deleted itself.
-            pass

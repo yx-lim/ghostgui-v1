@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +32,14 @@ from PySide6.QtWidgets import (
 from application.paths import (
     QPOS_CSV_DIR,
     TRAJECTORY_CSV_DIR,
-    prepare_csv_save_path,
+)
+from application.background_jobs import SerializedBackgroundJobs
+from application.csv_io import (
+    TrajectoryExport,
+    read_qpos_csv,
+    read_trajectory_csv,
+    write_qpos_csv,
+    write_trajectory_csv,
 )
 from core.models import (
     RobotStateTimeline,
@@ -94,7 +100,13 @@ class RobotViewer3D(QWidget):
     history_action_finished = Signal(str)
     playback_state_changed = Signal(bool)
 
-    def __init__(self, robot_model=None, error=None):
+    def __init__(
+        self,
+        robot_model=None,
+        error=None,
+        background_jobs=None,
+        file_selection_stage=None,
+    ):
         super().__init__()
         self.robot_model = robot_model
         self.frame_bindings = (
@@ -133,8 +145,17 @@ class RobotViewer3D(QWidget):
         self.robot_trajectory = []
         self.robot_trajectory_times = []
         self._prompt_trajectory_import_dt_on_load = False
-        self.csv_file_selection_stage = SynchronousFileSelectionStage(self)
-        self.csv_file_operation_pending = False
+        self._background_trajectory_postprocess_requested = False
+        self.csv_file_selection_stage = (
+            file_selection_stage
+            if file_selection_stage is not None
+            else SynchronousFileSelectionStage(self)
+        )
+        self.background_jobs = (
+            background_jobs
+            if background_jobs is not None
+            else SerializedBackgroundJobs(self)
+        )
         self.ghost_trajectory = []
         self.ghost_source = None
         self.joint_controls = {}
@@ -699,6 +720,11 @@ class RobotViewer3D(QWidget):
             getattr(self, "_prompt_trajectory_import_dt_on_load", False)
         )
         self._prompt_trajectory_import_dt_on_load = False
+        return requested
+
+    def consume_background_trajectory_postprocess_request(self):
+        requested = bool(self._background_trajectory_postprocess_requested)
+        self._background_trajectory_postprocess_requested = False
         return requested
 
     def timeslice_context_widget(self):
@@ -1648,7 +1674,13 @@ class RobotViewer3D(QWidget):
         save=False,
         filename=None,
     ):
-        if self.csv_file_operation_pending:
+        if self.background_jobs.is_busy():
+            self.status_label.setText(
+                "Wait for the current import or export to finish."
+            )
+            return
+        if self.csv_file_selection_stage.is_active():
+            self.status_label.setText("A file selector is already open.")
             return
 
         self.csv_file_selection_stage.select_file(
@@ -1657,116 +1689,126 @@ class RobotViewer3D(QWidget):
             directory=directory,
             name_filter="CSV files (*.csv);;All files (*)",
             filename=filename,
-            selected=lambda path: self._run_csv_file_operation(
-                selected, path
-            ),
+            selected=selected,
             failed=lambda message: self.status_label.setText(
                 f"Could not open file selector: {message}"
             ),
         )
 
-    def _run_csv_file_operation(self, selected, path):
-        self.csv_file_operation_pending = True
-        try:
-            selected(path)
-        finally:
-            self.csv_file_operation_pending = False
-
     def _load_selected_qpos_csv(self, path):
-        try:
-            self.load_qpos_csv(path)
-        except (OSError, ValueError) as exc:
-            self.status_label.setText(f"Could not load qpos CSV: {exc}")
+        expected = int(self.robot_model.mj_model.nq)
+        self.status_label.setText(f"Loading qpos from {Path(path).name}...")
+        self._submit_csv_job(
+            "load qpos CSV",
+            lambda: read_qpos_csv(path, expected),
+            self._apply_loaded_qpos,
+            lambda error: self.status_label.setText(
+                f"Could not load qpos CSV: {error}"
+            ),
+        )
 
     def _load_selected_trajectory_csv(self, path, prompt_import_dt=False):
-        try:
-            self._prompt_trajectory_import_dt_on_load = bool(prompt_import_dt)
-            self.load_trajectory_csv(path)
-        except (OSError, ValueError) as exc:
-            self._prompt_trajectory_import_dt_on_load = False
-            self.status_label.setText(f"Could not load trajectory CSV: {exc}")
+        expected = int(self.robot_model.mj_model.nq)
+        self.status_label.setText(
+            f"Loading trajectory from {Path(path).name}..."
+        )
+        self._submit_csv_job(
+            "load trajectory CSV",
+            lambda: read_trajectory_csv(path, expected),
+            lambda loaded: self._apply_loaded_trajectory(
+                loaded,
+                prompt_import_dt=prompt_import_dt,
+                background_postprocess=True,
+            ),
+            lambda error: self._trajectory_csv_load_failed(error),
+        )
 
     def _save_selected_qpos_csv(self, path):
-        try:
-            self.save_qpos_csv(path)
-        except OSError as exc:
-            self.status_label.setText(f"Could not save qpos CSV: {exc}")
+        qpos = self.committed_state.get_qpos().copy()
+        preview_active = bool(self.preview_active)
+        self.status_label.setText(f"Saving qpos to {Path(path).name}...")
+        self._submit_csv_job(
+            "save qpos CSV",
+            lambda: write_qpos_csv(path, qpos),
+            lambda saved_path: self._show_qpos_saved(
+                saved_path, preview_active
+            ),
+            lambda error: self.status_label.setText(
+                f"Could not save qpos CSV: {error}"
+            ),
+        )
 
     def _save_selected_trajectory_csv(self, path):
         try:
-            self.save_trajectory_csv(path)
-        except (OSError, ValueError) as exc:
-            self.status_label.setText(f"Could not save trajectory CSV: {exc}")
+            export = self._trajectory_export_snapshot()
+        except ValueError as error:
+            self.status_label.setText(
+                f"Could not save trajectory CSV: {error}"
+            )
+            return
+        self.status_label.setText(
+            f"Saving trajectory to {Path(path).name}..."
+        )
+        self._submit_csv_job(
+            "save trajectory CSV",
+            lambda: write_trajectory_csv(path, export),
+            lambda saved_path: self._show_trajectory_saved(
+                saved_path, export
+            ),
+            lambda error: self.status_label.setText(
+                f"Could not save trajectory CSV: {error}"
+            ),
+        )
+
+    def _submit_csv_job(self, name, work, succeeded, failed):
+        if self.background_jobs.is_busy():
+            self.status_label.setText(
+                "Wait for the current import or export to finish."
+            )
+            return False
+        submitted = self.background_jobs.submit(
+            name,
+            work,
+            succeeded,
+            failed,
+        )
+        if not submitted:
+            self.status_label.setText(f"Could not start {name}.")
+        return submitted
 
     def load_qpos_csv(self, csv_path):
         """Load one headerless MuJoCo qpos row into the active keyframe."""
-        path = Path(csv_path).expanduser().resolve()
-        with path.open("r", newline="") as handle:
-            rows = [
-                row
-                for row in csv.reader(handle)
-                if any(cell.strip() for cell in row)
-            ]
-        if not rows:
-            raise ValueError("the file is empty")
-        try:
-            qpos = np.asarray([float(cell.strip()) for cell in rows[0]], dtype=float)
-        except ValueError as exc:
-            raise ValueError(
-                "expected a headerless row containing only qpos numbers"
-            ) from exc
         expected = int(self.robot_model.mj_model.nq)
-        if qpos.shape != (expected,):
-            raise ValueError(
-                f"expected {expected} qpos values for this model, found {qpos.size}"
-            )
+        loaded = read_qpos_csv(csv_path, expected)
+        self._apply_loaded_qpos(loaded)
 
+    def _apply_loaded_qpos(self, loaded):
         self.pause_playback()
         self.canvas.cancel_transform_drag()
-        self.set_robot_state_for_current_time(qpos)
+        self.set_robot_state_for_current_time(loaded.qpos)
         self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
         self.status_label.setText(
-            f"Loaded {expected}-value qpos from {path.name} at "
+            f"Loaded {loaded.qpos.size}-value qpos from {loaded.path.name} at "
             f"t={self.current_time:.2f} s"
         )
         self.history_action_finished.emit("Load qpos")
 
     def load_trajectory_csv(self, csv_path):
         """Load headerless time,qpos rows into playback and editable qpos states."""
-        path = Path(csv_path).expanduser().resolve()
-        with path.open("r", newline="") as handle:
-            rows = [
-                row
-                for row in csv.reader(handle)
-                if any(cell.strip() for cell in row)
-            ]
-        if not rows:
-            raise ValueError("the file is empty")
-
         expected = int(self.robot_model.mj_model.nq)
-        qposes = []
-        times = []
-        for row_index, row in enumerate(rows, start=1):
-            try:
-                values = [float(cell.strip()) for cell in row]
-            except ValueError as exc:
-                raise ValueError(
-                    "expected headerless numeric rows containing time plus qpos"
-                ) from exc
-            if len(values) != expected + 1:
-                raise ValueError(
-                    f"expected {expected + 1} values per trajectory row "
-                    f"(time plus {expected} qpos values), found "
-                    f"{len(values)} on row {row_index}"
-                )
-            if not np.all(np.isfinite(values)):
-                raise ValueError(f"non-finite value on row {row_index}")
-            times.append(values[0])
-            qposes.append(np.asarray(values[1:], dtype=float))
+        loaded = read_trajectory_csv(csv_path, expected)
+        self._apply_loaded_trajectory(loaded)
 
-        if any(earlier > later for earlier, later in zip(times, times[1:])):
-            raise ValueError("trajectory times must be nondecreasing")
-
+    def _apply_loaded_trajectory(
+        self,
+        loaded,
+        prompt_import_dt=None,
+        background_postprocess=False,
+    ):
+        qposes = list(loaded.qposes)
+        times = list(loaded.times)
+        if prompt_import_dt is not None:
+            self._prompt_trajectory_import_dt_on_load = bool(prompt_import_dt)
         self.pause_playback()
         self.canvas.cancel_transform_drag()
         self.set_robot_trajectory(qposes, times=times)
@@ -1783,70 +1825,79 @@ class RobotViewer3D(QWidget):
         duration = times[-1] if times else 0.0
         self.status_label.setText(
             f"Loaded {len(qposes)} timed qpos trajectory states from "
-            f"{path.name} ({duration:.3f} s)"
+            f"{loaded.path.name} ({duration:.3f} s)"
         )
-        self.trajectory_csv_loaded.emit(str(path))
+        self._background_trajectory_postprocess_requested = bool(
+            background_postprocess
+        )
+        self.trajectory_csv_loaded.emit(str(loaded.path))
+
+    def _trajectory_csv_load_failed(self, error):
+        self._prompt_trajectory_import_dt_on_load = False
+        self.status_label.setText(f"Could not load trajectory CSV: {error}")
 
     def save_qpos_csv(self, csv_path):
         """Save the committed active keyframe as one headerless qpos row."""
-        path = prepare_csv_save_path(csv_path)
-        with path.open("w", newline="") as handle:
-            csv.writer(handle).writerow(
-                f"{value:.18e}" for value in self.committed_state.get_qpos()
-            )
+        preview_active = bool(self.preview_active)
+        path = write_qpos_csv(csv_path, self.committed_state.get_qpos())
+        self._show_qpos_saved(path, preview_active)
+        return path
+
+    def _show_qpos_saved(self, path, preview_active):
         preview_note = (
-            "; unaccepted preview was not saved" if self.preview_active else ""
+            "; unaccepted preview was not saved" if preview_active else ""
         )
         self.status_label.setText(f"Saved committed qpos to {path}{preview_note}")
-        return path
 
     def save_trajectory_csv(self, csv_path):
         """Save generated trajectory rows, falling back to editable timeline rows."""
+        export = self._trajectory_export_snapshot()
+        path = write_trajectory_csv(csv_path, export)
+        self._show_trajectory_saved(path, export)
+        return path
+
+    def _trajectory_export_snapshot(self):
         if not self.state_timeline:
             raise ValueError("no robot timeline is available")
-
-        path = prepare_csv_save_path(csv_path)
 
         expected = int(self.robot_model.mj_model.nq)
         source_name = "generated trajectory"
 
         if self.robot_trajectory:
-            qposes = self.robot_trajectory
-            times = self.robot_trajectory_times
+            qposes = tuple(qpos.copy() for qpos in self.robot_trajectory)
+            times = tuple(float(time) for time in self.robot_trajectory_times)
             if len(times) != len(qposes):
-                times = [float(index) for index in range(len(qposes))]
+                times = tuple(float(index) for index in range(len(qposes)))
         else:
             self.state_timeline.set_state(
-                self.current_time, self.committed_state.get_qpos()
+      n           self.current_time, self.committed_state.get_qpos()
             )
-            times = self.state_timeline.times()
-            qposes = [
+            times = tuple(float(time) for time in self.state_timeline.times())
+            qposes = tuple(
                 self.state_timeline.get_state(time_value)
                 for time_value in times
-            ]
+            )
             source_name = "editable timeline"
 
-        with path.open("w", newline="") as handle:
-            writer = csv.writer(handle)
-            for time_value, qpos in zip(times, qposes):
-                if qpos is None or len(qpos) != expected:
-                    raise ValueError(
-                        f"trajectory state at t={time_value:.6f} does not "
-                        f"contain {expected} qpos values"
-                    )
-                writer.writerow(
-                    [f"{time_value:.6f}"]
-                    + [f"{value:.18e}" for value in qpos]
-                )
+        return TrajectoryExport(
+            expected_qpos_count=expected,
+            times=times,
+            qposes=qposes,
+            source_name=source_name,
+            preview_active=bool(self.preview_active),
+        )
 
+    def _show_trajectory_saved(self, path, export):
         preview_note = (
-            "; unaccepted preview was not saved" if self.preview_active else ""
+            "; unaccepted preview was not saved"
+            if export.preview_active
+            else ""
         )
         self.status_label.setText(
-            f"Saved {len(qposes)} timed qpos states from {source_name} "
+            f"Saved {len(export.qposes)} timed qpos states from "
+            f"{export.source_name} "
             f"to {path}{preview_note}"
         )
-        return path
 
     def _refresh_timeline_trajectory(self):
         # Timeline keyframes no longer publish ghost poses. Scrubbing and

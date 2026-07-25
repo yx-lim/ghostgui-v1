@@ -1,4 +1,4 @@
-"""Standalone synchronous file picker used by GhostGUI's async launcher stage."""
+"""Standalone native file picker used by GhostGUI's async launcher stage."""
 
 from __future__ import annotations
 
@@ -11,7 +11,11 @@ from PySide6.QtWidgets import QApplication, QFileDialog
 
 def _arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("open", "save"), required=True)
+    parser.add_argument(
+        "--mode",
+        choices=("open", "save", "directory"),
+        required=True,
+    )
     parser.add_argument("--title", required=True)
     parser.add_argument("--directory", required=True)
     parser.add_argument("--name-filter", required=True)
@@ -24,10 +28,8 @@ def _select_file(args):
     app.setApplicationName("GhostGUI File Selector")
 
     dialog = QFileDialog()
-    # This helper intentionally uses Qt's widget picker. Keeping the synchronous
-    # dialog in a separate process prevents it from blocking GhostGUI's GUI
-    # thread while also avoiding delayed desktop-portal requests.
-    dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+    # Keep the platform-native picker (including the desktop portal on
+    # Wayland). It may block this helper, but never GhostGUI's GUI thread.
     dialog.setWindowTitle(args.title)
     dialog.setDirectory(args.directory)
     dialog.setNameFilter(args.name_filter)
@@ -38,6 +40,10 @@ def _select_file(args):
         dialog.setDefaultSuffix("csv")
         if args.filename:
             dialog.selectFile(args.filename)
+    elif args.mode == "directory":
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+        dialog.setFileMode(QFileDialog.FileMode.Directory)
+        dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
     else:
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
         dialog.setFileMode(QFileDialog.FileMode.ExistingFile)

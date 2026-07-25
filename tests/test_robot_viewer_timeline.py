@@ -2115,13 +2115,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
             ) as guard, patch(
                 "gui.main_window.QInputDialog.getText",
                 return_value=("fresh project", True),
-            ), patch(
-                "gui.main_window.QFileDialog.getExistingDirectory"
-            ) as get_directory:
+            ):
                 self.window.on_new_project()
 
             guard.assert_called_once_with("create a new project")
-            get_directory.assert_not_called()
 
             projects_root = Path(os.environ["GHOSTGUI_PROJECTS_DIR"]).resolve()
             self.assertEqual(self.window.current_project.root_dir.parent, projects_root)
@@ -2195,12 +2192,9 @@ class RobotViewerTimelineTests(unittest.TestCase):
         with patch(
             "gui.main_window.QInputDialog.getText",
             return_value=("saved workspace", True),
-        ), patch(
-            "gui.main_window.QFileDialog.getExistingDirectory"
-        ) as get_directory:
+        ):
             self.window.on_save_project()
 
-        get_directory.assert_not_called()
         projects_root = Path(os.environ["GHOSTGUI_PROJECTS_DIR"]).resolve()
         self.assertEqual(self.window.current_project.root_dir.parent, projects_root)
         self.assertEqual(len(self.window.trajectory.frames), 1)
@@ -3028,6 +3022,11 @@ class RobotViewerTimelineTests(unittest.TestCase):
             ):
                 self.window.on_setup_import_requested("trajectory")
                 open_dialog.call_args.kwargs["selected"](str(source))
+                for _attempt in range(500):
+                    if not self.window.background_jobs.is_busy():
+                        break
+                    QTest.qWait(10)
+                self.assertFalse(self.window.background_jobs.is_busy())
 
         prompt.assert_called_once()
         self.assertAlmostEqual(self.viewer.trajectory_import_dt.value(), 0.05)
