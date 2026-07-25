@@ -14,6 +14,12 @@ class TimesliceSnapshotResult:
     selected_frame: TargetFrame | None
 
 
+@dataclass(frozen=True)
+class LoadedTrajectoryTargets:
+    frames: tuple[TargetFrame, ...]
+    imported_times: tuple[float, ...]
+
+
 def editable_logical_frame_names(robot_model, controls, viewer_3d):
     frame_names = []
     for name in getattr(robot_model, "trajectory_frames", []):
@@ -99,6 +105,55 @@ def selected_loaded_trajectory_import_samples(times, qposes, interval):
         samples.append((final_time, qposes[-1]))
 
     return samples
+
+
+def build_loaded_trajectory_target_frames(
+    robot_model,
+    times,
+    qposes,
+    *,
+    interval,
+    phase,
+    frame_names,
+    frame_bindings,
+):
+    """Compute FK-derived target frames without touching GUI-owned state."""
+    samples = selected_loaded_trajectory_import_samples(
+        times,
+        qposes,
+        interval,
+    )
+    state = robot_model.create_state()
+    frames = []
+    for time, qpos in samples:
+        state.set_qpos(qpos)
+        for frame_name in frame_names:
+            binding = frame_bindings.get(frame_name)
+            if binding is None:
+                continue
+            kind, object_name = binding
+            try:
+                position, quaternion = state.get_body_pose(object_name, kind)
+            except KeyError:
+                continue
+            roll, pitch, yaw = quat_to_rpy(quaternion)
+            frames.append(
+                TargetFrame(
+                    time=float(time),
+                    phase=phase,
+                    frame_name=frame_name,
+                    x=float(position[0]),
+                    y=float(position[1]),
+                    z=float(position[2]),
+                    roll=roll,
+                    pitch=pitch,
+                    yaw=yaw,
+                )
+            )
+    return LoadedTrajectoryTargets(
+        frames=tuple(frames),
+        imported_times=tuple(float(time) for time, _qpos in samples),
+    )
 
 
 def delete_timeslice_at_time(trajectory, time, tolerance=1e-6):

@@ -12,6 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from OpenGL import GL
 from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QKeyEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from gui.main_window import RobotGuiMainWindow
@@ -472,6 +473,11 @@ class RobotModelAdapterTests(unittest.TestCase):
             try:
                 window.model_library_root = root / "models"
                 window.import_model_file(str(source))
+                for _attempt in range(500):
+                    if not window.background_jobs.is_busy():
+                        break
+                    QTest.qWait(10)
+                self.assertFalse(window.background_jobs.is_busy())
                 loader = window.model_loaders.get("go3")
                 if loader is not None:
                     loader.wait()
@@ -490,9 +496,12 @@ class RobotModelAdapterTests(unittest.TestCase):
             mesh_dir.mkdir()
             window = RobotGuiMainWindow("g1")
             try:
-                with patch(
-                    "gui.main_window.QFileDialog.getExistingDirectory",
-                    return_value=str(mesh_dir),
+                with patch.object(
+                    window.model_file_selection_stage,
+                    "select_file",
+                    side_effect=lambda **kwargs: (
+                        kwargs["selected"](str(mesh_dir)) or True
+                    ),
                 ):
                     window.on_choose_mesh_folder()
                 self.assertEqual(window.import_mesh_folder, mesh_dir.resolve())
