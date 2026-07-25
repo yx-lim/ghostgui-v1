@@ -6,5 +6,6 @@ authors:
   - family-names: "Lim"
     given-names: "Nathan"
 version: 0.1.0
+license: MIT
 repository-code: "https://github.com/yx-lim/ghostgui"
 url: "https://github.com/yx-lim/ghostgui"

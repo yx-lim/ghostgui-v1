@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 authors = [
     {name = "Nathan Lim"},
 ]
+license = {file = "LICENSE"}
 keywords = [
     "robotics",
     "mujoco",
@@ -22,6 +23,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: X11 Applications :: Qt",
     "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering",

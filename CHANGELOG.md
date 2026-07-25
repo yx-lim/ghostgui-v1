@@ -14,6 +14,7 @@ in this repository.
   architecture, testing, and troubleshooting.
 - A documentation index, contribution guide, citation metadata, and repository
   documentation checks.
+- An MIT license for the project.
 
 ### Changed
 

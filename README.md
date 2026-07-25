@@ -100,5 +100,4 @@ Research users can cite the project using [CITATION.cff](CITATION.cff).
 
 ## License
 
-A project license has not yet been selected. Until a `LICENSE` file is added,
-the source is not offered under an open-source license.
+GhostGUI is available under the [MIT License](LICENSE).
