@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
-    QFileDialog,
     QFrame,
     QFormLayout,
     QGridLayout,
@@ -43,6 +42,7 @@ from core.models import (
 )
 from core.ik import CollisionAwareIKSolver, CollisionChecker
 from core.trajectory import quat_to_rpy, rpy_to_quat
+from gui.file_selection import SynchronousFileSelectionStage
 from gui.viewers.robot_canvas_3d import RobotCanvas3D
 from core.ik import (
     FootLockTask,
@@ -133,8 +133,7 @@ class RobotViewer3D(QWidget):
         self.robot_trajectory = []
         self.robot_trajectory_times = []
         self._prompt_trajectory_import_dt_on_load = False
-        self.csv_file_dialog = None
-        self.pending_csv_file_selection = None
+        self.csv_file_selection_stage = SynchronousFileSelectionStage(self)
         self.csv_file_operation_pending = False
         self.ghost_trajectory = []
         self.ghost_source = None
@@ -1649,58 +1648,25 @@ class RobotViewer3D(QWidget):
         save=False,
         filename=None,
     ):
-        if (
-            self.csv_file_dialog is not None
-            or self.csv_file_operation_pending
-        ):
+        if self.csv_file_operation_pending:
             return
 
-        dialog = QFileDialog(self)
-        dialog.setWindowTitle(title)
-        dialog.setDirectory(str(directory))
-        dialog.setNameFilter("CSV files (*.csv);;All files (*)")
-        dialog.setAcceptMode(
-            QFileDialog.AcceptMode.AcceptSave
-            if save
-            else QFileDialog.AcceptMode.AcceptOpen
-        )
-        dialog.setFileMode(
-            QFileDialog.FileMode.AnyFile
-            if save
-            else QFileDialog.FileMode.ExistingFile
-        )
-        if save:
-            dialog.setDefaultSuffix("csv")
-            if filename:
-                dialog.selectFile(filename)
-        dialog.fileSelected.connect(
-            lambda path: self._on_csv_file_selected(selected, path)
-        )
-        dialog.finished.connect(self._on_csv_file_dialog_finished)
-        self.csv_file_dialog = dialog
-        dialog.open()
-
-    def _on_csv_file_selected(self, selected, path):
-        self.pending_csv_file_selection = (selected, path)
-        self.csv_file_operation_pending = True
-
-    def _on_csv_file_dialog_finished(self, _result):
-        dialog = self.csv_file_dialog
-        selection = self.pending_csv_file_selection
-        self.csv_file_dialog = None
-        self.pending_csv_file_selection = None
-        if dialog is not None:
-            dialog.deleteLater()
-        if selection is None:
-            self.csv_file_operation_pending = False
-            return
-        selected, path = selection
-        QTimer.singleShot(
-            0,
-            lambda: self._run_csv_file_operation(selected, path),
+        self.csv_file_selection_stage.select_file(
+            mode="save" if save else "open",
+            title=title,
+            directory=directory,
+            name_filter="CSV files (*.csv);;All files (*)",
+            filename=filename,
+            selected=lambda path: self._run_csv_file_operation(
+                selected, path
+            ),
+            failed=lambda message: self.status_label.setText(
+                f"Could not open file selector: {message}"
+            ),
         )
 
     def _run_csv_file_operation(self, selected, path):
+        self.csv_file_operation_pending = True
         try:
             selected(path)
         finally:

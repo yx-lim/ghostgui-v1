@@ -55,6 +55,7 @@ from application.project_manager import (
     ghostgui_config_dir,
 )
 from .controls import TrajectoryControlPanel
+from .file_selection import SynchronousFileSelectionStage
 from gui.viewers.reference_frame_2d import RobotCanvas
 from .robot_viewer_3d import RobotViewer3D
 from .widgets.status import StatusEvent, status_event_from_text
@@ -370,8 +371,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.render_progress_viewer = None
         self.render_progress_restore_widget = None
         self.pending_initial_render_progress = None
-        self.model_file_dialog = None
-        self.pending_model_import_path = None
+        self.model_file_selection_stage = SynchronousFileSelectionStage(self)
         self.undo_stack = []
         self.redo_stack = []
         self._history_restoring = False
@@ -2592,32 +2592,16 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.model_box.blockSignals(False)
 
     def on_open_model_file(self):
-        if self.model_file_dialog is not None:
-            return
-
-        dialog = QFileDialog(self)
-        dialog.setWindowTitle("Open robot model")
-        dialog.setDirectory(str(Path.home()))
-        dialog.setNameFilter("Robot model files (*.urdf *.xml)")
-        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
-        dialog.fileSelected.connect(self._on_model_file_selected)
-        dialog.finished.connect(self._on_model_file_dialog_finished)
-        self.model_file_dialog = dialog
-        dialog.open()
-
-    def _on_model_file_selected(self, path):
-        self.pending_model_import_path = path
-
-    def _on_model_file_dialog_finished(self, _result):
-        dialog = self.model_file_dialog
-        path = self.pending_model_import_path
-        self.model_file_dialog = None
-        self.pending_model_import_path = None
-        if dialog is not None:
-            dialog.deleteLater()
-        if path:
-            QTimer.singleShot(0, lambda: self.import_model_file(path))
+        self.model_file_selection_stage.select_file(
+            mode="open",
+            title="Open robot model",
+            directory=Path.home(),
+            name_filter="Robot model files (*.urdf *.xml)",
+            selected=self.import_model_file,
+            failed=lambda message: self.show_status_message(
+                f"Could not open robot model selector: {message}"
+            ),
+        )
 
     def on_setup_import_requested(self, action):
         if action == "model":
