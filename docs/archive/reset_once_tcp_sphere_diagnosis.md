@@ -1,5 +1,8 @@
 # One-shot reset and TCP sphere diagnosis
 
+> Historical note: this diagnosis may not describe the current implementation.
+> See [Preview And Keyframe Concepts](../concepts.md) for supported behavior.
+
 ## Reset/playback
 
 - `RobotViewer3D.reset_robot_pose()` is called directly by the

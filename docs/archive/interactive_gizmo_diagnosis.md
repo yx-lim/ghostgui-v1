@@ -1,5 +1,8 @@
 # Interactive gizmo, collision, and flicker diagnosis
 
+> Historical note: this diagnosis may not describe the current implementation.
+> See the [User Guide](../user_guide.md) for supported behavior.
+
 ## Current ownership
 
 - `gui/viewer_3d.py::RobotCanvas3D` draws the target marker/gizmo, projects it

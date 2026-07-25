@@ -25,16 +25,16 @@ Use this workflow to create one editable robot motion.
 2. Select a **Target robot frame**, such as `left_hand`.
 3. Move the target with the 3D gizmo or the position/orientation sliders.
 4. The orange robot is the temporary preview. It is not saved yet.
-5. Click **Preview** when you want to plan/check the path from the committed pose to the orange preview.
-6. Click **Slice** to accept the current preview, record it at the active time, and advance the timeline.
-7. Add another slice at a later time.
+5. Click **Preview Path** when you want to validate the path from the committed pose to the orange preview.
+6. Click **Commit Keyframe** to record the preview at the active time and advance the timeline.
+7. Add another keyframe at a later time.
 8. Click **Generate** or **Generate / Simulate**.
 9. Export the trajectory or qpos data from the app toolbar.
 
 The main idea is:
 
 ```text
-move target -> orange preview -> Slice -> committed time slice -> Generate -> Export
+move target -> orange preview -> Commit Keyframe -> Generate -> Export
 ```
 """.strip(),
     ),
@@ -66,9 +66,9 @@ Use the single Time slider to scrub the robot live or follow time-based playback
 
 ## Workflow Toolbar
 
-- **Preview** plans/checks the path from the committed pose to the orange preview.
-- **Slice** accepts the current preview and stores it at the active time.
-- **Generate** samples the saved slices into a robot trajectory.
+- **Preview Path** validates the path from the committed pose to the orange preview.
+- **Commit Keyframe** records the preview at the active time.
+- **Generate** samples the saved keyframes into a robot trajectory.
 - **Play/Pause** controls the current generated or editable timeline.
 - **Reset** returns the active time to the model home pose.
 - **Clear** clears the editable trajectory.
@@ -99,17 +99,17 @@ The orange robot. It is a temporary IK result from your current drag or slider e
 
 The accepted robot pose at the active time. Generated trajectories and exports use committed timeline states, not unsaved orange previews.
 
-## Preview Button
+## Preview Path Button
 
-Plans/checks the motion between the committed pose and the orange preview. It does not save the pose by itself.
+Validates the motion between the committed pose and the orange preview. It does not save the pose by itself.
 
-## Slice Button
+## Commit Keyframe Button
 
-Accepts the preview if needed, records the committed pose at the active time, and advances by the configured slice step.
+Records the preview at the active time and advances by the configured keyframe interval.
 
 ## Generated Trajectory
 
-A sampled sequence built from saved slices/keyframes and IK. This is the data you usually export for MuJoCo validation or downstream tools.
+A sampled sequence built from saved keyframes and IK. This is the data you usually export for MuJoCo validation or downstream tools.
 """.strip(),
     ),
     HelpSection(
@@ -157,7 +157,7 @@ Use **File > Export** to choose what to save.
 - **Qpos** saves the current committed pose as one headerless qpos row.
 - **Trajectory** saves timed qpos rows from the generated trajectory, or from the editable timeline when no generated trajectory is active.
 
-Unaccepted orange previews are intentionally not exported. Use **Slice** first when you want the current preview to become part of the saved motion.
+Uncommitted orange previews are intentionally not exported. Use **Commit Keyframe** first when you want the current preview to become part of the saved motion.
 """.strip(),
     ),
     HelpSection(
@@ -167,7 +167,7 @@ Unaccepted orange previews are intentionally not exported. Use **Slice** first w
 
 ## The orange robot moves but export did not change
 
-The orange robot is only a preview. Click **Slice** to commit and store it at the active time before exporting.
+The orange robot is only a preview. Click **Commit Keyframe** to store it at the active time before exporting.
 
 ## Preview fails or moves only partway
 
@@ -175,7 +175,7 @@ IK, joint limits, singularity checks, or collision checks may be blocking an uns
 
 ## Generate gives an unexpected path
 
-Confirm that the saved time slices are at the intended times, then inspect **Playback** ghosts and the keyframe/timeline controls.
+Confirm that the saved keyframes are at the intended times, then inspect **Playback** ghosts and the timeline controls.
 
 ## A model has different frames than expected
 

@@ -4,7 +4,7 @@ viewer_3d.py
 Purpose:
     OpenGL 3D viewer/editor for the target reference frame and trajectory.
 
-The editor shares the same small contract as the 2D side view:
+The editor exposes a small scene-update contract:
     - update_scene(trajectory, active_frame)
     - target_dragged(x, z)
 """

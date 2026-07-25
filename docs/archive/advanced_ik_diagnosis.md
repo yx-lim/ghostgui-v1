@@ -1,5 +1,8 @@
 # Advanced IK controls diagnosis
 
+> Historical note: this diagnosis may not describe the current implementation.
+> See [Advanced IK](../advanced_ik.md) for supported behavior.
+
 Live drag IK is solved in `RobotState3D.solve_ik()` using MuJoCo body/site
 Jacobians (`mj_jacBody` and `mj_jacSite`) and damped least squares. It supports
 position plus optional orientation, clamps every scalar hinge/slide joint to

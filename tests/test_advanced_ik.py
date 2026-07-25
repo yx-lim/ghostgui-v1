@@ -292,7 +292,7 @@ class AdvancedIKTests(unittest.TestCase):
             np.testing.assert_allclose(viewer.committed_state.get_qpos(), committed)
             np.testing.assert_allclose(viewer.get_current_keyframe(), committed)
             self.assertTrue(viewer.preview_active)
-            self.assertIn("Cannot accept preview", viewer.status_label.text())
+            self.assertIn("Cannot commit keyframe", viewer.status_label.text())
         finally:
             window.close()
 

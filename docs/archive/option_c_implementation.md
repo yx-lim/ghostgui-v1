@@ -1,5 +1,8 @@
 # Option C implementation plan
 
+> Historical note: this plan may not describe the current implementation.
+> See [Architecture](../architecture.md) for supported behavior.
+
 GhostGUI already has a compatible 2D editor, a lightweight OpenGL 3D target
 view, MuJoCo position IK, and a separate MuJoCo trajectory player. Option C is
 therefore an incremental extension of the existing `3D View` tab:
