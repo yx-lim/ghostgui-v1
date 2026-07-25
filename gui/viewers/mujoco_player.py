@@ -14,7 +14,7 @@ import csv
 import shutil
 import sys
 
-from application.paths import CSV_DIR
+from application.paths import TRAJECTORY_CSV_DIR
 from PySide6.QtCore import QProcess, Qt
 from PySide6.QtWidgets import (
     QWidget,
@@ -41,7 +41,7 @@ class Mujoco3DViewerPanel(QWidget):
             adapter.runtime_model_path if adapter is not None
             else self.project_root / "models" / "g1_29dof.xml"
         )
-        self.trajectory_csv_path = CSV_DIR / "pelvis_base_trajectory_uniform_dt.csv"
+        self.trajectory_csv_path = TRAJECTORY_CSV_DIR / "mujoco_playback.csv"
         self.trajectory_times = []
         self._syncing_timeline = False
         self.stdout_buffer = ""

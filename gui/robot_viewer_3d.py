@@ -31,7 +31,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from application.paths import CSV_DIR, prepare_csv_save_path
+from application.paths import (
+    QPOS_CSV_DIR,
+    TRAJECTORY_CSV_DIR,
+    prepare_csv_save_path,
+)
 from core.models import (
     RobotStateTimeline,
     TrajectoryGhostRenderer,
@@ -129,6 +133,9 @@ class RobotViewer3D(QWidget):
         self.robot_trajectory = []
         self.robot_trajectory_times = []
         self._prompt_trajectory_import_dt_on_load = False
+        self.csv_file_dialog = None
+        self.pending_csv_file_selection = None
+        self.csv_file_operation_pending = False
         self.ghost_trajectory = []
         self.ghost_source = None
         self.joint_controls = {}
@@ -1600,62 +1607,130 @@ class RobotViewer3D(QWidget):
             )
 
     def choose_qpos_csv(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Load robot qpos",
-            str(CSV_DIR),
-            "CSV files (*.csv);;All files (*)",
+        self._open_csv_file_dialog(
+            title="Load robot qpos",
+            directory=QPOS_CSV_DIR,
+            selected=self._load_selected_qpos_csv,
         )
-        if path:
-            try:
-                self.load_qpos_csv(path)
-            except (OSError, ValueError) as exc:
-                self.status_label.setText(f"Could not load qpos CSV: {exc}")
 
     def choose_trajectory_csv(self, prompt_import_dt=False):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Load robot trajectory",
-            str(CSV_DIR),
-            "CSV files (*.csv);;All files (*)",
+        self._open_csv_file_dialog(
+            title="Load robot trajectory",
+            directory=TRAJECTORY_CSV_DIR,
+            selected=lambda path: self._load_selected_trajectory_csv(
+                path, prompt_import_dt
+            ),
         )
-        if path:
-            try:
-                self._prompt_trajectory_import_dt_on_load = bool(prompt_import_dt)
-                self.load_trajectory_csv(path)
-            except (OSError, ValueError) as exc:
-                self._prompt_trajectory_import_dt_on_load = False
-                self.status_label.setText(
-                    f"Could not load trajectory CSV: {exc}"
-                )
 
     def choose_qpos_save_path(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save robot qpos",
-            str(CSV_DIR / "updated_qpos.csv"),
-            "CSV files (*.csv);;All files (*)",
+        self._open_csv_file_dialog(
+            title="Save robot qpos",
+            directory=QPOS_CSV_DIR,
+            selected=self._save_selected_qpos_csv,
+            save=True,
+            filename="updated_qpos.csv",
         )
-        if path:
-            try:
-                self.save_qpos_csv(path)
-            except OSError as exc:
-                self.status_label.setText(f"Could not save qpos CSV: {exc}")
 
     def choose_trajectory_save_path(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save robot trajectory",
-            str(CSV_DIR / "robot_trajectory.csv"),
-            "CSV files (*.csv);;All files (*)",
+        self._open_csv_file_dialog(
+            title="Save robot trajectory",
+            directory=TRAJECTORY_CSV_DIR,
+            selected=self._save_selected_trajectory_csv,
+            save=True,
+            filename="robot_trajectory.csv",
         )
-        if path:
-            try:
-                self.save_trajectory_csv(path)
-            except (OSError, ValueError) as exc:
-                self.status_label.setText(
-                    f"Could not save trajectory CSV: {exc}"
-                )
+
+    def _open_csv_file_dialog(
+        self,
+        *,
+        title,
+        directory,
+        selected,
+        save=False,
+        filename=None,
+    ):
+        if (
+            self.csv_file_dialog is not None
+            or self.csv_file_operation_pending
+        ):
+            return
+
+        dialog = QFileDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setDirectory(str(directory))
+        dialog.setNameFilter("CSV files (*.csv);;All files (*)")
+        dialog.setAcceptMode(
+            QFileDialog.AcceptMode.AcceptSave
+            if save
+            else QFileDialog.AcceptMode.AcceptOpen
+        )
+        dialog.setFileMode(
+            QFileDialog.FileMode.AnyFile
+            if save
+            else QFileDialog.FileMode.ExistingFile
+        )
+        if save:
+            dialog.setDefaultSuffix("csv")
+            if filename:
+                dialog.selectFile(filename)
+        dialog.fileSelected.connect(
+            lambda path: self._on_csv_file_selected(selected, path)
+        )
+        dialog.finished.connect(self._on_csv_file_dialog_finished)
+        self.csv_file_dialog = dialog
+        dialog.open()
+
+    def _on_csv_file_selected(self, selected, path):
+        self.pending_csv_file_selection = (selected, path)
+        self.csv_file_operation_pending = True
+
+    def _on_csv_file_dialog_finished(self, _result):
+        dialog = self.csv_file_dialog
+        selection = self.pending_csv_file_selection
+        self.csv_file_dialog = None
+        self.pending_csv_file_selection = None
+        if dialog is not None:
+            dialog.deleteLater()
+        if selection is None:
+            self.csv_file_operation_pending = False
+            return
+        selected, path = selection
+        QTimer.singleShot(
+            0,
+            lambda: self._run_csv_file_operation(selected, path),
+        )
+
+    def _run_csv_file_operation(self, selected, path):
+        try:
+            selected(path)
+        finally:
+            self.csv_file_operation_pending = False
+
+    def _load_selected_qpos_csv(self, path):
+        try:
+            self.load_qpos_csv(path)
+        except (OSError, ValueError) as exc:
+            self.status_label.setText(f"Could not load qpos CSV: {exc}")
+
+    def _load_selected_trajectory_csv(self, path, prompt_import_dt=False):
+        try:
+            self._prompt_trajectory_import_dt_on_load = bool(prompt_import_dt)
+            self.load_trajectory_csv(path)
+        except (OSError, ValueError) as exc:
+            self._prompt_trajectory_import_dt_on_load = False
+            self.status_label.setText(f"Could not load trajectory CSV: {exc}")
+
+    def _save_selected_qpos_csv(self, path):
+        try:
+            self.save_qpos_csv(path)
+        except OSError as exc:
+            self.status_label.setText(f"Could not save qpos CSV: {exc}")
+
+    def _save_selected_trajectory_csv(self, path):
+        try:
+            self.save_trajectory_csv(path)
+        except (OSError, ValueError) as exc:
+            self.status_label.setText(f"Could not save trajectory CSV: {exc}")
 
     def load_qpos_csv(self, csv_path):
         """Load one headerless MuJoCo qpos row into the active keyframe."""

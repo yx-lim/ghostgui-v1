@@ -3018,16 +3018,16 @@ class RobotViewerTimelineTests(unittest.TestCase):
             source = Path(directory) / "dense_trajectory.csv"
             np.savetxt(source, np.vstack(rows), delimiter=",")
             with (
-                patch(
-                    "gui.robot_viewer_3d.QFileDialog.getOpenFileName",
-                    return_value=(str(source), ""),
-                ),
+                patch.object(
+                    self.viewer, "_open_csv_file_dialog"
+                ) as open_dialog,
                 patch(
                     "gui.main_window.QInputDialog.getDouble",
                     return_value=(0.05, True),
                 ) as prompt,
             ):
                 self.window.on_setup_import_requested("trajectory")
+                open_dialog.call_args.kwargs["selected"](str(source))
 
         prompt.assert_called_once()
         self.assertAlmostEqual(self.viewer.trajectory_import_dt.value(), 0.05)

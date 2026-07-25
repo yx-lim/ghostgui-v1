@@ -5,6 +5,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CSV_DIR = PROJECT_ROOT / "csv"
+QPOS_CSV_DIR = CSV_DIR / "qpos"
+TRAJECTORY_CSV_DIR = CSV_DIR / "trajectory"
 
 
 def csv_file_path(filename):

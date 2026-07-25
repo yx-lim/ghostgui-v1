@@ -370,6 +370,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.render_progress_viewer = None
         self.render_progress_restore_widget = None
         self.pending_initial_render_progress = None
+        self.model_file_dialog = None
+        self.pending_model_import_path = None
         self.undo_stack = []
         self.redo_stack = []
         self._history_restoring = False
@@ -2590,15 +2592,32 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.model_box.blockSignals(False)
 
     def on_open_model_file(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Open robot model",
-            str(Path.home()),
-            "Robot model files (*.urdf *.xml)",
-        )
-        if not path:
+        if self.model_file_dialog is not None:
             return
-        self.import_model_file(path)
+
+        dialog = QFileDialog(self)
+        dialog.setWindowTitle("Open robot model")
+        dialog.setDirectory(str(Path.home()))
+        dialog.setNameFilter("Robot model files (*.urdf *.xml)")
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+        dialog.fileSelected.connect(self._on_model_file_selected)
+        dialog.finished.connect(self._on_model_file_dialog_finished)
+        self.model_file_dialog = dialog
+        dialog.open()
+
+    def _on_model_file_selected(self, path):
+        self.pending_model_import_path = path
+
+    def _on_model_file_dialog_finished(self, _result):
+        dialog = self.model_file_dialog
+        path = self.pending_model_import_path
+        self.model_file_dialog = None
+        self.pending_model_import_path = None
+        if dialog is not None:
+            dialog.deleteLater()
+        if path:
+            QTimer.singleShot(0, lambda: self.import_model_file(path))
 
     def on_setup_import_requested(self, action):
         if action == "model":

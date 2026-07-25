@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from application.paths import prepare_csv_save_path
+from application.paths import TRAJECTORY_CSV_DIR, prepare_csv_save_path
 from core.trajectory import SampledTrajectory
 
 
@@ -21,7 +21,7 @@ def generate_trajectory_status(
     *,
     smoothing,
     export_dt=0.01,
-    csv_path="pelvis_base_trajectory_uniform_dt.csv",
+    csv_path=TRAJECTORY_CSV_DIR / "mujoco_playback.csv",
 ):
     csv_path = prepare_csv_save_path(csv_path)
     sampled_tracks = trajectory.sample_tracks_uniform_dt(
