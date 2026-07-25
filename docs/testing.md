@@ -87,6 +87,3 @@ Documentation validation should reject:
 - legacy user-facing workflow terminology;
 - undocumented public pages;
 - trailing whitespace.
-
-Historical notes below `docs/archive/` are excluded from terminology checks
-because they preserve the wording used by earlier implementations.

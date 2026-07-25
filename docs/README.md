@@ -1,8 +1,7 @@
 # GhostGUI Documentation
 
 This directory contains the current user and developer documentation for
-GhostGUI. Historical implementation investigations are kept under
-[`archive/`](archive/README.md) and are not part of the supported manual.
+GhostGUI.
 
 ## Get Started
 

@@ -93,7 +93,8 @@ model support, or file formats change.
 
 - Keep `README.md` concise and link to detailed pages.
 - Put supported user behavior in the public pages under `docs/`.
-- Put superseded investigations in `docs/archive/`.
+- Do not publish one-off diagnosis notes; move still-relevant behavior into the
+  focused public guide that owns it.
 - Verify every command against the repository.
 - Do not claim a platform or model is tested without evidence.
 - Add new public pages to `docs/README.md`.
