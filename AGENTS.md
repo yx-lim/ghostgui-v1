@@ -9,7 +9,7 @@
 - `models/` contains bundled and user-imported model sources and assets.
 - `scripts/` contains supported installation and launch entry points.
 - `tests/` contains the automated contract and GUI suite.
-- `docs/` contains current public documentation; `docs/archive/` is historical.
+- `docs/` contains current public documentation.
 
 Read `docs/architecture.md` before changing ownership across these layers.
 
@@ -40,5 +40,5 @@ adding them to documentation.
   versions, or export contracts without focused tests and documentation.
 - Update help and tutorial copy with any public workflow-label change.
 - Add new public documentation to `docs/README.md`.
-- Archive superseded investigations rather than presenting them as current
-  behavior.
+- Do not commit one-off diagnosis notes. Distill useful current behavior into
+  the focused public documentation.

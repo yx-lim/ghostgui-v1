@@ -79,3 +79,4 @@ outputs/
 /outputs/
 /logs/
 *.log
+MUJOCO_LOG.TXT

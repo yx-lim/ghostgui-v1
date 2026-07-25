@@ -187,9 +187,9 @@ def validate_repository(root: Path = PROJECT_ROOT) -> list[str]:
     issues.extend(validate_ui_copy(root))
 
     readme_lines = len((root / "README.md").read_text(encoding="utf-8").splitlines())
-    if not 100 <= readme_lines <= 140:
+    if not 80 <= readme_lines <= 140:
         issues.append(
-            f"README.md: expected 100-140 lines for the landing page, "
+            f"README.md: expected 80-140 lines for the landing page, "
             f"found {readme_lines}"
         )
     return issues

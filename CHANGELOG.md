@@ -21,7 +21,7 @@ in this repository.
 - Reworked the root README as a concise product landing page.
 - Standardized the public workflow around **Preview Path**,
   **Commit Keyframe**, and **Keyframe interval**.
-- Separated current public documentation from historical implementation notes.
+- Removed stale implementation investigations from the publishable repository.
 
 ### Fixed
 
