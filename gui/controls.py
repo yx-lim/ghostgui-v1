@@ -41,6 +41,7 @@ from .widgets.trajectory_controls import (
     LabeledSlider,
     NoWheelComboBox,
 )
+from .widgets.compact import compact_spinbox
 
 
 class TrajectoryControlPanel(QGroupBox):
@@ -274,6 +275,7 @@ class TrajectoryControlPanel(QGroupBox):
         )
         self.time_slider.setObjectName("timeControl")
         self.time_slider.setToolTip("Choose the active time for editing and slicing.")
+        compact_spinbox(self.time_slider.input, width=76)
 
         self.x_slider = InlineLabeledSlider(
             "X [m]",

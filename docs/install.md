@@ -1,13 +1,13 @@
 # Installing GhostGUI
 
-Linux/Ubuntu is the primary tested platform. The macOS and Windows installers
-are provided for convenience but remain experimental until verified on those
-platforms.
+Linux/Ubuntu is the primary development platform. Automated application and
+package contracts run on Linux, macOS, and Windows; platform installers still
+need a native GUI check on the target hardware before a release.
 
 ## Requirements
 
 - Python 3.10 or newer
-- A working OpenGL environment
+- A desktop OpenGL 2.1-compatible environment
 - Git
 - Platform packages installed by the scripts below
 
@@ -48,7 +48,9 @@ architecture. It supports Apple Silicon (`arm64`) and Intel (`x86_64`); on Apple
 Silicon it prefers Homebrew Python at `/opt/homebrew/bin/python3`.
 
 MuJoCo passive-viewer subprocesses must run through `mjpython` on macOS. The
-installer verifies that command after installing the Python dependencies.
+installer verifies that command after installing the Python dependencies. A
+missing `mjpython` leaves the separate **Simulation** window unavailable but no
+longer prevents installation or use of the main editor.
 
 ## Windows PowerShell
 
@@ -78,6 +80,13 @@ Windows PowerShell:
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ghostgui
+```
+
+Installed packages also expose `ghostgui-gui`. On Windows this GUI entry point
+launches without an attached console window:
+
+```powershell
+ghostgui-gui --model go2
 ```
 
 Select a bundled model at startup:

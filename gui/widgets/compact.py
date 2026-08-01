@@ -19,6 +19,12 @@ def compact_combo(combo, minimum_chars=10, minimum_width=96):
 
 
 def compact_spinbox(spinbox, width=78):
-    spinbox.setMinimumWidth(0)
-    spinbox.setMaximumWidth(width)
-    spinbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    # Let Qt's font- and style-aware size hint account for digits, suffixes,
+    # and native stepper buttons.  A hard maximum clips values with larger
+    # system fonts and on styles whose steppers are wider than Fusion's.
+    spinbox.setMinimumWidth(max(0, int(width)))
+    spinbox.setMaximumWidth(16777215)  # QWIDGETSIZE_MAX
+    spinbox.setSizePolicy(
+        QSizePolicy.Policy.MinimumExpanding,
+        QSizePolicy.Policy.Fixed,
+    )

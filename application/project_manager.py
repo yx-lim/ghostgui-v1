@@ -14,7 +14,7 @@ import sys
 import tempfile
 from uuid import uuid4
 
-from application.paths import PROJECT_ROOT, atomic_text_writer
+from application.paths import atomic_text_writer, writable_data_root
 
 
 PROJECT_FILENAME = "ghostgui_project.json"
@@ -498,7 +498,7 @@ def ghostgui_projects_dir():
     override = os.environ.get(PROJECTS_DIR_ENV)
     if override:
         return Path(override).expanduser()
-    return PROJECT_ROOT / PROJECTS_FOLDER_NAME
+    return writable_data_root() / PROJECTS_FOLDER_NAME
 
 
 def default_project_root_from_name(project_name):

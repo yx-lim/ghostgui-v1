@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from .help_content import HELP_SECTIONS
+from gui.window_geometry import resize_to_available_screen
 
 
 class HelpCenterDialog(QDialog):
@@ -24,7 +25,7 @@ class HelpCenterDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("GhostGUI Help")
         self.setObjectName("helpCenterDialog")
-        self.resize(840, 560)
+        resize_to_available_screen(self, 840, 560)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)

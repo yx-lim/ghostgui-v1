@@ -108,9 +108,10 @@ class TutorialManager(QObject):
         return QRect(top_left, target.size())
 
     def _position_card(self, target_rect):
-        self.card.adjustSize()
         margin = 14
         window_rect = self.main_window.rect()
+        self.card.setMaximumWidth(max(220, min(360, window_rect.width() - 2 * margin)))
+        self.card.adjustSize()
         card_size = self.card.size()
 
         if target_rect.isNull():

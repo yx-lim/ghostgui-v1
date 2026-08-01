@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import configparser
+import io
 from pathlib import Path, PurePosixPath
 import sys
 import zipfile
@@ -12,6 +14,7 @@ import zipfile
 REQUIRED_MODULES = frozenset(
     {
         "application/launcher.py",
+        "application/mujoco_viewer_process.py",
         "application/background_jobs.py",
         "application/history.py",
         "application/project_manager.py",
@@ -23,6 +26,8 @@ REQUIRED_MODULES = frozenset(
         "gui/panels/status_panel.py",
         "gui/theme.py",
         "gui/viewers/camera.py",
+        "gui/viewers/opengl_compat.py",
+        "gui/viewers/robot_canvas_3d.py",
     }
 )
 REQUIRED_METADATA_SUFFIXES = frozenset(
@@ -36,6 +41,7 @@ REQUIRED_METADATA_SUFFIXES = frozenset(
 REQUIRED_RESOURCE_SUFFIXES = frozenset(
     {
         "share/ghostgui/docs/user_guide.md",
+        "share/ghostgui/gui/assets/app/ghostlogo.svg",
         "share/ghostgui/gui/assets/theme/play-dark.svg",
         "share/ghostgui/models/g1_29dof.xml",
         "share/ghostgui/models/go2_description.urdf",
@@ -59,10 +65,10 @@ def validate_wheel(
                 for name in names
                 if name.endswith(".dist-info/entry_points.txt")
             ]
-            entry_point_text = "\n".join(
+            entry_point_payloads = [
                 archive.read(name).decode("utf-8", errors="replace")
                 for name in entry_point_names
-            )
+            ]
     except (OSError, zipfile.BadZipFile) as exc:
         return [f"cannot read wheel {wheel_path}: {exc}"]
 
@@ -82,11 +88,26 @@ def validate_wheel(
         errors.append(
             "missing wheel metadata: " + ", ".join(missing_metadata)
         )
-    elif (
-        "[console_scripts]" not in entry_point_text
-        or "ghostgui = application.launcher:main" not in entry_point_text
-    ):
-        errors.append("ghostgui console entry point is missing or incorrect")
+    else:
+        entry_points = {}
+        for payload in entry_point_payloads:
+            parser = configparser.ConfigParser(interpolation=None)
+            try:
+                parser.read_file(io.StringIO(payload))
+            except configparser.Error:
+                errors.append("wheel entry-point metadata is malformed")
+                continue
+            for section in parser.sections():
+                for name, value in parser.items(section):
+                    entry_points[(section, name)] = value.strip()
+        if entry_points.get(("console_scripts", "ghostgui")) != (
+            "application.launcher:main"
+        ):
+            errors.append("ghostgui console entry point is missing or incorrect")
+        if entry_points.get(("gui_scripts", "ghostgui-gui")) != (
+            "application.launcher:main"
+        ):
+            errors.append("ghostgui GUI entry point is missing or incorrect")
 
     unsafe_members = sorted(
         name

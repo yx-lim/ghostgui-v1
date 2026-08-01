@@ -17,6 +17,10 @@ CSV playback, transaction recovery, cancellation and shutdown, visualization
 lifecycles, transform-gizmo math, GUI controls, themes, status handling,
 packaging contracts, and trajectory smoothing.
 
+CI runs the complete isolated contracts on Linux, macOS, and Windows. A
+separate Linux job repeats the responsive control tests at 200 percent Qt
+scaling, while the Xvfb job supplies a real software OpenGL context.
+
 Run documentation validation separately:
 
 ```bash
@@ -46,16 +50,17 @@ package data:
 ```bash
 python3 -m pip wheel . --no-deps --no-build-isolation --wheel-dir wheelhouse
 python3 scripts/check_wheel.py --require-resources wheelhouse/*.whl
-python3 -m venv --system-site-packages /tmp/ghostgui-wheel-smoke
-/tmp/ghostgui-wheel-smoke/bin/python -m pip install --no-deps wheelhouse/*.whl
+python3 -m venv /tmp/ghostgui-wheel-smoke
+/tmp/ghostgui-wheel-smoke/bin/python -m pip install wheelhouse/*.whl
 cd /tmp
 /tmp/ghostgui-wheel-smoke/bin/python \
   /path/to/ghostgui/scripts/smoke_installed_package.py --load-model --gui
 ```
 
-The smoke gate verifies the console entry point, all registered model sources,
-theme and documentation resources, G1 compilation, visualization startup, and
-clean GUI shutdown.
+The smoke gate verifies the console and GUI entry points, the installed MuJoCo
+viewer-process module, all registered model sources, theme and documentation
+resources, G1 compilation, writable default project storage, visualization
+startup, and clean GUI shutdown.
 
 ## Headless And Visual Gates
 

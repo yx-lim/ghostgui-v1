@@ -111,8 +111,23 @@ class ThemeTests(unittest.TestCase):
     def test_compact_spinbox_leaves_room_for_themed_arrows(self):
         spinbox = QDoubleSpinBox()
         try:
+            font = spinbox.font()
+            font.setPointSize(18)
+            spinbox.setFont(font)
+            spinbox.setRange(-100000.0, 100000.0)
+            spinbox.setDecimals(4)
+            spinbox.setSuffix(" rad")
             compact_spinbox(spinbox)
-            self.assertGreaterEqual(spinbox.maximumWidth(), 78)
+            self.assertGreaterEqual(spinbox.minimumWidth(), 78)
+            self.assertGreater(spinbox.maximumWidth(), 1000000)
+            self.assertLessEqual(
+                spinbox.minimumSizeHint().width(),
+                spinbox.maximumWidth(),
+            )
+            self.assertEqual(
+                spinbox.sizePolicy().horizontalPolicy(),
+                QSizePolicy.Policy.MinimumExpanding,
+            )
         finally:
             spinbox.close()
 

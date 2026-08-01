@@ -94,18 +94,19 @@ fi
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e .
 
-if ! command -v mjpython >/dev/null 2>&1; then
-    echo "mjpython was not found after installing MuJoCo."
-    echo "The main GhostGUI app can still launch, but the standalone MuJoCo passive"
-    echo "viewer requires mjpython on macOS."
-    exit 1
-fi
-
-MJPYTHON_ARCH="$(mjpython -c 'import platform; print(platform.machine())')"
-if [ "$MJPYTHON_ARCH" != "$NATIVE_ARCH" ]; then
-    echo "mjpython is $MJPYTHON_ARCH, but this Mac requires $NATIVE_ARCH."
-    echo "Remove .venv and recreate it with a native Python."
-    exit 1
+MJPYTHON_BIN="$(command -v mjpython || true)"
+if [ -z "$MJPYTHON_BIN" ]; then
+    echo
+    echo "WARNING: mjpython was not found after installing MuJoCo."
+    echo "GhostGUI is installed, but Simulation is unavailable until mjpython is"
+    echo "available in this native Python environment."
+else
+    MJPYTHON_ARCH="$("$MJPYTHON_BIN" -c 'import platform; print(platform.machine())')"
+    if [ "$MJPYTHON_ARCH" != "$NATIVE_ARCH" ]; then
+        echo "mjpython is $MJPYTHON_ARCH, but this Mac requires $NATIVE_ARCH."
+        echo "Remove .venv and recreate it with a native Python."
+        exit 1
+    fi
 fi
 
 echo
@@ -114,8 +115,12 @@ echo "Run it with:"
 echo "  source .venv/bin/activate"
 echo "  ghostgui"
 echo
-echo "MuJoCo passive viewer launcher:"
-echo "  $(command -v mjpython)"
+if [ -n "$MJPYTHON_BIN" ]; then
+    echo "MuJoCo passive viewer launcher:"
+    echo "  $MJPYTHON_BIN"
+else
+    echo "Simulation: unavailable (mjpython was not found)"
+fi
 echo
 echo "Or use:"
 echo "  bash scripts/run_macos.sh"

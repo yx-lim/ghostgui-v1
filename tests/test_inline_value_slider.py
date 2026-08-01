@@ -15,6 +15,25 @@ from gui.widgets.joint_controls import IKInfluenceControl, JointControl
 from gui.theme import DARK_THEME, LIGHT_THEME
 
 
+class WheelEventStub:
+    def __init__(self, *, angle_y=0, pixel_y=0):
+        self._angle_delta = QPoint(0, angle_y)
+        self._pixel_delta = QPoint(0, pixel_y)
+        self.accepted = False
+
+    def angleDelta(self):
+        return self._angle_delta
+
+    def pixelDelta(self):
+        return self._pixel_delta
+
+    def accept(self):
+        self.accepted = True
+
+    def ignore(self):
+        self.accepted = False
+
+
 class InlineValueSliderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -61,6 +80,28 @@ class InlineValueSliderTests(unittest.TestCase):
         self.assertAlmostEqual(slider.logical_value(), 0.1, places=3)
         QTest.keyClick(slider, Qt.Key.Key_PageUp)
         self.assertAlmostEqual(slider.logical_value(), 1.0, places=3)
+
+    def test_wheel_accumulates_partial_angle_deltas_to_one_notch(self):
+        slider = self.make_slider()
+
+        first = WheelEventStub(angle_y=60)
+        second = WheelEventStub(angle_y=60)
+        slider.wheelEvent(first)
+        self.assertAlmostEqual(slider.logical_value(), 0.0, places=3)
+        slider.wheelEvent(second)
+
+        self.assertAlmostEqual(slider.logical_value(), 0.1, places=3)
+        self.assertTrue(first.accepted)
+        self.assertTrue(second.accepted)
+
+    def test_wheel_uses_accumulated_pixel_deltas_for_trackpads(self):
+        slider = self.make_slider()
+
+        slider.wheelEvent(WheelEventStub(pixel_y=-7))
+        self.assertAlmostEqual(slider.logical_value(), 0.0, places=3)
+        slider.wheelEvent(WheelEventStub(pixel_y=-8))
+
+        self.assertAlmostEqual(slider.logical_value(), -0.1, places=3)
         QTest.keyClick(slider, Qt.Key.Key_Home)
         self.assertAlmostEqual(slider.logical_value(), -1.0, places=3)
         QTest.keyClick(slider, Qt.Key.Key_End)

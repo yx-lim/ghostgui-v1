@@ -64,6 +64,8 @@ class ArchitectureGuardrailTests(unittest.TestCase):
                     content = (
                         "[console_scripts]\n"
                         "ghostgui = application.launcher:main\n"
+                        "[gui_scripts]\n"
+                        "ghostgui-gui = application.launcher:main\n"
                         if name.endswith("entry_points.txt")
                         else ""
                     )
@@ -86,6 +88,8 @@ class ArchitectureGuardrailTests(unittest.TestCase):
                     content = (
                         "[console_scripts]\n"
                         "ghostgui = application.launcher:main\n"
+                        "[gui_scripts]\n"
+                        "ghostgui-gui = application.launcher:main\n"
                         if name.endswith("entry_points.txt")
                         else ""
                     )
@@ -98,6 +102,62 @@ class ArchitectureGuardrailTests(unittest.TestCase):
 
         self.assertTrue(any("runtime resources" in error for error in errors))
 
+    def test_wheel_validator_requires_gui_entry_point(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wheel_path = Path(directory) / "ghostgui.whl"
+            names = set(wheel_check.REQUIRED_MODULES)
+            names.update(
+                f"ghostgui-0.1.0{suffix}"
+                for suffix in wheel_check.REQUIRED_METADATA_SUFFIXES
+            )
+            with zipfile.ZipFile(wheel_path, "w") as archive:
+                for name in names:
+                    content = (
+                        "[console_scripts]\n"
+                        "ghostgui = application.launcher:main\n"
+                        if name.endswith("entry_points.txt")
+                        else ""
+                    )
+                    archive.writestr(name, content)
+
+            errors = wheel_check.validate_wheel(wheel_path)
+
+        self.assertTrue(any("GUI entry point" in error for error in errors))
+
+    def test_wheel_validator_rejects_swapped_entry_point_groups(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wheel_path = Path(directory) / "ghostgui.whl"
+            names = set(wheel_check.REQUIRED_MODULES)
+            names.update(
+                f"ghostgui-0.1.0{suffix}"
+                for suffix in wheel_check.REQUIRED_METADATA_SUFFIXES
+            )
+            with zipfile.ZipFile(wheel_path, "w") as archive:
+                for name in names:
+                    content = (
+                        "[console_scripts]\n"
+                        "ghostgui-gui = application.launcher:main\n"
+                        "[gui_scripts]\n"
+                        "ghostgui = application.launcher:main\n"
+                        if name.endswith("entry_points.txt")
+                        else ""
+                    )
+                    archive.writestr(name, content)
+
+            errors = wheel_check.validate_wheel(wheel_path)
+
+        self.assertTrue(any("console entry point" in error for error in errors))
+        self.assertTrue(any("GUI entry point" in error for error in errors))
+
+    def test_launcher_configures_opengl_before_qapplication(self):
+        source = (PROJECT_ROOT / "application" / "launcher.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertLess(
+            source.index("configure_default_surface_format()"),
+            source.index("QApplication(["),
+        )
+
     def test_ci_runs_compatibility_release_and_visual_gates(self):
         workflow = (
             PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
@@ -105,6 +165,8 @@ class ArchitectureGuardrailTests(unittest.TestCase):
 
         for required in (
             'python-version: ["3.10", "3.13"]',
+            "macos-14",
+            "windows-2022",
             "scripts/run_test_suite.py",
             "scripts/check_architecture.py",
             "scripts/check_docs.py",
@@ -113,6 +175,7 @@ class ArchitectureGuardrailTests(unittest.TestCase):
             "scripts/smoke_installed_package.py",
             "xvfb-run",
             "tests.test_visual_smoke",
+            "QT_SCALE_FACTOR: \"2\"",
         ):
             self.assertIn(required, workflow)
 

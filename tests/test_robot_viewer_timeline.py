@@ -33,7 +33,7 @@ from application.project_manager import (
     ghostgui_projects_dir,
     load_recent_projects,
 )
-from application.paths import mujoco_playback_cache_path
+from application.paths import mujoco_playback_cache_path, writable_data_root
 from gui.main_window import (
     INITIAL_RENDER_PROGRESS_DELAY_MS,
     LEFT_SIDEBAR_MIN_WIDTH,
@@ -2241,10 +2241,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
             self.window.current_project = None
 
-    def test_default_project_root_is_repo_projects_folder(self):
+    def test_default_project_root_uses_writable_data_contract(self):
         os.environ.pop("GHOSTGUI_PROJECTS_DIR", None)
 
-        expected_root = Path(__file__).resolve().parents[1] / "projects"
+        expected_root = writable_data_root() / "projects"
         self.assertEqual(ghostgui_projects_dir(), expected_root)
 
     def test_save_without_project_uses_default_root_without_resetting_workspace(self):
@@ -2844,7 +2844,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             with self.subTest(label=label):
                 self.assertEqual(slider.label.text(), label)
                 self.assertNotIn(":", slider.label.text())
-                self.assertLessEqual(slider.label.maximumWidth(), 86)
+                self.assertGreater(slider.label.maximumWidth(), 1000000)
                 self.assertFalse(slider.slider.editor.isVisible())
                 self.assertGreaterEqual(slider.slider.minimumHeight(), 24)
 

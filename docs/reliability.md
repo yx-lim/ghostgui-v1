@@ -54,6 +54,10 @@ Headless CI validates logic and widget contracts. Rendering changes also need
 the manual checks in [Testing](testing.md) until deterministic visual fixtures
 are available.
 
+The compatibility matrix runs Linux, macOS, and Windows contracts concurrently.
+Linux additionally covers the supported Python range, installed-wheel startup,
+200 percent UI scaling, and an Xvfb/Mesa OpenGL context.
+
 ## Implementation Progress
 
 The reliability roadmap is delivered in compatibility-preserving phases:

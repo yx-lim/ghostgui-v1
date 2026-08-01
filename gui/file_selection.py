@@ -1,32 +1,45 @@
-"""Non-blocking launcher for GhostGUI's synchronous file-selector process."""
+"""Lifecycle-managed, non-blocking file selection for GUI workflows."""
 
 from __future__ import annotations
 
-import json
-import sys
-from pathlib import Path
+from collections.abc import Callable
 
-from PySide6.QtCore import QCoreApplication, QObject, QProcess, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QObject, Qt, QTimer, Signal
+from PySide6.QtWidgets import QFileDialog, QWidget
 
 
 class SynchronousFileSelectionStage(QObject):
-    """Run a blocking Qt file picker outside the main GUI process."""
+    """Own one parented, window-modal ``QFileDialog`` at a time.
+
+    The historical class name is retained for callers, but selection no longer
+    launches a detached helper process.  ``QFileDialog.open()`` keeps the main
+    event loop responsive and allows Qt to use the platform's native picker.
+    """
 
     active_changed = Signal(bool)
 
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        parent=None,
+        *,
+        context_provider: Callable[[], object] | None = None,
+    ):
         super().__init__(parent)
-        self._process = None
+        self._dialog = None
         self._selected_callback = None
         self._failed_callback = None
         self._cancelled_callback = None
+        self._context_provider = context_provider
+        self._selection_context = None
         self._callback_pending = False
+        self._request_id = 0
+        self._active = False
         app = QCoreApplication.instance()
         if app is not None:
             app.aboutToQuit.connect(self.cancel)
 
     def is_active(self):
-        return self._process is not None or self._callback_pending
+        return self._dialog is not None or self._callback_pending
 
     def select_file(
         self,
@@ -43,129 +56,137 @@ class SynchronousFileSelectionStage(QObject):
         if self.is_active():
             return False
 
-        arguments = [
-            "-m",
-            "application.file_dialog_helper",
-            "--mode",
-            mode,
-            "--title",
-            title,
-            "--directory",
-            str(directory),
-            "--name-filter",
-            name_filter,
-        ]
+        parent = self.parent()
+        dialog_parent = parent if isinstance(parent, QWidget) else None
+        dialog = QFileDialog(dialog_parent)
+        dialog.setWindowTitle(str(title))
+        dialog.setDirectory(str(directory))
+        dialog.setNameFilter(str(name_filter))
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+
+        if mode == "open":
+            dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+            dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        elif mode == "save":
+            dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+            dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        elif mode == "directory":
+            dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+            dialog.setFileMode(QFileDialog.FileMode.Directory)
+            dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+        else:
+            dialog.deleteLater()
+            message = f"Unsupported file-selector mode: {mode}"
+            if failed is not None:
+                QTimer.singleShot(0, lambda: failed(message))
+            return False
+
         if filename:
-            arguments.extend(("--filename", filename))
+            dialog.selectFile(str(filename))
 
-        process = QProcess(self)
-        process.setProgram(sys.executable)
-        process.setArguments(arguments)
-        process.setWorkingDirectory(str(Path(__file__).resolve().parents[1]))
-        process.finished.connect(
-            lambda exit_code, exit_status, candidate=process: (
-                self._on_finished(candidate, exit_code, exit_status)
-            )
-        )
-        process.errorOccurred.connect(
-            lambda error, candidate=process: (
-                self._on_process_error(candidate, error)
-            )
-        )
-
-        self._process = process
+        self._request_id += 1
+        request_id = self._request_id
+        self._dialog = dialog
         self._selected_callback = selected
         self._failed_callback = failed
         self._cancelled_callback = cancelled
-        self.active_changed.emit(True)
-        process.start()
+        self._selection_context = self._current_context()
+        dialog.accepted.connect(
+            lambda candidate=dialog, token=request_id: self._on_accepted(
+                candidate, token
+            )
+        )
+        dialog.rejected.connect(
+            lambda candidate=dialog, token=request_id: self._on_rejected(
+                candidate, token
+            )
+        )
+        self._update_active_signal()
+        dialog.open()
         return True
 
     def cancel(self):
-        process = self._process
-        self._selected_callback = None
-        self._failed_callback = None
-        self._cancelled_callback = None
+        dialog = self._dialog
+        self._request_id += 1
+        self._dialog = None
+        self._clear_callbacks()
         self._callback_pending = False
-        if process is None:
-            self.active_changed.emit(False)
+        if dialog is not None:
+            dialog.close()
+            dialog.deleteLater()
+        self._update_active_signal()
+
+    def _on_accepted(self, dialog, request_id):
+        if dialog is not self._dialog or request_id != self._request_id:
             return
-        self._process = None
-        process.finished.connect(process.deleteLater)
-        # This process owns only a picker. Kill it immediately during app
-        # shutdown so a stuck desktop portal cannot outlive or delay GhostGUI.
-        process.kill()
-        process.waitForFinished(1000)
-        self.active_changed.emit(False)
-
-    def _on_finished(self, process, exit_code, _exit_status):
-        if process is not self._process:
-            return
-
-        stdout = bytes(process.readAllStandardOutput()).decode(
-            "utf-8", errors="replace"
-        )
-        stderr = bytes(process.readAllStandardError()).decode(
-            "utf-8", errors="replace"
-        ).strip()
-        process.deleteLater()
-        self._process = None
-
-        selected_path = ""
-        error_message = ""
-        try:
-            payload = json.loads(stdout.strip() or "{}")
-            selected_path = str(payload.get("selected") or "")
-            error_message = str(payload.get("error") or "")
-        except (TypeError, ValueError) as exc:
-            error_message = f"Invalid file-selector response: {exc}"
-
-        if exit_code != 0 and not error_message:
-            error_message = stderr or f"File selector exited with code {exit_code}."
-
+        paths = dialog.selectedFiles()
+        selected_path = str(paths[0]) if paths else ""
         selected_callback = self._selected_callback
-        failed_callback = self._failed_callback
         cancelled_callback = self._cancelled_callback
-        self._selected_callback = None
-        self._failed_callback = None
-        self._cancelled_callback = None
+        context_is_current = self._context_is_current()
+        self._dialog = None
+        self._clear_callbacks()
+        dialog.deleteLater()
 
-        if selected_path and selected_callback is not None:
+        if selected_path and selected_callback is not None and context_is_current:
             self._callback_pending = True
             QTimer.singleShot(
                 0,
                 lambda: self._deliver_selection(
-                    selected_callback, selected_path
+                    request_id,
+                    selected_callback,
+                    selected_path,
                 ),
             )
             return
-        if error_message and failed_callback is not None:
-            failed_callback(error_message)
-        elif not error_message and cancelled_callback is not None:
+
+        self._update_active_signal()
+        if cancelled_callback is not None:
             cancelled_callback()
-        self.active_changed.emit(False)
 
-    def _on_process_error(self, process, _error):
-        if process is not self._process:
+    def _on_rejected(self, dialog, request_id):
+        if dialog is not self._dialog or request_id != self._request_id:
             return
-        if process.state() != QProcess.ProcessState.NotRunning:
-            return
-        message = process.errorString() or "Could not start the file selector."
-        failed_callback = self._failed_callback
-        self._process = None
-        self._selected_callback = None
-        self._failed_callback = None
-        self._cancelled_callback = None
-        process.deleteLater()
-        if failed_callback is not None:
-            failed_callback(message)
-        self.active_changed.emit(False)
+        cancelled_callback = self._cancelled_callback
+        self._dialog = None
+        self._clear_callbacks()
+        dialog.deleteLater()
+        self._update_active_signal()
+        if cancelled_callback is not None:
+            cancelled_callback()
 
-    def _deliver_selection(self, callback, path):
-        if not self._callback_pending:
+    def _deliver_selection(self, request_id, callback, path):
+        if not self._callback_pending or request_id != self._request_id:
             return
         try:
             callback(path)
         finally:
             self._callback_pending = False
-            self.active_changed.emit(False)
+            self._update_active_signal()
+
+    def _current_context(self):
+        if self._context_provider is None:
+            return None
+        return self._context_provider()
+
+    def _context_is_current(self):
+        if self._context_provider is None:
+            return True
+        try:
+            return self._selection_context == self._context_provider()
+        except RuntimeError:
+            # A deleted Qt owner is a stale selection context.
+            return False
+
+    def _clear_callbacks(self):
+        self._selected_callback = None
+        self._failed_callback = None
+        self._cancelled_callback = None
+        self._selection_context = None
+
+    def _update_active_signal(self):
+        active = self.is_active()
+        if active == self._active:
+            return
+        self._active = active
+        self.active_changed.emit(active)

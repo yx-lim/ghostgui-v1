@@ -1,7 +1,13 @@
 """Viewer-local render progress overlay."""
 
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtWidgets import QLabel, QProgressBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QLabel,
+    QProgressBar,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class RenderProgressOverlay(QWidget):
@@ -19,7 +25,12 @@ class RenderProgressOverlay(QWidget):
 
         self.card = QWidget(self)
         self.card.setObjectName("renderProgressCard")
-        self.card.setFixedWidth(420)
+        self.card.setMaximumWidth(420)
+        self.card.setMinimumWidth(240)
+        self.card.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Fixed,
+        )
 
         card_layout = QVBoxLayout(self.card)
         card_layout.setContentsMargins(30, 24, 30, 24)
@@ -36,8 +47,12 @@ class RenderProgressOverlay(QWidget):
         self.detail_label.setWordWrap(True)
 
         self.progress_bar = QProgressBar()
-        self.progress_bar.setMinimumWidth(300)
+        self.progress_bar.setMinimumWidth(180)
         self.progress_bar.setMaximumWidth(360)
+        self.progress_bar.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
 
         card_layout.addWidget(self.title_label)
         card_layout.addWidget(self.detail_label)
@@ -45,7 +60,6 @@ class RenderProgressOverlay(QWidget):
             self.progress_bar,
             alignment=Qt.AlignmentFlag.AlignHCenter,
         )
-        self.card.setFixedHeight(self.card.sizeHint().height())
         layout.addStretch(1)
         layout.addWidget(self.card, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addStretch(1)

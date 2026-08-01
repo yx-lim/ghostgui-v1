@@ -23,6 +23,16 @@ Installed resources normally resolve to the Python installation's
 resources. Explicit environment overrides are useful for CI, containers, and
 portable deployments.
 
+Installed builds create projects below the platform user-data directory:
+
+- macOS: `~/Library/Application Support/GhostGUI/projects`;
+- Windows: `%LOCALAPPDATA%\GhostGUI\projects`;
+- Linux: `$XDG_DATA_HOME/ghostgui/projects`, or
+  `~/.local/share/ghostgui/projects` when XDG data is unset.
+
+Source checkouts continue to use the checkout's `projects/` folder unless an
+environment override is present.
+
 Project folders and imported model sources are durable user data. Prepared URDF
 models and playback CSV files are disposable caches.
 
@@ -36,8 +46,7 @@ ghostgui --model g1
 ```
 
 Confirm that G1 loads, the 3D view renders, the **Status** summary reports the
-selected backend, and the process exits without a remaining MuJoCo viewer or
-file-selector process.
+selected backend, and the process exits without a remaining MuJoCo viewer.
 
 For a release artifact, run the installed-package smoke procedure in
 [Testing](testing.md#package-smoke-test). It verifies the console entry point,
@@ -111,7 +120,8 @@ gate does and also captures the composed application window.
 
 ## Shutdown Expectations
 
-Normal shutdown stops autosave, cancels selectors and serialized work, requests
+Normal shutdown stops autosave, closes any active file dialog, cancels
+serialized work, requests
 model-loader interruption, closes every cached editor session, releases OpenGL
 resources, terminates the external MuJoCo process, and removes event
 subscriptions.

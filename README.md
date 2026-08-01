@@ -42,7 +42,8 @@ ghostgui
 ghostgui --model go2
 ```
 
-macOS and Windows scripts are available but remain experimental. See the
+Automated contracts run on Linux, macOS, and Windows. Native macOS and Windows
+GUI releases still require a final hardware check; see the
 [installation guide](docs/install.md) for platform-specific instructions and
 troubleshooting.
 
@@ -84,9 +85,10 @@ See [Models](docs/models.md) for model loading, asset, cache, and import details
 
 ## Project Status
 
-GhostGUI is at version `0.1.0`. Linux/Ubuntu is the primary tested platform;
-macOS and Windows support is experimental. The transform gizmo is currently
-world-aligned, and imported models may require manual mesh-path selection.
+GhostGUI is at version `0.1.0`. Linux/Ubuntu is the primary development
+platform, with automated macOS and Windows contracts. The transform gizmo is
+currently world-aligned, and imported models may require manual mesh-path
+selection.
 
 For current constraints and workarounds, see
 [Troubleshooting](docs/troubleshooting.md).

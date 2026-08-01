@@ -22,6 +22,7 @@ in this repository.
   tools, panels, and logical frame-pose services.
 - Transaction recovery, cancellation, shutdown, architecture, packaging, and
   visual regression tests.
+- Linux, macOS, Windows, high-DPI, and installed-viewer release contracts.
 
 ### Changed
 
@@ -38,6 +39,9 @@ in this repository.
 - Added cancellable background work, deterministic session/process teardown,
   render coalescing, and context-bound OpenGL cleanup.
 - Packaged model, mesh, theme, and help resources for installed wheels.
+- Made dense controls font-aware, file dialogs window-modal, shortcuts native,
+  and window geometry responsive to the available screen.
+- Hardened the compatibility OpenGL context and high-DPI scene presentation.
 
 ### Fixed
 
@@ -47,3 +51,7 @@ in this repository.
   stored.
 - Corrected playback timing, logical-target edit restoration, and Go2 support
   contact acceptance defects from the documented baseline.
+- Corrected installed project storage and Simulation launching so neither
+  depends on writable source-package or repository-only script paths.
+- Corrected partial wheel scrolling so trackpad deltas accumulate before a
+  logical value step is applied.

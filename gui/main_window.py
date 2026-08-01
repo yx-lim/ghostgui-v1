@@ -14,10 +14,11 @@ Updated project flow:
 
 from dataclasses import replace
 from pathlib import Path
+import sys
 
 import numpy as np
 
-from PySide6.QtCore import QEvent, QSettings, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QRect, QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -98,6 +99,11 @@ UI_SETTINGS_FILENAME = "ui.ini"
 INITIAL_RENDER_PROGRESS_DELAY_MS = 500
 PROJECT_AUTOSAVE_INTERVAL_MS = 30000
 MAX_HISTORY_DEPTH = 100
+CANVAS_MINIMUM_SIZE = QSize(320, 240)
+DEFAULT_WINDOW_SIZE = QSize(1200, 700)
+WINDOW_SCREEN_MARGIN = 24
+NARROW_WINDOW_WIDTH = 950
+COMPACT_WINDOW_WIDTH = 680
 
 
 class RobotGuiMainWindow(QMainWindow):
@@ -121,9 +127,13 @@ class RobotGuiMainWindow(QMainWindow):
         super().__init__()
         app = QApplication.instance()
         if app is not None:
+            app.setApplicationName("GhostGUI")
+            app.setApplicationDisplayName("GhostGUI")
+            app.setOrganizationName("GhostGUI")
+            app.setDesktopFileName("ghostgui")
             ensure_application_theme(app)
 
-        self.setWindowTitle("GhostGui")
+        self.setWindowTitle("GhostGUI")
         self.ui_settings = QSettings(
             str(ghostgui_config_dir() / UI_SETTINGS_FILENAME),
             QSettings.Format.IniFormat,
@@ -191,7 +201,10 @@ class RobotGuiMainWindow(QMainWindow):
             self.register_model_info(info)
         self.import_mesh_folder = None
         self.background_jobs = SerializedBackgroundJobs(self)
-        self.file_selection_stage = SynchronousFileSelectionStage(self)
+        self.file_selection_stage = SynchronousFileSelectionStage(
+            self,
+            context_provider=self.file_selection_context,
+        )
         # Compatibility name retained for existing callers and tests.
         self.model_file_selection_stage = self.file_selection_stage
         self.model_key = model_key
@@ -254,6 +267,7 @@ class RobotGuiMainWindow(QMainWindow):
             background_jobs=self.background_jobs,
             file_selection_stage=self.file_selection_stage,
         )
+        self.configure_viewer_sizing(self.viewer_3d)
         self.document.attach_qpos_timeline(self.viewer_3d.state_timeline)
         self.viewer_3d_mujoco = Mujoco3DViewerPanel(self.robot_model_3d)
         self.viewer_3d_mujoco.set_trajectory_regenerator(
@@ -393,6 +407,95 @@ class RobotGuiMainWindow(QMainWindow):
         self.update_editor_context()
         self.refresh_display()
         self._refresh_history_baseline()
+        self.apply_startup_geometry()
+
+    def file_selection_context(self):
+        """Return the model/project identity a picker result may mutate."""
+        project = getattr(self, "current_project", None)
+        project_root = str(project.root_dir) if project is not None else None
+        document = getattr(self, "document", None)
+        return (
+            getattr(self, "model_key", None),
+            getattr(document, "document_id", None),
+            project_root,
+        )
+
+    def configure_viewer_sizing(self, viewer):
+        """Keep the OpenGL view useful without imposing a desktop-sized floor."""
+        canvas = getattr(viewer, "canvas", None)
+        if canvas is not None:
+            canvas.setMinimumSize(CANVAS_MINIMUM_SIZE)
+
+    @staticmethod
+    def fitted_window_geometry(rect, available, margin=WINDOW_SCREEN_MARGIN):
+        """Clamp a saved top-level geometry to one screen's work area."""
+        available = QRect(available)
+        if available.isEmpty():
+            return QRect(rect)
+        margin = max(0, int(margin))
+        inset = available.adjusted(margin, margin, -margin, -margin)
+        if inset.width() < 1 or inset.height() < 1:
+            inset = available
+        rect = QRect(rect)
+        width = min(max(1, rect.width()), inset.width())
+        height = min(max(1, rect.height()), inset.height())
+        left = min(max(rect.left(), inset.left()), inset.right() - width + 1)
+        top = min(max(rect.top(), inset.top()), inset.bottom() - height + 1)
+        return QRect(left, top, width, height)
+
+    def _screen_for_geometry(self, rect):
+        screens = QApplication.screens()
+        if not screens:
+            return None
+        intersecting = max(
+            screens,
+            key=lambda screen: (
+                rect.intersected(screen.availableGeometry()).width()
+                * rect.intersected(screen.availableGeometry()).height()
+            ),
+        )
+        intersection = rect.intersected(intersecting.availableGeometry())
+        if not intersection.isEmpty():
+            return intersecting
+        return QApplication.primaryScreen() or screens[0]
+
+    def apply_startup_geometry(self, default_size=DEFAULT_WINDOW_SIZE):
+        """Restore the window once and fit it to the available desktop."""
+        if getattr(self, "_startup_geometry_applied", False):
+            return
+        self._startup_geometry_applied = True
+        restored = False
+        saved_geometry = self.ui_settings.value("window/geometry")
+        if saved_geometry is not None:
+            try:
+                restored = self.restoreGeometry(saved_geometry)
+            except (TypeError, ValueError):
+                restored = False
+
+        screen = self._screen_for_geometry(self.geometry())
+        if screen is None:
+            if not restored:
+                self.resize(default_size)
+            return
+        available = screen.availableGeometry()
+        if restored:
+            requested = self.geometry()
+        else:
+            size = QSize(default_size).boundedTo(available.size())
+            requested = QRect(0, 0, size.width(), size.height())
+            requested.moveCenter(available.center())
+        self.setGeometry(self.fitted_window_geometry(requested, available))
+        self._adapt_sidebars_for_width(self.width())
+
+    def _adapt_sidebars_for_width(self, width):
+        """Keep a usable center view on narrow or split-screen desktops."""
+        if QApplication.platformName() in {"offscreen", "minimal"}:
+            return
+        width = max(1, int(width))
+        if width < NARROW_WINDOW_WIDTH and not self._right_sidebar_collapsed:
+            self.set_right_sidebar_visible(False)
+        if width < COMPACT_WINDOW_WIDTH and not self._left_sidebar_collapsed:
+            self.set_left_sidebar_visible(False)
 
     def _on_document_dirty_changed(self, event):
         if event.document_id == self.document.document_id:
@@ -419,7 +522,7 @@ class RobotGuiMainWindow(QMainWindow):
         menu_bar = self.menuBar()
         menu_bar.clear()
         menu_bar.setObjectName("appMenuBar")
-        menu_bar.setNativeMenuBar(False)
+        menu_bar.setNativeMenuBar(sys.platform == "darwin")
 
         self.file_menu = menu_bar.addMenu("&File")
         self.new_project_action = QAction("&New Project…", self)
@@ -720,14 +823,24 @@ class RobotGuiMainWindow(QMainWindow):
         )
 
         toolbar.addSeparator()
+        undo_shortcuts = QKeySequence.keyBindings(QKeySequence.StandardKey.Undo)
+        redo_shortcuts = QKeySequence.keyBindings(QKeySequence.StandardKey.Redo)
+        undo_shortcut = undo_shortcuts[0]
+        redo_shortcut = redo_shortcuts[0]
+        undo_shortcut_text = undo_shortcut.toString(
+            QKeySequence.SequenceFormat.NativeText
+        )
+        redo_shortcut_text = redo_shortcut.toString(
+            QKeySequence.SequenceFormat.NativeText
+        )
         self.undo_action = self._toolbar_action(
             toolbar,
             "Undo",
             "undo",
             "undoToolbarButton",
-            "Undo the last edit (Ctrl+Z).",
+            f"Undo the last edit ({undo_shortcut_text}).",
         )
-        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.undo_action.setShortcuts(undo_shortcuts)
         self.undo_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         self.undo_action.triggered.connect(self.undo_last_action)
         self.redo_action = self._toolbar_action(
@@ -735,9 +848,9 @@ class RobotGuiMainWindow(QMainWindow):
             "Redo",
             "redo",
             "redoToolbarButton",
-            "Redo the last undone edit (Ctrl+Shift+Z).",
+            f"Redo the last undone edit ({redo_shortcut_text}).",
         )
-        self.redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        self.redo_action.setShortcuts(redo_shortcuts)
         self.redo_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         self.redo_action.triggered.connect(self.redo_last_action)
         return toolbar
@@ -961,6 +1074,7 @@ class RobotGuiMainWindow(QMainWindow):
             "right_sidebar/collapsed",
             self._right_sidebar_collapsed,
         )
+        self.ui_settings.setValue("window/geometry", self.saveGeometry())
         self.ui_settings.sync()
 
     def refresh_robot_menu(self):
@@ -2473,6 +2587,7 @@ class RobotGuiMainWindow(QMainWindow):
             background_jobs=self.background_jobs,
             file_selection_stage=self.file_selection_stage,
         )
+        self.configure_viewer_sizing(viewer_3d)
         self.connect_model_viewer_signals(viewer_3d)
         self.viewer_3d_stack.addWidget(viewer_3d)
         session = model_sessions.RobotModelSession(

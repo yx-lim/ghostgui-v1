@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from .inline_value_slider import InlineValueSlider
+from .compact import compact_spinbox
 
 
 class LabeledSlider(QWidget):
@@ -38,13 +39,11 @@ class LabeledSlider(QWidget):
         self.input.setRange(min_value / self.scale, max_value / self.scale)
         self.input.setSingleStep(1 / self.scale)
         self.input.setValue(initial_value / self.scale)
-        self.input.setMinimumWidth(52)
-        self.input.setMaximumWidth(76)
+        compact_spinbox(self.input, width=76)
         self.slider.valueChanged.connect(self.on_slider_changed)
         self.input.valueChanged.connect(self.on_input_changed)
         self.label.setText(self.name)
         self.label.setMinimumWidth(64)
-        self.label.setMaximumWidth(86)
         layout.addWidget(self.label)
         layout.addWidget(self.slider, stretch=1)
         layout.addWidget(self.input)
@@ -112,7 +111,6 @@ class InlineLabeledSlider(QWidget):
         layout.setSpacing(6)
         self.label = QLabel(name)
         self.label.setMinimumWidth(64)
-        self.label.setMaximumWidth(86)
         self.slider = InlineValueSlider(
             min_value,
             max_value,

@@ -21,7 +21,8 @@ class TutorialCard(QWidget):
         super().__init__(parent)
         self.setObjectName("tutorialCard")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setFixedWidth(360)
+        self.setMaximumWidth(360)
+        self.setMinimumWidth(220)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)

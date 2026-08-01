@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from importlib import metadata
+from importlib import metadata, util
 import os
 from pathlib import Path
 import sys
@@ -28,15 +28,38 @@ def main(argv=None):
     os.environ.pop("GHOSTGUI_RESOURCE_DIR", None)
 
     distribution = metadata.distribution("ghostgui")
+    environment_prefix = Path(sys.prefix).resolve()
+    distribution_root = Path(distribution.locate_file("")).resolve()
+    _require(
+        distribution_root.is_relative_to(environment_prefix),
+        f"ghostgui distribution is outside the smoke environment: {distribution_root}",
+    )
     entry_points = {
-        entry.name: entry.value
+        (entry.group, entry.name): entry.value
         for entry in distribution.entry_points
-        if entry.group == "console_scripts"
+        if entry.group in {"console_scripts", "gui_scripts"}
     }
     _require(
-        entry_points.get("ghostgui") == "application.launcher:main",
+        entry_points.get(("console_scripts", "ghostgui"))
+        == "application.launcher:main",
         "installed console entry point is missing or incorrect",
     )
+    _require(
+        entry_points.get(("gui_scripts", "ghostgui-gui"))
+        == "application.launcher:main",
+        "installed GUI entry point is missing or incorrect",
+    )
+    _require(
+        util.find_spec("application.mujoco_viewer_process") is not None,
+        "installed MuJoCo viewer process module is missing",
+    )
+    for package_name in ("application", "core", "gui"):
+        spec = util.find_spec(package_name)
+        origin = Path(spec.origin).resolve() if spec and spec.origin else None
+        _require(
+            origin is not None and origin.is_relative_to(environment_prefix),
+            f"{package_name} imported outside the smoke environment: {origin}",
+        )
 
     from core.models import MuJoCoRobotAdapter, ROBOT_MODELS
     from core.resources import (
@@ -54,6 +77,7 @@ def main(argv=None):
     )
     required = (
         "docs/user_guide.md",
+        "gui/assets/app/ghostlogo.svg",
         "gui/assets/theme/play-dark.svg",
         "gui/assets/theme/play-light.svg",
     )
@@ -79,11 +103,16 @@ def main(argv=None):
             runtime = Path(directory)
             os.environ["GHOSTGUI_CONFIG_DIR"] = str(runtime / "config")
             os.environ["GHOSTGUI_CACHE_DIR"] = str(runtime / "cache")
-            os.environ["GHOSTGUI_PROJECTS_DIR"] = str(runtime / "projects")
+            os.environ.pop("GHOSTGUI_PROJECTS_DIR", None)
             os.environ["GHOSTGUI_USER_DATA_DIR"] = str(runtime / "data")
+            from application.project_manager import ghostgui_projects_dir
             from PySide6.QtWidgets import QApplication
             from gui.main_window import RobotGuiMainWindow
 
+            _require(
+                ghostgui_projects_dir() == runtime / "data" / "projects",
+                "installed projects do not default to writable user data",
+            )
             app = QApplication.instance() or QApplication([])
             window = RobotGuiMainWindow("g1")
             _require(window.robot_model_3d is not None, "GUI model is unavailable")

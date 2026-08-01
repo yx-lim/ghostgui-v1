@@ -10,6 +10,7 @@ sudo apt install -y \
     python3-venv \
     python3-pip \
     libgl1 \
+    libglu1-mesa \
     libegl1 \
     libxkbcommon-x11-0 \
     libxcb-cursor0 \

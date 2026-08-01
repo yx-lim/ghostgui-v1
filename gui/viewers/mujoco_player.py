@@ -15,6 +15,7 @@ import shutil
 import sys
 
 from application.paths import mujoco_playback_cache_path
+from core.resources import resource_path
 from PySide6.QtCore import QProcess, Qt
 from PySide6.QtWidgets import (
     QWidget,
@@ -28,6 +29,9 @@ from PySide6.QtWidgets import (
 )
 
 
+VIEWER_PROCESS_MODULE = "application.mujoco_viewer_process"
+
+
 class Mujoco3DViewerPanel(QWidget):
     def __init__(self, adapter=None):
         super().__init__()
@@ -36,12 +40,11 @@ class Mujoco3DViewerPanel(QWidget):
         self._trajectory_regenerator = None
         self._missing_trajectory_notice_shown = False
 
-        self.project_root = Path(__file__).resolve().parents[2]
-        self.viewer_script = self.project_root / "scripts" / "view_g1_mujoco.py"
+        self.viewer_module = VIEWER_PROCESS_MODULE
         self.adapter = adapter
         self.model_path = (
             adapter.runtime_model_path if adapter is not None
-            else self.project_root / "models" / "g1_29dof.xml"
+            else resource_path("models/g1_29dof.xml")
         )
         self.trajectory_csv_path = mujoco_playback_cache_path()
         self.trajectory_times = []
@@ -315,15 +318,15 @@ class Mujoco3DViewerPanel(QWidget):
             self.log_box.append(f"Model file not found: {self.model_path}")
             return
 
-        if not self.viewer_script.exists():
-            self.log_box.append(f"Viewer script not found: {self.viewer_script}")
-            return
-
         if self.process is not None:
             self.log_box.append("MuJoCo viewer is already running.")
             return
 
+        executable = self._viewer_python_executable()
+        if executable is None:
+            return
         trajectory_available = self._ensure_trajectory_file()
+
         self.process = QProcess(self)
 
         self.process.readyReadStandardOutput.connect(self.read_stdout)
@@ -332,13 +335,14 @@ class Mujoco3DViewerPanel(QWidget):
 
         self.log_box.append("Launching MuJoCo viewer...")
 
-        arguments = [str(self.viewer_script), "--model", str(self.model_path)]
+        arguments = [
+            "-m",
+            self.viewer_module,
+            "--model",
+            str(self.model_path),
+        ]
         if trajectory_available:
             arguments.extend(["--csv", str(self.trajectory_csv_path)])
-
-        executable = self._viewer_python_executable()
-        if executable is None:
-            return
 
         self.process.start(executable, arguments)
 
@@ -360,11 +364,11 @@ class Mujoco3DViewerPanel(QWidget):
                 return str(path)
 
         self.log_box.append(
-            "mjpython was not found. On macOS, MuJoCo launch_passive() must be "
-            "started with mjpython. Re-run bash scripts/install_macos.sh from a "
-            "native Python environment."
+            "Simulation is unavailable because mjpython was not found. On "
+            "macOS, MuJoCo launch_passive() must be started with mjpython. "
+            "Install mjpython in this native Python environment and restart "
+            "GhostGUI."
         )
-        self.process = None
         return None
 
     def close_viewer(self):

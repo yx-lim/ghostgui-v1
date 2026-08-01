@@ -33,6 +33,8 @@ class InlineValueSlider(QSlider):
     # Keep programmatic pose synchronization effectively lossless while still
     # using QSlider's integer storage. This remains well inside Qt's int range.
     _RAW_RESOLUTION = 100_000_000
+    _WHEEL_NOTCH_ANGLE = 120
+    _WHEEL_PIXEL_STEP = 15
 
     def __init__(
         self,
@@ -64,6 +66,8 @@ class InlineValueSlider(QSlider):
         self._dragging = False
         self._hovered = False
         self._closing_editor = False
+        self._wheel_angle_remainder = 0
+        self._wheel_pixel_remainder = 0
 
         super().setRange(0, self._RAW_RESOLUTION)
         self.setTracking(True)
@@ -313,12 +317,34 @@ class InlineValueSlider(QSlider):
         super().mouseDoubleClickEvent(event)
 
     def wheelEvent(self, event: QWheelEvent):
-        delta = event.angleDelta().y()
-        if not delta:
+        pixel_delta = event.pixelDelta().y()
+        angle_delta = event.angleDelta().y()
+        if pixel_delta:
+            self._wheel_pixel_remainder += pixel_delta
+            step_count = int(
+                self._wheel_pixel_remainder / self._WHEEL_PIXEL_STEP
+            )
+            if step_count:
+                self._wheel_pixel_remainder -= (
+                    step_count * self._WHEEL_PIXEL_STEP
+                )
+            self._wheel_angle_remainder = 0
+        elif angle_delta:
+            self._wheel_angle_remainder += angle_delta
+            step_count = int(
+                self._wheel_angle_remainder / self._WHEEL_NOTCH_ANGLE
+            )
+            if step_count:
+                self._wheel_angle_remainder -= (
+                    step_count * self._WHEEL_NOTCH_ANGLE
+                )
+            self._wheel_pixel_remainder = 0
+        else:
             event.ignore()
             return
-        self.step_logical_value(1 if delta > 0 else -1)
-        self.interaction_finished.emit()
+        if step_count:
+            self.step_logical_value(step_count)
+            self.interaction_finished.emit()
         event.accept()
 
     def enterEvent(self, event):

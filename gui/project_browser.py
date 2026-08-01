@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from .theme import current_theme
+from .window_geometry import resize_to_available_screen
 
 
 THUMBNAIL_SIZE = QSize(180, 104)
@@ -31,7 +32,7 @@ class ProjectBrowserDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Open GhostGUI Project")
         self.setObjectName("projectBrowserDialog")
-        self.resize(760, 520)
+        resize_to_available_screen(self, 760, 520)
         self.selected_project_path = None
         self.browse_requested = False
 
