@@ -18,6 +18,22 @@ from .assets import prepare_urdf_visual_meshes, resolve_mesh_path
 
 MODEL_CACHE_VERSION = 3
 HOME_GROUND_CLEARANCE = 0.002
+HOME_REPAIR_SAMPLE_COUNT = 512
+
+
+class HomePoseCollisionError(ValueError):
+    """Raised when a model cannot provide a collision-free editor home pose."""
+
+
+class _StaticCollisionState:
+    """Minimal collision-check state for valid MJCF models with no joints."""
+
+    def __init__(self, model):
+        self.mj_model = model
+        self.mj_data = mujoco.MjData(model)
+
+    def forward_kinematics(self):
+        mujoco.mj_forward(self.mj_model, self.mj_data)
 
 
 class MuJoCoRobotAdapter(RobotModel3D):
@@ -43,16 +59,13 @@ class MuJoCoRobotAdapter(RobotModel3D):
         self.asset_root = self.model_path.parent
         self.package_map = dict(self.info.package_map)
         self.load_warning = None
+        self.home_pose_was_repaired = False
         self.runtime_model_path = self._prepare_model_path(self.model_path)
         super().__init__(self.runtime_model_path)
         # Public paths describe the selected source, not an implementation cache.
         self.model_path = Path(model_path or self.info.model_path).resolve()
         self._apply_registered_home()
         self._ground_home_qpos()
-        self.default_qpos = self.home_qpos.copy()
-        self.mj_data = mujoco.MjData(self.mj_model)
-        self.mj_data.qpos[:] = self.home_qpos
-        mujoco.mj_forward(self.mj_model, self.mj_data)
         self.joint_names = self.get_joint_names()
         self.actuated_joints = list(self.joint_names)
         self.joint_limits = {
@@ -67,6 +80,11 @@ class MuJoCoRobotAdapter(RobotModel3D):
         }
         self.trajectory_frames = list(self.logical_frame_bindings)
         self.kinematic_tree = self._build_kinematic_tree()
+        self._ensure_collision_free_home()
+        self.default_qpos = self.home_qpos.copy()
+        self.mj_data = mujoco.MjData(self.mj_model)
+        self.mj_data.qpos[:] = self.home_qpos
+        mujoco.mj_forward(self.mj_model, self.mj_data)
 
     @classmethod
     def load_model(cls, model_path, model=None):
@@ -311,6 +329,196 @@ class MuJoCoRobotAdapter(RobotModel3D):
             joint = self.joints.get(name)
             if joint is not None:
                 self.home_qpos[joint.qpos_address] = value
+
+    def _ensure_collision_free_home(self):
+        """Validate every resolved home and repair generic imported models."""
+        # Imported here to keep the model adapter usable without creating a
+        # module-level models -> IK -> models import cycle.
+        from core.ik.collision import CollisionChecker
+
+        checker = CollisionChecker(self)
+        state = (
+            self.create_state()
+            if self.mj_model.nq else _StaticCollisionState(self.mj_model)
+        )
+        collisions = checker.get_collisions(state)
+        if not collisions:
+            return
+
+        if self.model_type != "generic":
+            raise HomePoseCollisionError(
+                f"{self.model_name} home pose is colliding "
+                f"({self._collision_summary(collisions)}). Define a "
+                "collision-free registered home pose."
+            )
+
+        repaired = self._find_collision_free_home(checker)
+        if repaired is None:
+            raise HomePoseCollisionError(
+                f"Imported model {self.model_name} starts in collision "
+                f"({self._collision_summary(collisions)}) and no "
+                f"collision-free home pose was found after "
+                f"{HOME_REPAIR_SAMPLE_COUNT} deterministic samples. "
+                "Provide a collision-free source home/keyframe or correct "
+                "the model's collision geometry."
+            )
+
+        self.home_qpos = repaired
+        self._ground_home_qpos()
+        remaining = checker.get_collisions(self.create_state())
+        if remaining:
+            raise HomePoseCollisionError(
+                f"Imported model {self.model_name} could not retain a "
+                "collision-free home pose after grounding "
+                f"({self._collision_summary(remaining)})."
+            )
+        self.home_pose_was_repaired = True
+        repair_warning = (
+            f"{self.model_name}: generated a collision-free home pose from "
+            "the imported model's joint limits."
+        )
+        self.load_warning = (
+            f"{self.load_warning} {repair_warning}"
+            if self.load_warning else repair_warning
+        )
+
+    def _find_collision_free_home(self, checker):
+        movable = []
+        nominal_values = []
+        lower_values = []
+        upper_values = []
+        for joint in self.joints.values():
+            nominal = float(self.home_qpos[joint.qpos_address])
+            if joint.limits is None:
+                if joint.joint_type == int(mujoco.mjtJoint.mjJNT_HINGE):
+                    lower, upper = nominal - np.pi, nominal + np.pi
+                else:
+                    lower, upper = nominal - 1.0, nominal + 1.0
+            else:
+                lower, upper = map(float, joint.limits)
+            if (
+                not np.isfinite((nominal, lower, upper)).all()
+                or upper - lower <= 1e-9
+            ):
+                continue
+            movable.append(joint)
+            nominal_values.append(float(np.clip(nominal, lower, upper)))
+            lower_values.append(lower)
+            upper_values.append(upper)
+
+        if not movable:
+            return None
+
+        nominal_values = np.asarray(nominal_values, dtype=float)
+        lower_values = np.asarray(lower_values, dtype=float)
+        upper_values = np.asarray(upper_values, dtype=float)
+        spans = upper_values - lower_values
+        candidate_state = self.create_state()
+
+        def candidate_qpos(values):
+            qpos = self.home_qpos.copy()
+            for joint, value in zip(movable, values):
+                qpos[joint.qpos_address] = float(value)
+            candidate_state.set_qpos(qpos)
+            if checker.get_collisions(candidate_state):
+                return None
+            return candidate_state.get_qpos()
+
+        candidates = [lower_values + 0.5 * spans]
+        for joint_index in range(len(movable)):
+            for fraction in (0.25, 0.5, 0.75):
+                values = nominal_values.copy()
+                values[joint_index] = (
+                    lower_values[joint_index] + fraction * spans[joint_index]
+                )
+                candidates.append(values)
+
+        primes = self._first_primes(len(movable))
+        for sample_index in range(1, HOME_REPAIR_SAMPLE_COUNT + 1):
+            fractions = np.asarray([
+                self._van_der_corput(sample_index, prime)
+                for prime in primes
+            ])
+            candidates.append(lower_values + fractions * spans)
+
+        best_qpos = None
+        best_values = None
+        best_score = float("inf")
+        for values in candidates:
+            qpos = candidate_qpos(values)
+            if qpos is None:
+                continue
+            score = float(np.sum(((values - nominal_values) / spans) ** 2))
+            if score < best_score:
+                best_qpos = qpos
+                best_values = np.asarray(values, dtype=float).copy()
+                best_score = score
+
+        if best_qpos is None:
+            return None
+
+        # Pull the selected global candidate back toward the declared home.
+        # ``high`` always remains collision-free, so the returned pose is safe
+        # even when collision status is not perfectly monotonic on the segment.
+        low, high = 0.0, 1.0
+        for _ in range(24):
+            alpha = 0.5 * (low + high)
+            values = nominal_values + alpha * (best_values - nominal_values)
+            qpos = candidate_qpos(values)
+            if qpos is None:
+                low = alpha
+            else:
+                high = alpha
+                best_qpos = qpos
+        return best_qpos
+
+    def home_joint_values(self):
+        return {
+            name: float(self.home_qpos[joint.qpos_address])
+            for name, joint in self.joints.items()
+        }
+
+    @staticmethod
+    def _van_der_corput(index, base):
+        result = 0.0
+        denominator = 1.0
+        while index:
+            index, remainder = divmod(index, base)
+            denominator *= base
+            result += remainder / denominator
+        return result
+
+    @staticmethod
+    def _first_primes(count):
+        primes = []
+        candidate = 2
+        while len(primes) < count:
+            is_prime = all(
+                candidate % prime
+                for prime in primes
+                if prime * prime <= candidate
+            )
+            if is_prime:
+                primes.append(candidate)
+            candidate += 1
+        return primes
+
+    @staticmethod
+    def _collision_summary(collisions, limit=3):
+        descriptions = []
+        seen = set()
+        for collision in collisions:
+            key = frozenset((collision.geom1_id, collision.geom2_id))
+            if key in seen:
+                continue
+            seen.add(key)
+            descriptions.append(
+                f"{collision.body1} [{collision.geom1}] <-> "
+                f"{collision.body2} [{collision.geom2}]"
+            )
+            if len(descriptions) >= int(limit):
+                break
+        return ", ".join(descriptions) or "unknown contact"
 
     def _ground_home_qpos(self, clearance=HOME_GROUND_CLEARANCE):
         if not self.free_joints_by_body:

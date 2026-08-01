@@ -104,6 +104,17 @@ ROBOT_MODELS = {
             "tool": ("link06", "tool", "ee_link"),
             "wrist": ("link05", "link06"),
         },
+        # Unitree's published ``forward`` state.  The URDF has no initial
+        # joint-state field, so leaving these joints at MuJoCo's zero default
+        # folds link06 into link02 and starts the editor in self-collision.
+        home_joints={
+            "joint1": 0.0,
+            "joint2": 1.5,
+            "joint3": -1.0,
+            "joint4": -0.54,
+            "joint5": 0.0,
+            "joint6": 0.0,
+        },
     ),
 }
 

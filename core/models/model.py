@@ -126,7 +126,12 @@ class RobotModel3D:
     def _load_home_qpos(self):
         data = mujoco.MjData(self.mj_model)
         if self.mj_model.nkey:
-            mujoco.mj_resetDataKeyframe(self.mj_model, data, 0)
+            home_key = mujoco.mj_name2id(
+                self.mj_model, mujoco.mjtObj.mjOBJ_KEY, "home"
+            )
+            mujoco.mj_resetDataKeyframe(
+                self.mj_model, data, home_key if home_key >= 0 else 0
+            )
         else:
             mujoco.mj_resetData(self.mj_model, data)
         qpos = data.qpos.copy()

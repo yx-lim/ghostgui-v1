@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import math
+import os
 import re
 import shutil
 import tempfile
 import xml.etree.ElementTree as ET
-import os
 from pathlib import Path
 
 from core.models import (
@@ -21,6 +23,8 @@ from application.paths import ghostgui_user_data_dir
 
 
 SUPPORTED_MODEL_EXTENSIONS = {".urdf", ".xml"}
+MODEL_PROFILE_SCHEMA_VERSION = 1
+MODEL_PROFILE_SUFFIX = ".ghostgui.json"
 BUILT_IN_MODEL_FILENAMES = {
     "g1_29dof.urdf",
     "g1_29dof.xml",
@@ -86,12 +90,55 @@ def _display_name_from_hints(value, *hints):
     return _display_name(value)
 
 
+def model_profile_path(model_path):
+    model_path = Path(model_path).expanduser().resolve()
+    return model_path.with_name(f"{model_path.stem}{MODEL_PROFILE_SUFFIX}")
+
+
+def _load_profile_home_joints(model_path):
+    profile_path = model_profile_path(model_path)
+    try:
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if profile.get("schema_version") != MODEL_PROFILE_SCHEMA_VERSION:
+        return {}
+    values = profile.get("home_joints")
+    if not isinstance(values, dict):
+        return {}
+    home_joints = {}
+    for name, value in values.items():
+        if (
+            not isinstance(name, str)
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+        ):
+            return {}
+        home_joints[name] = float(value)
+    return home_joints
+
+
+def _write_generated_home_profile(model_path, adapter):
+    profile_path = model_profile_path(model_path)
+    profile_path.write_text(
+        json.dumps({
+            "schema_version": MODEL_PROFILE_SCHEMA_VERSION,
+            "home_source": "collision_repair",
+            "home_joints": adapter.home_joint_values(),
+        }, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return profile_path
+
+
 def _unique_stem(directory, stem, suffix):
     candidate = stem
     index = 2
     while (
         (directory / f"{candidate}{suffix}").exists()
         or (directory / f"assets-{candidate}").exists()
+        or (directory / f"{candidate}{MODEL_PROFILE_SUFFIX}").exists()
     ):
         candidate = f"{stem}-{index}"
         index += 1
@@ -288,6 +335,7 @@ def _model_info_for_path(path, key=None, name_hints=()):
             "base", "base_link", "trunk", "pelvis", "link00", "root", "world"
         ),
         root_joint_candidates=("floating_base", "root", "freejoint"),
+        home_joints=_load_profile_home_joints(path),
     )
 
 
@@ -298,7 +346,7 @@ def _validate_model_file(model_path):
     old_cache_root = os.environ.get("GHOSTGUI_CACHE_DIR")
     os.environ["GHOSTGUI_CACHE_DIR"] = str(cache_root)
     try:
-        MuJoCoRobotAdapter(_model_info_for_path(model_path))
+        return MuJoCoRobotAdapter(_model_info_for_path(model_path))
     finally:
         if old_cache_root is None:
             os.environ.pop("GHOSTGUI_CACHE_DIR", None)
@@ -319,9 +367,9 @@ def discover_imported_models(library_root=None, excluded_paths=None):
     """
     Return model infos for files previously saved in the user model library.
 
-    Discovery is intentionally light-weight: it checks only the filename and
-    extension so a bad user-provided file cannot break application startup.
-    Actual MuJoCo parsing still happens lazily when the user selects a model.
+    Discovery is intentionally light-weight: it checks the filename, extension,
+    and optional small home-pose profile. Actual MuJoCo parsing still happens
+    lazily when the user selects a model.
     """
     library_root = Path(library_root or default_model_library_root()).expanduser()
     if not library_root.is_dir():
@@ -369,6 +417,7 @@ def import_robot_model(source_path, library_root=None, mesh_roots=None):
     stem = _unique_stem(library_root, source_stem, suffix)
     model_path = library_root / f"{stem}{suffix}"
     asset_dir = library_root / f"assets-{stem}"
+    profile_path = model_profile_path(model_path)
 
     try:
         with tempfile.TemporaryDirectory(
@@ -388,15 +437,24 @@ def import_robot_model(source_path, library_root=None, mesh_roots=None):
             else:
                 _rewrite_mjcf_meshes(root, source_path, staged_asset_dir, mesh_roots)
             tree.write(staged_model_path, encoding="unicode")
-            _validate_model_file(staged_model_path)
+            adapter = _validate_model_file(staged_model_path)
+            staged_profile_path = None
+            if adapter.home_pose_was_repaired:
+                staged_profile_path = _write_generated_home_profile(
+                    staged_model_path, adapter
+                )
 
             shutil.move(str(staged_model_path), str(model_path))
             shutil.move(str(staged_asset_dir), str(asset_dir))
+            if staged_profile_path is not None:
+                shutil.move(str(staged_profile_path), str(profile_path))
     except Exception:
         if model_path.exists():
             model_path.unlink()
         if asset_dir.exists():
             shutil.rmtree(asset_dir)
+        if profile_path.exists():
+            profile_path.unlink()
         raise
 
     return _model_info_for_path(model_path, key=stem, name_hints=name_hints)

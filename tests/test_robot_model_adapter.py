@@ -1,3 +1,4 @@
+import json
 import os
 import struct
 import unittest
@@ -16,7 +17,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from gui.main_window import RobotGuiMainWindow
-from core.models import MuJoCoRobotAdapter
+from core.models import HomePoseCollisionError, MuJoCoRobotAdapter
 from gui.viewers.robot_canvas_3d import RobotCanvas3D
 from core.ik import CollisionAwareIKSolver, CollisionChecker
 from core.models import resolve_mesh_path, validate_model_assets
@@ -24,6 +25,7 @@ from application.model_importer import (
     default_model_library_root,
     discover_imported_models,
     import_robot_model,
+    model_profile_path,
 )
 from core.models import PROJECT_ROOT, ROBOT_MODELS
 from gui.viewers.transform_gizmo import GizmoInteractionState
@@ -310,6 +312,105 @@ class RobotModelAdapterTests(unittest.TestCase):
             self.assertEqual(info.display_name, "Unitree Z1")
             self.assertEqual(adapter.root_body, "link00")
             self.assertIn("joint1", adapter.actuated_joints)
+
+    def test_import_repairs_and_persists_a_colliding_urdf_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "folded_arm.urdf"
+            source.write_text(
+                """
+<robot name="folded_arm">
+  <link name="base">
+    <inertial><mass value="1"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+    <collision><geometry><sphere radius="0.06"/></geometry></collision>
+  </link>
+  <joint name="shoulder" type="revolute">
+    <origin xyz="0.15 0 0"/>
+    <parent link="base"/><child link="elbow"/><axis xyz="0 0 1"/>
+    <limit effort="10" lower="-3.14" upper="3.14" velocity="1"/>
+  </joint>
+  <link name="elbow">
+    <inertial><mass value="1"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+  </link>
+  <joint name="wrist" type="revolute">
+    <origin xyz="-0.15 0 0"/>
+    <parent link="elbow"/><child link="tool"/><axis xyz="1 0 0"/>
+    <limit effort="10" lower="-1" upper="1" velocity="1"/>
+  </joint>
+  <link name="tool">
+    <inertial><mass value="1"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+    <collision><geometry><sphere radius="0.06"/></geometry></collision>
+  </link>
+</robot>
+""".strip(),
+                encoding="utf-8",
+            )
+
+            info = import_robot_model(source, root / "models")
+            profile_path = model_profile_path(info.model_path)
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(profile["home_source"], "collision_repair")
+            self.assertNotAlmostEqual(profile["home_joints"]["shoulder"], 0.0)
+            self.assertEqual(info.home_joints, profile["home_joints"])
+            self.assertNotIn("keyframe", info.model_path.read_text(encoding="utf-8"))
+
+            with patch.dict(
+                os.environ, {"GHOSTGUI_CACHE_DIR": str(root / "cache")}
+            ):
+                adapter = MuJoCoRobotAdapter(info)
+            self.assertFalse(adapter.home_pose_was_repaired)
+            self.assertEqual(CollisionChecker(adapter).get_collisions(
+                adapter.create_state()
+            ), [])
+
+            discovered = discover_imported_models(root / "models")
+            self.assertEqual(
+                discovered[info.key].home_joints,
+                profile["home_joints"],
+            )
+
+    def test_import_rejects_an_unrepairable_colliding_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "overlapping_arm.urdf"
+            source.write_text(
+                """
+<robot name="overlapping_arm">
+  <link name="base">
+    <inertial><mass value="1"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+    <collision><geometry><sphere radius="0.06"/></geometry></collision>
+  </link>
+  <joint name="joint1" type="revolute">
+    <parent link="base"/><child link="middle"/><axis xyz="0 0 1"/>
+    <limit effort="10" lower="-1" upper="1" velocity="1"/>
+  </joint>
+  <link name="middle">
+    <inertial><mass value="1"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+  </link>
+  <joint name="joint2" type="revolute">
+    <parent link="middle"/><child link="tool"/><axis xyz="1 0 0"/>
+    <limit effort="10" lower="-1" upper="1" velocity="1"/>
+  </joint>
+  <link name="tool">
+    <inertial><mass value="1"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+    <collision><geometry><sphere radius="0.06"/></geometry></collision>
+  </link>
+</robot>
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                HomePoseCollisionError,
+                "no collision-free home pose was found",
+            ):
+                import_robot_model(source, root / "models")
+
+            self.assertFalse((root / "models" / "overlapping_arm.urdf").exists())
+            self.assertFalse(
+                (root / "models" / "overlapping_arm.ghostgui.json").exists()
+            )
 
     def test_import_mjcf_rewrites_meshdir_to_model_asset_folder(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -727,6 +828,63 @@ class RobotModelAdapterTests(unittest.TestCase):
         self.assertTrue(result.success, result.status)
         self.assertEqual(result.accepted_fraction, 1.0)
 
+    def test_z1_home_is_collision_free_and_first_tool_drag_solves(self):
+        adapter = MuJoCoRobotAdapter("z1")
+        state = adapter.create_state()
+        checker = CollisionChecker(adapter)
+
+        self.assertEqual(checker.get_collisions(state), [])
+        self.assertAlmostEqual(state.get_joint_value("joint2"), 1.5)
+        self.assertAlmostEqual(state.get_joint_value("joint3"), -1.0)
+        self.assertAlmostEqual(state.get_joint_value("joint4"), -0.54)
+
+        kind, name = adapter.resolve_logical_frame("tool")
+        position, quaternion = state.get_body_pose(name, kind)
+        result = CollisionAwareIKSolver(adapter, checker).solve_drag(
+            state.get_qpos(),
+            position,
+            quaternion,
+            position + np.array([0.005, 0.0, 0.0]),
+            quaternion,
+            object_name=name,
+            kind=kind,
+        )
+
+        self.assertTrue(result.success, result.status)
+        self.assertEqual(result.accepted_fraction, 1.0)
+        self.assertFalse(np.allclose(result.qpos, state.get_qpos()))
+        self.assertEqual(result.collisions, [])
+
+    def test_z1_viewer_first_drag_creates_orange_preview(self):
+        window = RobotGuiMainWindow("z1")
+        try:
+            viewer = window.viewer_3d
+            kind, name = viewer.robot_model.resolve_logical_frame("tool")
+            viewer.select_target(kind, name, emit=False)
+            viewer._set_target_to_selected_pose()
+            committed = viewer.committed_state.get_qpos()
+            position = viewer.last_valid_target_position.copy()
+            quaternion = viewer.last_valid_target_quaternion.copy()
+
+            viewer._on_transform_moved(
+                position + np.array([0.005, 0.0, 0.0]), quaternion
+            )
+
+            self.assertTrue(viewer.preview_active)
+            self.assertTrue(viewer.canvas.preview_visible)
+            np.testing.assert_allclose(
+                viewer.committed_state.get_qpos(), committed
+            )
+            self.assertFalse(np.allclose(
+                viewer.preview_state.get_qpos(), committed
+            ))
+            self.assertEqual(
+                viewer.collision_checker.get_collisions(viewer.preview_state),
+                [],
+            )
+        finally:
+            window.close()
+
     def test_go2_viewer_drag_is_preview_only_until_accept(self):
         window = RobotGuiMainWindow("go2")
         try:
@@ -918,6 +1076,36 @@ class RobotModelAdapterTests(unittest.TestCase):
                     os.environ.pop("GHOSTGUI_CACHE_DIR", None)
                 else:
                     os.environ["GHOSTGUI_CACHE_DIR"] = old_cache
+
+    def test_imported_mjcf_prefers_explicit_named_home_keyframe(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            source = temp / "named_home.xml"
+            source.write_text(
+                """
+<mujoco model="named_home">
+  <worldbody>
+    <body name="base">
+      <joint name="joint1" type="hinge"/>
+      <geom type="box" size="0.05 0.05 0.05"/>
+    </body>
+  </worldbody>
+  <keyframe>
+    <key name="other" qpos="0.1"/>
+    <key name="home" qpos="0.7"/>
+  </keyframe>
+</mujoco>
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ, {"GHOSTGUI_CACHE_DIR": str(temp / "cache")}
+            ):
+                adapter = MuJoCoRobotAdapter.load_model(source)
+
+            self.assertAlmostEqual(adapter.home_joint_values()["joint1"], 0.7)
+            self.assertFalse(adapter.home_pose_was_repaired)
 
 
 if __name__ == "__main__":
