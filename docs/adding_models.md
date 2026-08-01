@@ -46,6 +46,31 @@ If no collision-free pose is found, the import fails instead of silently
 allowing the initial contacts. Provide an MJCF `home` keyframe, correct the
 collision geometry, or add a maintained registry entry with `home_joints`.
 
+## Geometry Names And Collision Labels
+
+GhostGUI does not require every vendor asset to hand-name every geometry. It
+preserves source geom names and assigns each unnamed geometry a deterministic
+effective identity based on its owning body, role, and ordinal, for example
+`left_forearm__contact_1` or `link02__visual_1`.
+
+For URDF imports, these names are written into the generated runtime MJCF cache.
+For direct MJCF models, unnamed source geoms receive the same effective names at
+runtime without rewriting the imported asset. Updating the cache naming schema
+invalidates and regenerates old URDF runtime caches automatically.
+
+Collision and preview messages preserve the model's original body-frame names,
+such as `FL_thigh ↔ base` or `link02 ↔ link06`. A world-owned environment geom
+uses its own source name, so the generated `ground` geom is reported as
+`ground`, not `world`. Exact geom identities and penetration depth remain in
+the technical status details. Multiple MuJoCo contact points between the same
+pair of geoms are reported as one collision.
+
+Other user-facing model views can infer friendly body labels by splitting
+underscores, namespaces, camel case, numbered links, and common quadruped
+abbreviations (`FL`, `FR`, `RL`, and `RR`). Maintained models can use
+`RobotModelInfo.body_labels` for ambiguous vendor terms; collision messages do
+not replace the original frame names with these aliases.
+
 ## Mesh Resolution
 
 GhostGUI tries:
@@ -80,6 +105,7 @@ For a maintained model, add a `RobotModelInfo` entry to
 - model type and source path;
 - root body and root joint candidates;
 - logical frame aliases;
+- optional body-label overrides for ambiguous source names;
 - any ROS package-to-directory mappings;
 - optional home-joint values.
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from .registry import RobotModelInfo, get_model_info
 from .assets import prepare_urdf_visual_meshes, resolve_mesh_path
 
 
-MODEL_CACHE_VERSION = 3
+MODEL_CACHE_VERSION = 4
 HOME_GROUND_CLEARANCE = 0.002
 HOME_REPAIR_SAMPLE_COUNT = 512
 
@@ -269,6 +270,7 @@ class MuJoCoRobotAdapter(RobotModel3D):
         body_by_name = {
             body.attrib.get("name"): body for body in worldbody.iter("body")
         }
+        self._name_anonymous_mjcf_geoms(worldbody)
         for leg in ("FL", "FR", "RL", "RR"):
             calf = body_by_name.get(f"{leg}_calf")
             if calf is not None:
@@ -320,6 +322,48 @@ class MuJoCoRobotAdapter(RobotModel3D):
         # Compile once here so conversion errors identify the generated model.
         mujoco.MjModel.from_xml_path(str(mjcf_path))
         return mjcf_path
+
+    @staticmethod
+    def _name_anonymous_mjcf_geoms(worldbody):
+        """Give URDF-generated geoms deterministic, user-debuggable names."""
+        used_names = {
+            geom.get("name")
+            for geom in worldbody.iter("geom")
+            if geom.get("name")
+        }
+
+        def role_for(geom):
+            if geom.get("group") == "1" or (
+                geom.get("contype") == "0"
+                and geom.get("conaffinity") == "0"
+            ):
+                return "visual"
+            return "contact"
+
+        def name_geoms(owner_name, geoms):
+            safe_owner = RobotModel3D.plain_name(owner_name or "world")
+            safe_owner = "_".join(
+                part for part in re.split(r"[^A-Za-z0-9]+", safe_owner)
+                if part
+            ) or "world"
+            ordinals = {"visual": 0, "contact": 0}
+            for geom in geoms:
+                role = role_for(geom)
+                ordinals[role] += 1
+                if geom.get("name"):
+                    continue
+                ordinal = ordinals[role]
+                candidate = f"{safe_owner}__{role}_{ordinal}"
+                while candidate in used_names:
+                    ordinal += 1
+                    candidate = f"{safe_owner}__{role}_{ordinal}"
+                ordinals[role] = ordinal
+                geom.set("name", candidate)
+                used_names.add(candidate)
+
+        name_geoms("world", worldbody.findall("geom"))
+        for body in worldbody.iter("body"):
+            name_geoms(body.get("name"), body.findall("geom"))
 
     def _apply_registered_home(self):
         if self.model_type == "quadruped":
@@ -513,8 +557,7 @@ class MuJoCoRobotAdapter(RobotModel3D):
                 continue
             seen.add(key)
             descriptions.append(
-                f"{collision.body1} [{collision.geom1}] <-> "
-                f"{collision.body2} [{collision.geom2}]"
+                f"{collision.pair_label} [{collision.diagnostic_label}]"
             )
             if len(descriptions) >= int(limit):
                 break

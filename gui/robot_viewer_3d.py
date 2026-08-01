@@ -46,7 +46,12 @@ from core.models import (
     TrajectoryGhostRenderer,
     interpolate_qpos,
 )
-from core.ik import CollisionAwareIKSolver, CollisionChecker
+from core.ik import (
+    CollisionAwareIKSolver,
+    CollisionChecker,
+    format_collision_diagnostics,
+    format_collision_pairs,
+)
 from core.trajectory import quat_to_rpy, rpy_to_quat
 from gui.file_selection import SynchronousFileSelectionStage
 from gui.viewers import ik_panels
@@ -900,11 +905,11 @@ class RobotViewer3D(QWidget):
                 yaw,
             )
         if collisions:
-            names = ", ".join(
-                f"{item.geom1} ↔ {item.geom2}" for item in collisions[:2]
-            )
+            names = format_collision_pairs(collisions)
+            details = format_collision_diagnostics(collisions)
             self.status_label.setText(
                 f"Collision warning: {names}; "
+                f"Contact geometry: {details}; "
                 f"Preview FK: {name} = {value:+.3f} rad; "
                 "adjust the pose before Commit Keyframe"
             )
@@ -1219,14 +1224,13 @@ class RobotViewer3D(QWidget):
                 if self.collision_checker else []
             )
             if collisions:
-                names = ", ".join(
-                    f"{item.geom1} <-> {item.geom2}"
-                    for item in collisions[:2]
-                )
+                names = format_collision_pairs(collisions)
+                details = format_collision_diagnostics(collisions)
                 return (
                     PreviewPathValidation(
                         False,
-                        f"collision at path sample {index}: {names}",
+                        f"collision at path sample {index}: {names}; "
+                        f"contact geometry: {details}",
                         index,
                     ),
                     [],
@@ -1271,11 +1275,11 @@ class RobotViewer3D(QWidget):
         )
         if collisions:
             self.canvas.set_preview_collisions(collisions)
-            names = ", ".join(
-                f"{item.geom1} ↔ {item.geom2}" for item in collisions[:2]
-            )
+            names = format_collision_pairs(collisions)
+            details = format_collision_diagnostics(collisions)
             self.status_label.setText(
-                f"Cannot commit keyframe: collision detected ({names})."
+                f"Cannot commit keyframe: collision detected ({names}); "
+                f"contact geometry: {details}."
             )
             return False
         self.committed_state.set_qpos(preview_qpos)

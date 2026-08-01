@@ -6,6 +6,8 @@ from .collision import (
     CollisionChecker,
     CollisionPolicy,
     DragSolveResult,
+    format_collision_diagnostics,
+    format_collision_pairs,
 )
 from .tasks import (
     BodyPoseTask,
@@ -27,6 +29,8 @@ __all__ = [
     "CollisionChecker",
     "CollisionPolicy",
     "DragSolveResult",
+    "format_collision_diagnostics",
+    "format_collision_pairs",
     "FootLockTask",
     "IKTask",
     "IKSolverSettings",

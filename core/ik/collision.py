@@ -24,6 +24,33 @@ class Collision:
     geom2_id: int | None = None
     body1_id: int | None = None
     body2_id: int | None = None
+    body1_label: str | None = None
+    body2_label: str | None = None
+
+    @property
+    def pair_label(self):
+        return (
+            f"{self.body1_label or self.body1} ↔ "
+            f"{self.body2_label or self.body2}"
+        )
+
+    @property
+    def diagnostic_label(self):
+        penetration_mm = max(0.0, -float(self.distance)) * 1000.0
+        return (
+            f"{self.geom1} ↔ {self.geom2} "
+            f"({penetration_mm:.1f} mm penetration)"
+        )
+
+
+def format_collision_pairs(collisions, limit=2):
+    return ", ".join(item.pair_label for item in list(collisions)[:int(limit)])
+
+
+def format_collision_diagnostics(collisions, limit=2):
+    return ", ".join(
+        item.diagnostic_label for item in list(collisions)[:int(limit)]
+    )
 
 
 @dataclass(frozen=True)
@@ -130,7 +157,7 @@ class CollisionChecker:
     def get_collisions(self, state):
         # mj_forward runs broad/narrow-phase collision and populates data.contact.
         state.forward_kinematics()
-        collisions = []
+        collisions_by_pair = {}
         for contact_index in range(state.mj_data.ncon):
             contact = state.mj_data.contact[contact_index]
             if float(contact.dist) > self.tolerance:
@@ -151,7 +178,7 @@ class CollisionChecker:
             body1 = self._name(mujoco.mjtObj.mjOBJ_BODY, body1_id, "body")
             body2 = self._name(mujoco.mjtObj.mjOBJ_BODY, body2_id, "body")
             kind = "environment" if 0 in (body1_id, body2_id) else "self"
-            collisions.append(Collision(
+            collision = Collision(
                 geom1,
                 geom2,
                 body1,
@@ -162,17 +189,40 @@ class CollisionChecker:
                 geom2_id,
                 body1_id,
                 body2_id,
-            ))
-        return collisions
+                self._frame_label(body1_id, body1, geom1),
+                self._frame_label(body2_id, body2, geom2),
+            )
+            pair = tuple(sorted((geom1_id, geom2_id)))
+            previous = collisions_by_pair.get(pair)
+            if previous is None or collision.distance < previous.distance:
+                collisions_by_pair[pair] = collision
+        return list(collisions_by_pair.values())
 
     def is_state_collision_free(self, state):
         return not self.get_collisions(state)
 
     def _name(self, object_type, object_id, fallback):
+        if object_type == mujoco.mjtObj.mjOBJ_GEOM:
+            resolver = getattr(self.robot_model, "get_geom_name", None)
+            if resolver is not None:
+                return resolver(object_id)
+        if object_type == mujoco.mjtObj.mjOBJ_BODY:
+            resolver = getattr(self.robot_model, "get_body_name", None)
+            if resolver is not None:
+                return resolver(object_id)
         return (
             mujoco.mj_id2name(self.model, object_type, object_id)
             or f"{fallback}#{object_id}"
         )
+
+    @staticmethod
+    def _frame_label(body_id, body_name, geom_name):
+        # World-owned environment geoms have no more specific body frame.
+        # Retain their source name (for example ``ground``) instead of
+        # replacing it with MuJoCo's synthetic ``world`` body name.
+        if int(body_id) == 0 and geom_name:
+            return geom_name
+        return body_name
 
 
 @dataclass
@@ -389,10 +439,11 @@ class CollisionAwareIKSolver:
         )
         collision_note = ""
         if preview_collisions:
-            names = ", ".join(
-                f"{item.geom1} ↔ {item.geom2}" for item in preview_collisions[:2]
+            names = format_collision_pairs(preview_collisions)
+            details = format_collision_diagnostics(preview_collisions)
+            collision_note = (
+                f"; Collision warning: {names}; Contact geometry: {details}"
             )
-            collision_note = f"; Collision warning: {names}"
 
         if blocked_reason is not None:
             return DragSolveResult(

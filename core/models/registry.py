@@ -28,6 +28,7 @@ class RobotModelInfo:
         "constraint", "support",
     )
     home_joints: dict[str, float] = field(default_factory=dict)
+    body_labels: dict[str, str] = field(default_factory=dict)
 
 
 ROBOT_MODELS = {
@@ -62,6 +63,9 @@ ROBOT_MODELS = {
             "RL_foot": ("RL_foot", "RL_calf"),
             "RR_foot": ("RR_foot", "RR_calf"),
         },
+        # The source calls the central chassis ``base`` while users generally
+        # identify it as the quadruped's trunk.
+        body_labels={"base": "Trunk"},
         package_map={
             # The vendored ROS package stores its DAE files in a flattened
             # model-specific asset directory instead of go2_description/dae.

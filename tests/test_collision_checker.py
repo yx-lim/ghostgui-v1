@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from core.ik import Collision, CollisionAwareIKSolver, CollisionChecker
-from core.models import IKResult, RobotModel3D
+from core.models import IKResult, MuJoCoRobotAdapter, RobotModel3D
 
 
 class FakeCandidateState:
@@ -72,6 +72,41 @@ class CollisionCheckerTests(unittest.TestCase):
 
         self.assertTrue(collisions)
         self.assertTrue(any(item.kind == "environment" for item in collisions))
+        floor_contact = next(
+            item for item in collisions if "floor" in (item.geom1, item.geom2)
+        )
+        self.assertIn("floor", floor_contact.pair_label)
+        self.assertNotIn("world", floor_contact.pair_label)
+
+    def test_z1_duplicate_contact_points_use_one_semantic_warning(self):
+        model = MuJoCoRobotAdapter("z1")
+        state = model.create_state()
+        state.set_joint_values({name: 0.0 for name in state.get_joint_names()})
+
+        collisions = CollisionChecker(model).get_collisions(state)
+
+        self.assertEqual(len(collisions), 1)
+        collision = collisions[0]
+        self.assertEqual(collision.pair_label, "link02 ↔ link06")
+        self.assertEqual(collision.geom1, "link02__contact_1")
+        self.assertEqual(collision.geom2, "link06__contact_1")
+        self.assertIn("mm penetration", collision.diagnostic_label)
+
+    def test_world_owned_ground_keeps_its_source_name(self):
+        model = MuJoCoRobotAdapter("z1")
+        state = model.create_state()
+        qpos = state.get_qpos()
+        free_joint = next(iter(model.free_joints_by_body.values()))
+        qpos[free_joint.qpos_address + 2] -= 0.1
+        state.set_qpos(qpos)
+
+        collisions = CollisionChecker(model).get_collisions(state)
+        ground_contact = next(
+            item for item in collisions if "ground" in (item.geom1, item.geom2)
+        )
+
+        self.assertIn("ground", ground_contact.pair_label)
+        self.assertNotIn("world", ground_contact.pair_label)
 
     def _fake_solver(self, fail=False):
         solver = CollisionAwareIKSolver.__new__(CollisionAwareIKSolver)

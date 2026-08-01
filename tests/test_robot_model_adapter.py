@@ -86,6 +86,76 @@ class RobotModelAdapterTests(unittest.TestCase):
         self.assertEqual(ROBOT_MODELS["h2"].display_name, "Unitree H2")
         self.assertEqual(ROBOT_MODELS["z1"].display_name, "Unitree Z1")
 
+    def test_all_bundled_models_have_stable_effective_geom_names(self):
+        for key in ROBOT_MODELS:
+            with self.subTest(model=key):
+                adapter = MuJoCoRobotAdapter(key)
+                names = [
+                    adapter.get_geom_name(geom_id)
+                    for geom_id in range(adapter.mj_model.ngeom)
+                ]
+                self.assertEqual(len(names), len(set(names)))
+                self.assertTrue(all("geom#" not in name for name in names))
+
+        # URDF-generated runtime MJCF also receives physical names so other
+        # MuJoCo-facing tools see the same stable identities.
+        for key in ("go2", "h2", "z1"):
+            with self.subTest(runtime_model=key):
+                adapter = MuJoCoRobotAdapter(key)
+                self.assertTrue(all(
+                    mujoco.mj_id2name(
+                        adapter.mj_model, mujoco.mjtObj.mjOBJ_GEOM, geom_id
+                    )
+                    for geom_id in range(adapter.mj_model.ngeom)
+                ))
+
+    def test_generic_mjcf_gets_names_and_humanized_labels_without_registry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "future_robot.xml"
+            source.write_text(
+                """
+<mujoco model="future_robot">
+  <worldbody>
+    <body name="arm_link02">
+      <geom name="vendor_shell" type="sphere" size="0.05"
+            contype="0" conaffinity="0"/>
+      <geom type="sphere" size="0.04"/>
+      <geom type="sphere" size="0.03" contype="0" conaffinity="0"/>
+    </body>
+  </worldbody>
+</mujoco>
+""".strip(),
+                encoding="utf-8",
+            )
+
+            adapter = MuJoCoRobotAdapter(model=None, model_path=source)
+
+            self.assertEqual(
+                [adapter.get_geom_name(index) for index in range(3)],
+                [
+                    "vendor_shell",
+                    "arm_link02__contact_1",
+                    "arm_link02__visual_2",
+                ],
+            )
+            body_id = mujoco.mj_name2id(
+                adapter.mj_model, mujoco.mjtObj.mjOBJ_BODY, "arm_link02"
+            )
+            self.assertEqual(adapter.get_body_display_name(body_id), "Arm Link 2")
+
+    def test_unitree_abbreviations_and_registry_overrides_are_user_friendly(self):
+        go2 = MuJoCoRobotAdapter("go2")
+        base_id = mujoco.mj_name2id(
+            go2.mj_model, mujoco.mjtObj.mjOBJ_BODY, "base"
+        )
+        thigh_id = mujoco.mj_name2id(
+            go2.mj_model, mujoco.mjtObj.mjOBJ_BODY, "FL_thigh"
+        )
+        self.assertEqual(go2.get_body_display_name(base_id), "Trunk")
+        self.assertEqual(
+            go2.get_body_display_name(thigh_id), "Front Left Thigh"
+        )
+
     def test_g1_metadata_and_logical_frames(self):
         adapter = MuJoCoRobotAdapter("g1")
         self.assertEqual(adapter.model_type, "humanoid")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
@@ -67,6 +68,7 @@ class RobotModel3D:
         self.free_joints_by_body: dict[int, FreeJointInfo] = {}
         self.body_names = self._names(mujoco.mjtObj.mjOBJ_BODY, self.mj_model.nbody)
         self.site_names = self._names(mujoco.mjtObj.mjOBJ_SITE, self.mj_model.nsite)
+        self._geom_names = self._build_geom_names()
         self._discover_joints()
         self.home_qpos = self._load_home_qpos()
 
@@ -81,6 +83,130 @@ class RobotModel3D:
     @staticmethod
     def plain_name(name: str) -> str:
         return name[len("robot/"):] if name.startswith("robot/") else name
+
+    @staticmethod
+    def humanize_name(name: str) -> str:
+        """Turn common robot-link identifiers into concise UI labels."""
+        value = RobotModel3D.plain_name(str(name or ""))
+        value = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+        value = re.sub(r"[/_.:-]+", " ", value).strip()
+        words = []
+        side_names = {
+            "fl": ("Front", "Left"),
+            "fr": ("Front", "Right"),
+            "rl": ("Rear", "Left"),
+            "rr": ("Rear", "Right"),
+        }
+        for token in value.split():
+            lower = token.lower()
+            if lower in side_names:
+                words.extend(side_names[lower])
+                continue
+            link_number = re.fullmatch(r"link0*(\d+)", lower)
+            if link_number:
+                words.extend(("Link", str(int(link_number.group(1)))))
+                continue
+            if token.isdigit():
+                words.append(str(int(token)))
+            elif token.isupper() and len(token) <= 4:
+                words.append(token)
+            else:
+                words.append(lower.capitalize())
+        return " ".join(words) or "Unnamed body"
+
+    def get_body_name(self, body_id: int) -> str:
+        body_id = int(body_id)
+        return (
+            mujoco.mj_id2name(
+                self.mj_model, mujoco.mjtObj.mjOBJ_BODY, body_id
+            )
+            or f"body_{body_id}"
+        )
+
+    def get_body_display_name(self, body_id: int) -> str:
+        """Return a semantic UI label, with generic naming as the fallback."""
+        body_id = int(body_id)
+        raw_name = self.get_body_name(body_id)
+        plain_name = self.plain_name(raw_name)
+
+        body_labels = getattr(getattr(self, "info", None), "body_labels", {})
+        for candidate in (raw_name, plain_name):
+            if candidate in body_labels:
+                return str(body_labels[candidate])
+
+        for logical_name, (kind, object_name) in getattr(
+            self, "logical_frame_bindings", {}
+        ).items():
+            if kind == "body":
+                owner_id = mujoco.mj_name2id(
+                    self.mj_model, mujoco.mjtObj.mjOBJ_BODY, object_name
+                )
+            else:
+                site_id = mujoco.mj_name2id(
+                    self.mj_model, mujoco.mjtObj.mjOBJ_SITE, object_name
+                )
+                owner_id = (
+                    int(self.mj_model.site_bodyid[site_id])
+                    if site_id >= 0 else -1
+                )
+            if owner_id == body_id:
+                return self.humanize_name(logical_name)
+        return self.humanize_name(plain_name)
+
+    def get_geom_role(self, geom_id: int) -> str:
+        """Classify a compiled geom for deterministic fallback naming."""
+        geom_id = int(geom_id)
+        if (
+            int(self.mj_model.geom_contype[geom_id]) != 0
+            or int(self.mj_model.geom_conaffinity[geom_id]) != 0
+        ):
+            return "contact"
+        return "visual"
+
+    def get_geom_name(self, geom_id: int) -> str:
+        """Return the source name or a stable body/role-based identity."""
+        return self._geom_names[int(geom_id)]
+
+    def _build_geom_names(self) -> list[str]:
+        used_names = {
+            name
+            for geom_id in range(self.mj_model.ngeom)
+            if (name := mujoco.mj_id2name(
+                self.mj_model, mujoco.mjtObj.mjOBJ_GEOM, geom_id
+            ))
+        }
+        names = []
+        ordinals = {}
+        for geom_id in range(self.mj_model.ngeom):
+            source_name = mujoco.mj_id2name(
+                self.mj_model, mujoco.mjtObj.mjOBJ_GEOM, geom_id
+            )
+            body_id = int(self.mj_model.geom_bodyid[geom_id])
+            role = self.get_geom_role(geom_id)
+            ordinal_key = (body_id, role)
+            ordinal = ordinals.get(ordinal_key, 0) + 1
+            ordinals[ordinal_key] = ordinal
+            if source_name:
+                names.append(source_name)
+                continue
+
+            body_name = self.plain_name(self.get_body_name(body_id))
+            safe_body = re.sub(
+                r"[^A-Za-z0-9]+", "_", body_name
+            ).strip("_") or f"body_{body_id}"
+            candidate = f"{safe_body}__{role}_{ordinal}"
+            while candidate in used_names:
+                ordinal += 1
+                candidate = f"{safe_body}__{role}_{ordinal}"
+            ordinals[ordinal_key] = ordinal
+            used_names.add(candidate)
+            names.append(candidate)
+        return names
+
+    def get_geom_display_name(self, geom_id: int) -> str:
+        body_id = int(self.mj_model.geom_bodyid[int(geom_id)])
+        role = self.get_geom_role(geom_id)
+        return f"{self.get_body_display_name(body_id)} {role} geometry"
 
     def _discover_joints(self) -> None:
         supported = {
