@@ -29,6 +29,8 @@ class RobotModelInfo:
     )
     home_joints: dict[str, float] = field(default_factory=dict)
     body_labels: dict[str, str] = field(default_factory=dict)
+    collision_blocking_penetration_m: float = 0.001
+    allowed_contact_body_pairs: tuple[tuple[str, str, float], ...] = ()
 
 
 ROBOT_MODELS = {
@@ -75,6 +77,9 @@ ROBOT_MODELS = {
             **{f"{leg}_thigh_joint": 0.8 for leg in ("FL", "FR", "RL", "RR")},
             **{f"{leg}_calf_joint": -1.5 for leg in ("FL", "FR", "RL", "RR")},
         },
+        # Shallow contacts remain visible warnings. Expected foot support is
+        # handled separately with its tighter ground-contact policy.
+        collision_blocking_penetration_m=0.005,
     ),
     "h2": RobotModelInfo(
         key="h2",
@@ -119,6 +124,9 @@ ROBOT_MODELS = {
             "joint5": 0.0,
             "joint6": 0.0,
         },
+        # The arm's collision primitives are intentionally conservative; a
+        # few millimetres is advisory, while the folded 8 mm overlap blocks.
+        collision_blocking_penetration_m=0.003,
     ),
 }
 

@@ -137,6 +137,18 @@ class RobotModel3DTests(unittest.TestCase):
         self.assertEqual(original_ids, [id(item) for item in renderer.transforms])
         self.assertEqual(len(renderer.transforms), 4)
 
+    def test_colliding_ghost_samples_are_retained_between_stride_samples(self):
+        start = self.state.get_qpos()
+        trajectory = interpolate_qpos(start, start, 10)
+        collision_flags = [False] * len(trajectory)
+        collision_flags[1] = True
+        renderer = TrajectoryGhostRenderer(self.model)
+
+        renderer.update(trajectory, stride=3, collision_flags=collision_flags)
+
+        self.assertEqual(len(renderer.transforms), 5)
+        self.assertEqual(renderer.collision_flags.count(True), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

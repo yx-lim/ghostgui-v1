@@ -695,7 +695,10 @@ class RobotCanvas3D(QOpenGLWidget):
             return
         self._begin_transparent_pass()
         try:
-            for positions, rotations in self.ghost_renderer.transforms:
+            flags = self.ghost_renderer.collision_flags
+            for index, (positions, rotations) in enumerate(
+                self.ghost_renderer.transforms
+            ):
                 # The animated main pose may exactly equal one cached waypoint.
                 # Skipping that duplicate avoids coincident transparent surfaces.
                 if self.robot_state is not None and np.allclose(
@@ -705,7 +708,14 @@ class RobotCanvas3D(QOpenGLWidget):
                     rtol=0.0,
                 ):
                     continue
-                self._draw_robot_transforms(positions, rotations, self.ghost_alpha)
+                colliding = index < len(flags) and flags[index]
+                self._draw_robot_transforms(
+                    positions,
+                    rotations,
+                    self.ghost_alpha,
+                    color_override=(0.95, 0.08, 0.08, 1.0)
+                    if colliding else None,
+                )
         finally:
             self._end_transparent_pass()
 

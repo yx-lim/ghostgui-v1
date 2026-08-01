@@ -65,6 +65,12 @@ uses its own source name, so the generated `ground` geom is reported as
 the technical status details. Multiple MuJoCo contact points between the same
 pair of geoms are reported as one collision.
 
+`RobotModelInfo.collision_blocking_penetration_m` sets the model-scale boundary
+between advisory and blocking penetration. Optional
+`allowed_contact_body_pairs` entries contain two original body-frame names and
+a maximum allowed penetration in metres. Add an entry only after auditing the
+specific collision geometry; broad adjacency exclusions can hide real contact.
+
 Other user-facing model views can infer friendly body labels by splitting
 underscores, namespaces, camel case, numbered links, and common quadruped
 abbreviations (`FL`, `FR`, `RL`, and `RR`). Maintained models can use
@@ -106,6 +112,8 @@ For a maintained model, add a `RobotModelInfo` entry to
 - root body and root joint candidates;
 - logical frame aliases;
 - optional body-label overrides for ambiguous source names;
+- a model-scale blocking-penetration threshold and any audited contact-pair
+  tolerances;
 - any ROS package-to-directory mappings;
 - optional home-joint values.
 

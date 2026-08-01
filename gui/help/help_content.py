@@ -26,7 +26,7 @@ Use this workflow to create one editable robot motion.
 2. Select a **Target robot frame**, such as `left_hand`.
 3. Move the target with the 3D gizmo or the position/orientation sliders.
 4. The orange robot is the temporary preview. It is not saved yet.
-5. Click **Preview Path** when you want to validate the path from the committed pose to the orange preview.
+5. Click **Preview Path** when you want to validate the path from the committed pose to the orange preview. Collision samples remain visible as red ghosts.
 6. Click **Commit Keyframe** to record the preview at the active time and advance the timeline.
 7. Add another keyframe at a later time.
 8. Click **Generate** or **Generate / Simulate**.
@@ -67,7 +67,7 @@ Use the single Time slider to scrub the robot live or follow time-based playback
 
 ## Workflow Toolbar
 
-- **Preview Path** validates the path from the committed pose to the orange preview.
+- **Preview Path** validates the path from the committed pose to the orange preview and marks collision samples with red ghosts.
 - **Commit Keyframe** records the preview at the active time.
 - **Generate** samples the saved keyframes into a robot trajectory.
 - **Play/Pause** controls the current generated or editable timeline.
@@ -172,7 +172,7 @@ The orange robot is only a preview. Click **Commit Keyframe** to store it at the
 
 ## Preview fails or moves only partway
 
-IK, joint limits, singularity checks, or collision checks may be blocking an unsafe pose. Check the **Status** panel and the **IK / Constraints** section.
+An **IK reach limit** means the required handle task could not be reached; collision warnings are reported separately. Translation may relax optional orientation and lock tasks once while keeping the required position. **Commit Keyframe** blocks meaningful penetration but allows shallow advisory contact with a warning. Check the **Status** panel and the **IK / Constraints** section.
 
 ## Generate gives an unexpected path
 

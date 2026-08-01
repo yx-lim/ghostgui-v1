@@ -374,7 +374,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertIsNone(self.viewer.ghost_source)
         self.assertFalse(self.viewer.canvas.show_ghosts)
 
-    def test_plan_preview_rejects_midpoint_collision_without_publishing(self):
+    def test_plan_preview_marks_midpoint_collision_and_publishes_red_ghosts(self):
         class MidpointCollisionChecker:
             def __init__(self, address, lower, upper):
                 self.address = address
@@ -410,9 +410,15 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.viewer.plan_preview()
 
         self.assertEqual(self.viewer.robot_trajectory, [])
-        self.assertEqual(self.viewer.ghost_trajectory, [])
-        self.assertIn("Cannot preview path", self.viewer.status_label.text())
-        self.assertIn("collision at path sample", self.viewer.status_label.text())
+        self.assertEqual(len(self.viewer.ghost_trajectory), 40)
+        self.assertEqual(self.viewer.ghost_source, "preview_path")
+        self.assertTrue(any(self.viewer.ghost_collision_flags))
+        self.assertTrue(any(self.viewer.ghost_renderer.collision_flags))
+        self.assertIn(
+            "Preview Path contains collision warnings",
+            self.viewer.status_label.text(),
+        )
+        self.assertIn("Red poses mark the contacts", self.viewer.status_label.text())
 
     def test_plan_preview_rejects_raw_joint_limit_violation_before_clamp(self):
         joint = next(
@@ -508,6 +514,31 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
         self.viewer.cancel_preview()
         self.assertEqual(self.viewer.canvas.preview_collision_geom_ids, set())
+
+    def test_advisory_collision_warns_but_allows_commit(self):
+        collision = Collision(
+            "geom_a",
+            "geom_b",
+            "body_a",
+            "body_b",
+            -0.0005,
+            "self",
+            blocking=False,
+        )
+
+        class AdvisoryCollisionChecker:
+            def get_collisions(self, _state):
+                return [collision]
+
+        self.viewer.collision_checker = AdvisoryCollisionChecker()
+        name = self.viewer.preview_state.get_joint_names()[0]
+        value = self.viewer.preview_state.get_joint_value(name) + 0.01
+        self.viewer._joint_changed(name, value)
+
+        self.assertTrue(self.viewer.accept_preview())
+        self.assertFalse(self.viewer.preview_active)
+        self.assertIn("Committed keyframe", self.viewer.status_label.text())
+        self.assertIn("Collision warning", self.viewer.status_label.text())
         self.assertEqual(self.viewer.canvas.preview_collision_body_ids, set())
 
     def test_timeline_change_discards_unaccepted_preview(self):
@@ -2965,6 +2996,55 @@ class RobotViewerTimelineTests(unittest.TestCase):
         np.testing.assert_allclose(saved[:, 0], [0.0, 0.2])
         np.testing.assert_allclose(rows[0][RAW_QPOS_KEY], at_zero)
         np.testing.assert_allclose(rows[1][RAW_QPOS_KEY], changed)
+
+    def test_trajectory_export_blocks_severe_collision(self):
+        collision = Collision(
+            "geom_a", "geom_b", "body_a", "body_b", -0.01, "self"
+        )
+
+        class BlockingCollisionChecker:
+            def get_collisions(self, _state):
+                return [collision]
+
+        self.viewer.collision_checker = BlockingCollisionChecker()
+        self.viewer.set_robot_trajectory(
+            [self.viewer.committed_state.get_qpos()],
+            times=[0.0],
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "blocked.csv"
+            with self.assertRaisesRegex(ValueError, "blocking collision"):
+                self.viewer.save_trajectory_csv(output)
+            self.assertFalse(output.exists())
+
+    def test_trajectory_export_allows_advisory_collision_with_warning(self):
+        collision = Collision(
+            "geom_a",
+            "geom_b",
+            "body_a",
+            "body_b",
+            -0.0005,
+            "self",
+            blocking=False,
+        )
+
+        class AdvisoryCollisionChecker:
+            def get_collisions(self, _state):
+                return [collision]
+
+        self.viewer.collision_checker = AdvisoryCollisionChecker()
+        self.viewer.set_robot_trajectory(
+            [self.viewer.committed_state.get_qpos()],
+            times=[0.0],
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = self.viewer.save_trajectory_csv(
+                Path(directory) / "advisory.csv"
+            )
+            self.assertTrue(output.exists())
+            self.assertIn("Collision warning", self.viewer.status_label.text())
 
     def test_save_generated_trajectory_uses_backend_times(self):
         first = self.viewer.robot_model.home_qpos.copy()

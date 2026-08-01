@@ -19,6 +19,7 @@ from gui.main_window import RobotGuiMainWindow
 from core.models import MuJoCoRobotAdapter
 from application.backend_interface import MujocoIKBackend
 from core.trajectory import TargetFrame, quat_to_rpy, rpy_to_quat
+from gui.viewers.transform_gizmo import GizmoInteractionState
 
 
 class AdvancedIKTests(unittest.TestCase):
@@ -147,6 +148,72 @@ class AdvancedIKTests(unittest.TestCase):
             self.assertIn("near singularity", viewer.status_label.text())
             self.assertIn("sigma_min=0.00e+00", viewer.status_label.text())
             self.assertIn("cond=inf", viewer.status_label.text())
+        finally:
+            window.close()
+
+    def test_gizmo_handle_sets_required_tasks_without_disabling_go2_orientation(self):
+        class CapturingDragSolver:
+            def __init__(self):
+                self.calls = []
+
+            def solve_drag(
+                self,
+                current_qpos,
+                start_position,
+                start_quaternion,
+                proposed_position,
+                proposed_quaternion,
+                **kwargs,
+            ):
+                self.calls.append(kwargs)
+                return DragSolveResult(
+                    np.asarray(current_qpos, dtype=float).copy(),
+                    np.asarray(proposed_position, dtype=float).copy(),
+                    np.asarray(proposed_quaternion, dtype=float).copy(),
+                    1.0,
+                    True,
+                    "Weighted IK converged",
+                )
+
+        window = RobotGuiMainWindow("go2")
+        try:
+            viewer = window.viewer_3d
+            kind, name = viewer.robot_model.resolve_logical_frame("FL_foot")
+            viewer.select_target(kind, name, emit=False)
+            viewer._set_target_to_selected_pose()
+            solver = CapturingDragSolver()
+            viewer.collision_solver = solver
+            orientation_control, orientation_weight = (
+                viewer.ik_task_controls["tcp_orientation"]
+            )
+            self.assertTrue(orientation_control.isChecked())
+
+            start = viewer.last_valid_target_position.copy()
+            quaternion = viewer.last_valid_target_quaternion.copy()
+            viewer.canvas.gizmo.state = (
+                GizmoInteractionState.DRAG_TRANSLATE_X
+            )
+            viewer._on_transform_moved(
+                start + np.array([0.01, 0.0, 0.0]), quaternion
+            )
+
+            translate_call = solver.calls[-1]
+            self.assertTrue(translate_call["tcp_position_required"])
+            self.assertFalse(translate_call["tcp_orientation_required"])
+            self.assertEqual(
+                translate_call["tcp_orientation_weight"],
+                orientation_weight.value(),
+            )
+
+            viewer.canvas.gizmo.state = GizmoInteractionState.DRAG_ROTATE_Z
+            rotated = rpy_to_quat(0.0, 0.0, 0.05)
+            viewer._on_transform_moved(
+                viewer.last_valid_target_position.copy(), rotated
+            )
+
+            rotate_call = solver.calls[-1]
+            self.assertTrue(rotate_call["tcp_position_required"])
+            self.assertTrue(rotate_call["tcp_orientation_required"])
         finally:
             window.close()
 

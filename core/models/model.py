@@ -813,16 +813,32 @@ class TrajectoryGhostRenderer:
         self._scratch = robot_model.create_state()
         self._signature = None
         self.transforms: list[tuple[object, object]] = []
+        self.collision_flags: list[bool] = []
 
-    def update(self, trajectory, stride: int = 5) -> bool:
+    def update(self, trajectory, stride: int = 5, collision_flags=None) -> bool:
         stride = max(1, int(stride))
         qposes = [np.asarray(q, dtype=float) for q in trajectory]
-        signature = (stride, tuple(q.tobytes() for q in qposes))
+        flags = (
+            [False] * len(qposes)
+            if collision_flags is None
+            else [bool(value) for value in collision_flags]
+        )
+        if len(flags) != len(qposes):
+            raise ValueError(
+                "trajectory collision flags must match trajectory length"
+            )
+        signature = (stride, tuple(q.tobytes() for q in qposes), tuple(flags))
         if signature == self._signature:
             return False
         self._signature = signature
         self.transforms = []
-        for qpos in qposes[::stride]:
+        self.collision_flags = []
+        sample_indices = sorted(
+            set(range(0, len(qposes), stride))
+            | {index for index, colliding in enumerate(flags) if colliding}
+        )
+        for index in sample_indices:
+            qpos = qposes[index]
             self._scratch.set_qpos(qpos)
             self.transforms.append(
                 (
@@ -830,11 +846,13 @@ class TrajectoryGhostRenderer:
                     self._scratch.mj_data.geom_xmat.copy(),
                 )
             )
+            self.collision_flags.append(flags[index])
         return True
 
     def clear(self) -> None:
         self._signature = None
         self.transforms = []
+        self.collision_flags = []
 
 
 def interpolate_qpos(start, target, frames: int = 60):

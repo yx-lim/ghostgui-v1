@@ -30,7 +30,8 @@ pose controls, or joint controls. It is not saved automatically.
 trajectory generation, and exports use committed states.
 
 **Preview Path** validates the transition from the committed state to the orange
-preview. It displays a ghost path but does not save anything.
+preview. It displays a ghost path, marks collision samples red, and does not
+save anything.
 
 **Commit Keyframe** records the current pose at the active time and advances by
 the configured keyframe interval.

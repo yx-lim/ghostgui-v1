@@ -20,6 +20,7 @@ class GuiHistorySnapshot:
     robot_trajectory: tuple
     robot_trajectory_times: tuple
     ghost_trajectory: tuple
+    ghost_collision_flags: tuple
     ghost_source: str | None
     show_ghosts: bool
     timeline_duration: float

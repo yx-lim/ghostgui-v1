@@ -2155,6 +2155,7 @@ class RobotGuiMainWindow(QMainWindow):
             ),
             robot_trajectory_times=tuple(float(t) for t in viewer.robot_trajectory_times),
             ghost_trajectory=tuple(qpos.copy() for qpos in viewer.ghost_trajectory),
+            ghost_collision_flags=tuple(viewer.ghost_collision_flags),
             ghost_source=viewer.ghost_source,
             show_ghosts=bool(viewer.show_ghosts.isChecked()),
             timeline_duration=float(viewer.timeline_duration),
@@ -2217,6 +2218,9 @@ class RobotGuiMainWindow(QMainWindow):
                 viewer.ghost_trajectory = [
                     qpos.copy() for qpos in snapshot.ghost_trajectory
                 ]
+                viewer.ghost_collision_flags = list(
+                    snapshot.ghost_collision_flags
+                )
                 viewer.ghost_source = snapshot.ghost_source
                 viewer._rebuild_ghosts()
 
@@ -2331,12 +2335,12 @@ class RobotGuiMainWindow(QMainWindow):
         lower_text = str(text).lower()
         state = "Preview"
 
-        if "collision warning" in lower_text:
+        if "ik reach limit" in lower_text or "ik blocked" in lower_text:
+            state = "IK reach limit"
+        elif "collision warning" in lower_text:
             state = "Warning: collision"
         elif "collision blocked" in lower_text:
             state = "Blocked: collision"
-        elif "ik blocked" in lower_text:
-            state = "Blocked: IK"
 
         return {
             "event": event,
@@ -3288,7 +3292,11 @@ class RobotGuiMainWindow(QMainWindow):
         )
         self.viewer_3d.load_backend_states(result.result_states)
         self.viewer_3d_mujoco.set_trajectory_csv(result.csv_path)
-        self.show_status_message(result.status_text)
+        collision_status = self.viewer_3d.robot_trajectory_collision_status()
+        self.show_status_message(
+            f"{result.status_text}; {collision_status}"
+            if collision_status else result.status_text
+        )
         self.record_history_action("Generate trajectory")
 
     def regenerate_mujoco_playback_cache(self):

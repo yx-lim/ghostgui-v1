@@ -36,9 +36,9 @@ Dragging the transform gizmo, changing a pose value, or changing a joint value
 starts an orange preview. The preview is solved in a separate MuJoCo state, so
 the committed robot remains fixed while the proposed result changes.
 
-Collision contacts appear as warnings on the preview. A preview containing a
-collision cannot be committed. Changing the selected time discards an
-uncommitted preview.
+Collision contacts appear as warnings on the preview. Blocking penetration
+cannot be committed; shallow advisory contact can be saved with a warning.
+Changing the selected time discards an uncommitted preview.
 
 Preview opacity affects only the orange robot. It does not change the Qt window
 or scene background opacity.
@@ -47,16 +47,16 @@ or scene background opacity.
 
 **Preview Path** samples the transition between the committed pose and the
 orange preview. It checks finite qpos values, joint limits, and collisions at
-intermediate samples.
+intermediate samples. Colliding samples remain visible as red ghosts.
 
-When validation succeeds, GhostGUI displays temporary path ghosts. The command
-does not change a keyframe, committed state, or export.
+GhostGUI displays the temporary path ghosts even when collision warnings are
+present. The command does not change a keyframe, committed state, or export.
 
 ## Commit Keyframe
 
 **Commit Keyframe** performs the save operation for the active time:
 
-1. It rejects a non-finite or colliding orange preview.
+1. It rejects a non-finite preview or one with blocking penetration.
 2. It copies the preview into the committed MuJoCo state.
 3. It records the committed qpos state at the active time.
 4. It captures the registered logical target frames for trajectory generation.

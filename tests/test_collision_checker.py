@@ -2,7 +2,13 @@ import unittest
 
 import numpy as np
 
-from core.ik import Collision, CollisionAwareIKSolver, CollisionChecker
+from core.ik import (
+    Collision,
+    CollisionAwareIKSolver,
+    CollisionChecker,
+    CollisionPolicy,
+    first_trajectory_collision,
+)
 from core.models import IKResult, MuJoCoRobotAdapter, RobotModel3D
 
 
@@ -91,6 +97,49 @@ class CollisionCheckerTests(unittest.TestCase):
         self.assertEqual(collision.geom1, "link02__contact_1")
         self.assertEqual(collision.geom2, "link06__contact_1")
         self.assertIn("mm penetration", collision.diagnostic_label)
+        self.assertTrue(collision.blocking)
+
+    def test_z1_shallow_contact_warns_and_deeper_contact_blocks(self):
+        model = MuJoCoRobotAdapter("z1")
+        checker = CollisionChecker(model)
+        free_joint = next(iter(model.free_joints_by_body.values()))
+
+        shallow = model.create_state()
+        shallow_qpos = shallow.get_qpos()
+        shallow_qpos[free_joint.qpos_address + 2] -= 0.004
+        shallow.set_qpos(shallow_qpos)
+        shallow_collisions = checker.get_collisions(shallow)
+
+        deep = model.create_state()
+        deep_qpos = deep.get_qpos()
+        deep_qpos[free_joint.qpos_address + 2] -= 0.006
+        deep.set_qpos(deep_qpos)
+        deep_collisions = checker.get_collisions(deep)
+
+        self.assertTrue(shallow_collisions)
+        self.assertFalse(any(item.blocking for item in shallow_collisions))
+        self.assertTrue(any(item.blocking for item in deep_collisions))
+        report = first_trajectory_collision(
+            model,
+            (model.home_qpos, shallow_qpos, deep_qpos),
+            checker=checker,
+            blocking_only=True,
+        )
+        self.assertEqual(report.sample_index, 2)
+
+    def test_audited_body_pair_exclusion_has_a_depth_limit(self):
+        policy = CollisionPolicy(
+            allowed_body_pair_tolerances=(
+                (frozenset(("link_a", "link_b")), 0.002),
+            ),
+        )
+
+        self.assertTrue(policy.allows(
+            "geom_a", "geom_b", "link_a", "link_b", 1, 2, -0.001
+        ))
+        self.assertFalse(policy.allows(
+            "geom_a", "geom_b", "link_a", "link_b", 1, 2, -0.003
+        ))
 
     def test_world_owned_ground_keeps_its_source_name(self):
         model = MuJoCoRobotAdapter("z1")
@@ -139,6 +188,82 @@ class CollisionCheckerTests(unittest.TestCase):
         self.assertFalse(result.success)
         np.testing.assert_allclose(result.qpos, start)
         self.assertEqual(result.accepted_fraction, 0.0)
+        self.assertIn("IK reach limit", result.status)
+
+    def test_failed_optional_tasks_retry_with_required_translation_only(self):
+        class FakeWeightedState:
+            def __init__(self):
+                self.qpos = np.zeros(1)
+                self.calls = []
+
+            def set_qpos(self, qpos):
+                self.qpos = np.asarray(qpos, dtype=float).copy()
+
+            def get_qpos(self):
+                return self.qpos.copy()
+
+            def resolve_object(self, _name, _kind):
+                return "site", 0
+
+            def solve_weighted_tasks(self, tasks, **_kwargs):
+                self.calls.append([task.required for task in tasks])
+                position_task = next(
+                    (task for task in tasks if hasattr(task, "target_position")),
+                    None,
+                )
+                if position_task is not None:
+                    self.qpos[0] = float(position_task.target_position[0])
+                has_optional = any(not task.required for task in tasks)
+                return IKResult(
+                    not has_optional,
+                    0.02 if has_optional else 0.0,
+                    1,
+                    "optional conflict" if has_optional else "required converged",
+                )
+
+            def get_body_pose(self, _name, _kind):
+                return (
+                    np.array([self.qpos[0], 0.0, 0.0]),
+                    np.array([1.0, 0.0, 0.0, 0.0]),
+                )
+
+        class FakeRobotModel:
+            @staticmethod
+            def free_joint_for_body(_body_id):
+                return None
+
+        class NoCollisions:
+            @staticmethod
+            def get_collisions(_state):
+                return []
+
+        solver = CollisionAwareIKSolver.__new__(CollisionAwareIKSolver)
+        solver.robot_model = FakeRobotModel()
+        solver.candidate_state = FakeWeightedState()
+        solver.collision_checker = NoCollisions()
+        solver.collision_drag_substeps = 1
+        solver.ik_tolerance = 0.001
+        solver.orientation_weight = 0.25
+
+        result = solver.solve_drag(
+            np.zeros(1),
+            np.zeros(3),
+            np.array([1.0, 0.0, 0.0, 0.0]),
+            np.array([0.05, 0.0, 0.0]),
+            np.array([1.0, 0.0, 0.0, 0.0]),
+            object_name="tool",
+            kind="site",
+            tcp_position_required=True,
+            tcp_orientation_required=False,
+        )
+
+        self.assertTrue(result.success, result.status)
+        self.assertTrue(result.relaxed_constraints)
+        self.assertEqual(
+            solver.candidate_state.calls,
+            [[True, False], [True]],
+        )
+        self.assertIn("optional constraints relaxed", result.status)
 
     def test_ground_collision_warns_without_blocking_free_root_drag(self):
         state = self.model.create_state()

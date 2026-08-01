@@ -72,6 +72,7 @@ def _status_severity(text):
             "collision",
             " is empty",
             "near singularity",
+            "ik reach limit",
             "not selectable",
             "no editable",
         )
@@ -123,7 +124,19 @@ def _verbose_ik_status_event(raw, parts, fields):
         if key not in _DETAIL_FIELD_KEYS:
             notes.append(part)
 
-    if "collision warning" in lower:
+    if "ik reach limit" in lower or "ik blocked" in lower:
+        severity = "warning"
+        title = "IK reach limit"
+        cause = next(
+            (
+                note for note in notes
+                if "ik reach limit" in note.lower()
+                or "ik blocked" in note.lower()
+            ),
+            "The IK solver reached a kinematic or active-constraint limit.",
+        )
+        message = cause.rstrip(".") + "."
+    elif "collision warning" in lower:
         severity = "warning"
         title = "Preview warning"
         cause = next(
@@ -137,14 +150,6 @@ def _verbose_ik_status_event(raw, parts, fields):
         cause = next(
             (note for note in notes if "collision blocked" in note.lower()),
             "Movement was stopped by a collision.",
-        )
-        message = cause.rstrip(".") + "."
-    elif "ik blocked" in lower:
-        severity = "warning"
-        title = "Preview blocked"
-        cause = next(
-            (note for note in notes if "ik blocked" in note.lower()),
-            "The IK solver could not apply the requested movement.",
         )
         message = cause.rstrip(".") + "."
     elif "near singularity" in lower:

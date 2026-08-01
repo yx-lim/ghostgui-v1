@@ -49,6 +49,7 @@ from core.models import (
 from core.ik import (
     CollisionAwareIKSolver,
     CollisionChecker,
+    trajectory_collision_reports,
     format_collision_diagnostics,
     format_collision_pairs,
 )
@@ -85,6 +86,9 @@ class PreviewPathValidation:
     ok: bool
     message: str
     failed_index: int | None = None
+    collision_indices: tuple[int, ...] = ()
+    blocking_collision_indices: tuple[int, ...] = ()
+    collisions: tuple = ()
 
 
 class RobotViewer3D(QWidget):
@@ -159,6 +163,9 @@ class RobotViewer3D(QWidget):
         )
         self.robot_trajectory = []
         self.robot_trajectory_times = []
+        self.robot_trajectory_warning_report = None
+        self.robot_trajectory_blocking_report = None
+        self._last_export_collision_warning = None
         self._prompt_trajectory_import_dt_on_load = False
         self._background_trajectory_postprocess_requested = False
         self.csv_file_selection_stage = (
@@ -175,6 +182,7 @@ class RobotViewer3D(QWidget):
         self._owns_background_jobs = background_jobs is None
         self._shutdown = False
         self.ghost_trajectory = []
+        self.ghost_collision_flags = []
         self.ghost_source = None
         self.joint_controls = {}
         self.ik_influence_controls = {}
@@ -1100,6 +1108,19 @@ class RobotViewer3D(QWidget):
             kind == "body"
             and self.robot_model.free_joint_for_body(selected_object_id) is not None
         )
+        state_name = self.canvas.gizmo.state.name
+        rotation_drag = "ROTATE" in state_name
+        if not rotation_drag and "TRANSLATE" not in state_name:
+            position_changed = not np.allclose(
+                position, self.last_valid_target_position, atol=1e-9, rtol=0.0
+            )
+            quaternion_changed = not np.allclose(
+                quaternion,
+                self.last_valid_target_quaternion,
+                atol=1e-9,
+                rtol=0.0,
+            )
+            rotation_drag = quaternion_changed and not position_changed
         result = self.collision_solver.solve_drag(
             self.preview_state.get_qpos(),
             self.last_valid_target_position,
@@ -1117,6 +1138,10 @@ class RobotViewer3D(QWidget):
             tcp_orientation_weight=(
                 tcp_orientation_weight if tcp_orientation_enabled else 0.0
             ),
+            # Translation keeps orientation enabled as a best-effort task;
+            # rotation requires both orientation and the held TCP position.
+            tcp_position_required=True,
+            tcp_orientation_required=rotation_drag,
         )
         if result.success:
             self.preview_state.set_qpos(result.qpos)
@@ -1199,6 +1224,9 @@ class RobotViewer3D(QWidget):
 
     def _build_validated_preview_path(self, start, goal, samples=40):
         planned = []
+        collision_indices = []
+        blocking_collision_indices = []
+        first_collisions = ()
         candidate = self.robot_model.create_state()
         for index, alpha in enumerate(np.linspace(0.0, 1.0, int(samples))):
             qpos = self.state_timeline._interpolate(start, goal, alpha)
@@ -1219,24 +1247,38 @@ class RobotViewer3D(QWidget):
                     [],
                 )
             candidate.set_qpos(qpos)
+            planned.append(qpos)
             collisions = (
                 self.collision_checker.get_collisions(candidate)
                 if self.collision_checker else []
             )
             if collisions:
-                names = format_collision_pairs(collisions)
-                details = format_collision_diagnostics(collisions)
-                return (
-                    PreviewPathValidation(
-                        False,
-                        f"collision at path sample {index}: {names}; "
-                        f"contact geometry: {details}",
-                        index,
-                    ),
-                    [],
-                )
-            planned.append(qpos)
-        return PreviewPathValidation(True, "Preview path is valid."), planned
+                collision_indices.append(index)
+                if any(item.blocking for item in collisions):
+                    blocking_collision_indices.append(index)
+                if not first_collisions:
+                    first_collisions = tuple(collisions)
+        if collision_indices:
+            names = format_collision_pairs(first_collisions)
+            details = format_collision_diagnostics(first_collisions)
+            message = (
+                f"Preview Path contains collision warnings at "
+                f"{len(collision_indices)} of {len(planned)} samples; "
+                f"first at sample {collision_indices[0]}: {names}; "
+                f"contact geometry: {details}. Red poses mark the contacts."
+            )
+            return (
+                PreviewPathValidation(
+                    True,
+                    message,
+                    collision_indices[0],
+                    tuple(collision_indices),
+                    tuple(blocking_collision_indices),
+                    first_collisions,
+                ),
+                planned,
+            )
+        return PreviewPathValidation(True, "Preview Path is valid."), planned
 
     def plan_preview(self):
         if not self.preview_active:
@@ -1252,10 +1294,16 @@ class RobotViewer3D(QWidget):
             )
             return
         self.ghost_trajectory = [qpos.copy() for qpos in planned]
+        collision_indices = set(validation.collision_indices)
+        self.ghost_collision_flags = [
+            index in collision_indices for index in range(len(planned))
+        ]
         self.ghost_source = "preview_path"
         self._rebuild_ghosts()
         self.status_label.setText(
-            "Preview path is valid; no keyframe was changed."
+            validation.message
+            if validation.collision_indices
+            else "Preview Path is valid; no keyframe was changed."
         )
         self.history_action_finished.emit("Preview path")
 
@@ -1273,12 +1321,13 @@ class RobotViewer3D(QWidget):
             self.collision_checker.get_collisions(self.preview_state)
             if self.collision_checker else []
         )
-        if collisions:
+        blocking_collisions = [item for item in collisions if item.blocking]
+        if blocking_collisions:
             self.canvas.set_preview_collisions(collisions)
-            names = format_collision_pairs(collisions)
-            details = format_collision_diagnostics(collisions)
+            names = format_collision_pairs(blocking_collisions)
+            details = format_collision_diagnostics(blocking_collisions)
             self.status_label.setText(
-                f"Cannot commit keyframe: collision detected ({names}); "
+                f"Cannot commit keyframe: blocking collision ({names}); "
                 f"contact geometry: {details}."
             )
             return False
@@ -1291,9 +1340,17 @@ class RobotViewer3D(QWidget):
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
         self._set_target_to_selected_pose()
-        self.status_label.setText(
-            f"Committed keyframe at t={self.current_time:.2f} s"
-        )
+        if collisions:
+            names = format_collision_pairs(collisions)
+            details = format_collision_diagnostics(collisions)
+            self.status_label.setText(
+                f"Committed keyframe at t={self.current_time:.2f} s; "
+                f"Collision warning: {names}; Contact geometry: {details}"
+            )
+        else:
+            self.status_label.setText(
+                f"Committed keyframe at t={self.current_time:.2f} s"
+            )
         if emit_pose_finished and self.last_valid_target_position is not None:
             roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
             self.target_pose_drag_finished.emit(
@@ -1785,6 +1842,23 @@ class RobotViewer3D(QWidget):
             )
             source_name = "editable timeline"
 
+        if self.robot_trajectory:
+            warning_report = self.robot_trajectory_warning_report
+            blocking_report = self.robot_trajectory_blocking_report
+        else:
+            warning_report, blocking_report = trajectory_collision_reports(
+                self.robot_model, qposes, checker=self.collision_checker
+            )
+        if blocking_report is not None:
+            names = format_collision_pairs(blocking_report.collisions)
+            details = format_collision_diagnostics(blocking_report.collisions)
+            raise ValueError(
+                f"{source_name} has a blocking collision at sample "
+                f"{blocking_report.sample_index}: {names}; "
+                f"contact geometry: {details}"
+            )
+        self._last_export_collision_warning = warning_report
+
         return TrajectoryExport(
             expected_qpos_count=expected,
             times=times,
@@ -1799,10 +1873,31 @@ class RobotViewer3D(QWidget):
             if export.preview_active
             else ""
         )
+        collision_note = ""
+        if self._last_export_collision_warning is not None:
+            report = self._last_export_collision_warning
+            collision_note = (
+                f"; Collision warning at sample {report.sample_index}: "
+                f"{format_collision_pairs(report.collisions)}"
+            )
         self.status_label.setText(
             f"Saved {len(export.qposes)} timed qpos states from "
             f"{export.source_name} "
-            f"to {path}{preview_note}"
+            f"to {path}{preview_note}{collision_note}"
+        )
+
+    def robot_trajectory_collision_status(self):
+        report = (
+            self.robot_trajectory_blocking_report
+            or self.robot_trajectory_warning_report
+        )
+        if report is None:
+            return ""
+        severity = "Blocking collision" if report.blocking else "Collision warning"
+        return (
+            f"{severity} at generated sample {report.sample_index}: "
+            f"{format_collision_pairs(report.collisions)}; "
+            f"Contact geometry: {format_collision_diagnostics(report.collisions)}"
         )
 
     def _refresh_timeline_trajectory(self):
@@ -1859,6 +1954,14 @@ class RobotViewer3D(QWidget):
             valid = [item[1] for item in ordered]
         self.robot_trajectory = valid
         self.robot_trajectory_times = valid_times
+        (
+            self.robot_trajectory_warning_report,
+            self.robot_trajectory_blocking_report,
+        ) = trajectory_collision_reports(
+            self.robot_model,
+            valid,
+            checker=self.collision_checker,
+        ) if valid else (None, None)
         if valid_times:
             self.set_timeline_duration(max(self.timeline_duration, max(valid_times)))
         self._clear_ghost_overlay(source="preview_path")
@@ -1875,7 +1978,10 @@ class RobotViewer3D(QWidget):
         self._pending_scrub_preview_time = None
         self.robot_trajectory = []
         self.robot_trajectory_times = []
+        self.robot_trajectory_warning_report = None
+        self.robot_trajectory_blocking_report = None
         self.ghost_trajectory = []
+        self.ghost_collision_flags = []
         self.ghost_source = None
         self.display_time = self.current_time
         self._set_timeslice_widgets(self.display_time)
@@ -1944,7 +2050,9 @@ class RobotViewer3D(QWidget):
     def _rebuild_ghosts(self):
         if self.ghost_renderer:
             self.ghost_renderer.update(
-                self.ghost_trajectory, self.ghost_stride.value()
+                self.ghost_trajectory,
+                self.ghost_stride.value(),
+                self.ghost_collision_flags,
             )
         self._update_ghost_options()
 
@@ -1952,6 +2060,7 @@ class RobotViewer3D(QWidget):
         if source is not None and self.ghost_source != source:
             return
         self.ghost_trajectory = []
+        self.ghost_collision_flags = []
         self.ghost_source = None
         if self.ghost_renderer:
             self.ghost_renderer.clear()
@@ -1960,11 +2069,13 @@ class RobotViewer3D(QWidget):
     def _sync_playback_pose_ghosts(self):
         if self.show_ghosts.isChecked() and self.robot_trajectory:
             self.ghost_trajectory = [qpos.copy() for qpos in self.robot_trajectory]
+            self.ghost_collision_flags = [False] * len(self.ghost_trajectory)
             self.ghost_source = "playback"
             self._rebuild_ghosts()
             return
         if self.ghost_source == "playback":
             self.ghost_trajectory = []
+            self.ghost_collision_flags = []
             self.ghost_source = None
             if self.ghost_renderer:
                 self.ghost_renderer.clear()

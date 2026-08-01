@@ -26,6 +26,7 @@ class Collision:
     body2_id: int | None = None
     body1_label: str | None = None
     body2_label: str | None = None
+    blocking: bool = True
 
     @property
     def pair_label(self):
@@ -37,9 +38,10 @@ class Collision:
     @property
     def diagnostic_label(self):
         penetration_mm = max(0.0, -float(self.distance)) * 1000.0
+        severity = "blocking" if self.blocking else "advisory"
         return (
             f"{self.geom1} ↔ {self.geom2} "
-            f"({penetration_mm:.1f} mm penetration)"
+            f"({penetration_mm:.1f} mm penetration, {severity})"
         )
 
 
@@ -60,6 +62,10 @@ class CollisionPolicy:
     allowed_contact_pairs: frozenset[frozenset[str]] = frozenset()
     support_body_ids: frozenset[int] = frozenset()
     support_penetration_tolerance: float = 0.01
+    allowed_body_pair_tolerances: tuple[
+        tuple[frozenset[str], float], ...
+    ] = ()
+    blocking_penetration: float = 0.001
 
     @classmethod
     def for_robot_model(
@@ -70,6 +76,7 @@ class CollisionPolicy:
         support_penetration_tolerance=0.01,
     ):
         model = robot_model.mj_model
+        info = getattr(robot_model, "info", None)
         support_body_ids = set()
         for logical_name, binding in getattr(
             robot_model,
@@ -100,21 +107,40 @@ class CollisionPolicy:
             allowed_contact_pairs=frozenset(
                 frozenset(pair) for pair in (allowed_contact_pairs or ())
             ),
+            allowed_body_pair_tolerances=tuple(
+                (frozenset((body1, body2)), max(0.0, float(tolerance)))
+                for body1, body2, tolerance in getattr(
+                    info, "allowed_contact_body_pairs", ()
+                )
+            ),
             support_body_ids=frozenset(support_body_ids),
             support_penetration_tolerance=float(
                 support_penetration_tolerance
             ),
+            blocking_penetration=max(0.0, float(getattr(
+                info, "collision_blocking_penetration_m", 0.001
+            ))),
         )
 
     def allows(
         self,
         geom1,
         geom2,
+        body1,
+        body2,
         body1_id,
         body2_id,
         distance,
     ):
         if frozenset((geom1, geom2)) in self.allowed_contact_pairs:
+            return True
+        body_pair = frozenset((body1, body2))
+        if any(
+            body_pair == allowed_pair
+            and float(distance) >= -float(penetration_tolerance)
+            for allowed_pair, penetration_tolerance
+            in self.allowed_body_pair_tolerances
+        ):
             return True
         if 0 not in (body1_id, body2_id):
             return False
@@ -123,6 +149,9 @@ class CollisionPolicy:
             robot_body_id in self.support_body_ids
             and float(distance) >= -self.support_penetration_tolerance
         )
+
+    def is_blocking(self, distance):
+        return float(distance) <= -float(self.blocking_penetration)
 
 
 class CollisionChecker:
@@ -148,10 +177,14 @@ class CollisionChecker:
         self.allowed_contact_pairs.add(frozenset((geom1, geom2)))
         self.policy = CollisionPolicy(
             allowed_contact_pairs=frozenset(self.allowed_contact_pairs),
+            allowed_body_pair_tolerances=(
+                self.policy.allowed_body_pair_tolerances
+            ),
             support_body_ids=self.policy.support_body_ids,
             support_penetration_tolerance=(
                 self.policy.support_penetration_tolerance
             ),
+            blocking_penetration=self.policy.blocking_penetration,
         )
 
     def get_collisions(self, state):
@@ -167,16 +200,18 @@ class CollisionChecker:
             geom2 = self._name(mujoco.mjtObj.mjOBJ_GEOM, geom2_id, "geom")
             body1_id = int(self.model.geom_bodyid[geom1_id])
             body2_id = int(self.model.geom_bodyid[geom2_id])
+            body1 = self._name(mujoco.mjtObj.mjOBJ_BODY, body1_id, "body")
+            body2 = self._name(mujoco.mjtObj.mjOBJ_BODY, body2_id, "body")
             if self.policy.allows(
                 geom1,
                 geom2,
+                body1,
+                body2,
                 body1_id,
                 body2_id,
                 float(contact.dist),
             ):
                 continue
-            body1 = self._name(mujoco.mjtObj.mjOBJ_BODY, body1_id, "body")
-            body2 = self._name(mujoco.mjtObj.mjOBJ_BODY, body2_id, "body")
             kind = "environment" if 0 in (body1_id, body2_id) else "self"
             collision = Collision(
                 geom1,
@@ -191,6 +226,7 @@ class CollisionChecker:
                 body2_id,
                 self._frame_label(body1_id, body1, geom1),
                 self._frame_label(body2_id, body2, geom2),
+                self.policy.is_blocking(float(contact.dist)),
             )
             pair = tuple(sorted((geom1_id, geom2_id)))
             previous = collisions_by_pair.get(pair)
@@ -200,6 +236,12 @@ class CollisionChecker:
 
     def is_state_collision_free(self, state):
         return not self.get_collisions(state)
+
+    def get_blocking_collisions(self, state):
+        return [
+            collision for collision in self.get_collisions(state)
+            if collision.blocking
+        ]
 
     def _name(self, object_type, object_id, fallback):
         if object_type == mujoco.mjtObj.mjOBJ_GEOM:
@@ -225,6 +267,61 @@ class CollisionChecker:
         return body_name
 
 
+@dataclass(frozen=True)
+class TrajectoryCollisionReport:
+    sample_index: int
+    collisions: tuple[Collision, ...]
+
+    @property
+    def blocking(self):
+        return any(collision.blocking for collision in self.collisions)
+
+
+def first_trajectory_collision(
+    robot_model,
+    qposes,
+    *,
+    checker=None,
+    blocking_only=False,
+):
+    """Return the first warning or blocking collision in sampled qpos data."""
+    checker = checker or CollisionChecker(robot_model)
+    state = robot_model.create_state()
+    for sample_index, qpos in enumerate(qposes):
+        state.set_qpos(qpos)
+        collisions = checker.get_collisions(state)
+        if blocking_only:
+            collisions = [item for item in collisions if item.blocking]
+        if collisions:
+            return TrajectoryCollisionReport(
+                int(sample_index), tuple(collisions)
+            )
+    return None
+
+
+def trajectory_collision_reports(robot_model, qposes, *, checker=None):
+    """Find first warning and first blocking sample in one trajectory pass."""
+    checker = checker or CollisionChecker(robot_model)
+    state = robot_model.create_state()
+    warning_report = None
+    blocking_report = None
+    for sample_index, qpos in enumerate(qposes):
+        state.set_qpos(qpos)
+        collisions = checker.get_collisions(state)
+        if collisions and warning_report is None:
+            warning_report = TrajectoryCollisionReport(
+                int(sample_index), tuple(collisions)
+            )
+        blocking = tuple(item for item in collisions if item.blocking)
+        if blocking and blocking_report is None:
+            blocking_report = TrajectoryCollisionReport(
+                int(sample_index), blocking
+            )
+        if warning_report is not None and blocking_report is not None:
+            break
+    return warning_report, blocking_report
+
+
 @dataclass
 class DragSolveResult:
     qpos: object
@@ -238,6 +335,7 @@ class DragSolveResult:
     near_singularity: bool = False
     min_singular_value: float = float("inf")
     condition_number: float = 0.0
+    relaxed_constraints: bool = False
 
 
 class CollisionAwareIKSolver:
@@ -273,6 +371,8 @@ class CollisionAwareIKSolver:
         solver_settings=None,
         tcp_position_weight=1.0,
         tcp_orientation_weight=None,
+        tcp_position_required=True,
+        tcp_orientation_required=True,
     ):
         start_position = np.asarray(start_position, dtype=float)
         proposed_position = np.asarray(proposed_position, dtype=float)
@@ -284,6 +384,7 @@ class CollisionAwareIKSolver:
         near_singularity = False
         min_singular_value = float("inf")
         condition_number = 0.0
+        relaxed_constraints = False
         blocked_reason = None
         settings = dict(solver_settings or {})
         orientation_weight = (
@@ -316,7 +417,7 @@ class CollisionAwareIKSolver:
                 accepted_quaternion,
                 0.0,
                 False,
-                "IK blocked drag: selected TCP tasks are disabled",
+                "IK reach limit: selected TCP tasks are disabled",
             )
 
         for step in range(1, self.collision_drag_substeps + 1):
@@ -328,6 +429,7 @@ class CollisionAwareIKSolver:
                 start_quaternion, proposed_quaternion, fraction
             )
             self.candidate_state.set_qpos(accepted_qpos)
+            tasks = None
             if not hasattr(self.candidate_state, "solve_weighted_tasks"):
                 ik_result = self.candidate_state.solve_ik(
                     object_name,
@@ -376,7 +478,7 @@ class CollisionAwareIKSolver:
                     name="Selected TCP position",
                     weight=float(tcp_position_weight),
                     priority=2,
-                    required=True,
+                    required=bool(tcp_position_required),
                     tolerance=ik_settings.position_tolerance,
                     object_name=object_name,
                     kind=resolved_kind,
@@ -387,7 +489,7 @@ class CollisionAwareIKSolver:
                         name="Selected TCP orientation",
                         weight=orientation_weight,
                         priority=2,
-                        required=True,
+                        required=bool(tcp_orientation_required),
                         tolerance=ik_settings.orientation_tolerance,
                         object_name=object_name,
                         kind=resolved_kind,
@@ -402,6 +504,28 @@ class CollisionAwareIKSolver:
                     step_size=ik_settings.step_size,
                     max_step=ik_settings.max_step,
                 )
+            if not ik_result.success and tasks:
+                required_tasks = [
+                    task for task in tasks
+                    if task.enabled and task.weight > 0.0 and task.required
+                ]
+                optional_tasks = [
+                    task for task in tasks
+                    if task.enabled and task.weight > 0.0 and not task.required
+                ]
+                if required_tasks and optional_tasks:
+                    self.candidate_state.set_qpos(accepted_qpos)
+                    retry_result = self.candidate_state.solve_weighted_tasks(
+                        required_tasks,
+                        joint_weights=joint_weights,
+                        max_iterations=ik_settings.max_iterations,
+                        damping=max(0.08, ik_settings.damping),
+                        step_size=ik_settings.step_size,
+                        max_step=ik_settings.max_step,
+                    )
+                    if retry_result.success:
+                        ik_result = retry_result
+                        relaxed_constraints = True
             last_error = ik_result.error
             if not ik_result.success:
                 near_singularity = near_singularity or ik_result.near_singularity
@@ -411,7 +535,7 @@ class CollisionAwareIKSolver:
                 condition_number = max(
                     condition_number, ik_result.condition_number
                 )
-                blocked_reason = f"IK blocked drag: {ik_result.message}"
+                blocked_reason = f"IK reach limit: {ik_result.message}"
                 break
             near_singularity = near_singularity or ik_result.near_singularity
             min_singular_value = min(
@@ -426,10 +550,14 @@ class CollisionAwareIKSolver:
                 candidate_position, candidate_quaternion
             )
             accepted_position = (
-                candidate_position if tcp_position_weight > 0.0 else solved_position
+                candidate_position
+                if tcp_position_weight > 0.0 and tcp_position_required
+                else solved_position
             )
             accepted_quaternion = (
-                candidate_quaternion if orientation_weight > 0.0 else solved_quaternion
+                candidate_quaternion
+                if orientation_weight > 0.0 and tcp_orientation_required
+                else solved_quaternion
             )
             accepted_fraction = fraction
 
@@ -458,7 +586,11 @@ class CollisionAwareIKSolver:
                 near_singularity,
                 min_singular_value,
                 condition_number,
+                relaxed_constraints,
             )
+        relaxation_note = (
+            "; optional constraints relaxed" if relaxed_constraints else ""
+        )
         return DragSolveResult(
             accepted_qpos,
             accepted_position,
@@ -466,13 +598,15 @@ class CollisionAwareIKSolver:
             1.0,
             True,
             (
-                f"{ik_result.message}{collision_note}"
+                f"{ik_result.message}{relaxation_note}{collision_note}"
                 if preview_collisions
-                else f"{ik_result.message}; state is collision-free"
+                else f"{ik_result.message}{relaxation_note}; "
+                "state is collision-free"
             ),
             last_error,
             preview_collisions,
             near_singularity,
             min_singular_value,
             condition_number,
+            relaxed_constraints,
         )
