@@ -470,6 +470,18 @@ class TrajectoryControlPanel(QGroupBox):
             stack.addWidget(widget)
         stack.setCurrentWidget(widget)
         stack.setVisible(widget is not stack.empty_widget)
+        # Context widgets are attached after the sidebar has already been
+        # composed.  Explicitly invalidate the containing layout so macOS Qt
+        # does not retain the hidden empty page's zero-sized geometry.
+        widget.updateGeometry()
+        stack.updateGeometry()
+        parent = stack.parentWidget()
+        if parent is not None:
+            layout = parent.layout()
+            if layout is not None:
+                layout.invalidate()
+                layout.activate()
+            parent.updateGeometry()
 
     def _emit_setup_import_action(self, index):
         action = self.import_action_box.itemData(index)

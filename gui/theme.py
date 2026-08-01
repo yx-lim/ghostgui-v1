@@ -239,6 +239,27 @@ def application_stylesheet(widget: QWidget | None = None) -> str:
             selection-color: {theme.accent_text};
             selection-background-color: {theme.accent};
         }}
+        QComboBox {{
+            min-height: 18px;
+            padding: 2px 22px 2px 6px;
+        }}
+        QComboBox::drop-down {{
+            subcontrol-origin: border;
+            subcontrol-position: top right;
+            width: 20px;
+            background: {theme.elevated_bg};
+            border-left: 1px solid {theme.border};
+            border-top-right-radius: 4px;
+            border-bottom-right-radius: 4px;
+        }}
+        QComboBox::drop-down:hover {{
+            background: {theme.panel_hover_bg};
+        }}
+        QComboBox::down-arrow {{
+            image: url("{_icon_url(theme, "chevron-down")}");
+            width: 9px;
+            height: 9px;
+        }}
         QSpinBox, QDoubleSpinBox {{
             padding-right: 14px;
         }}

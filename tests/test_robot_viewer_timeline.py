@@ -1785,6 +1785,20 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.target_context_panel.parent(),
             self.window.controls.target_context_stack,
         )
+        target_section = next(
+            section for section in self.window.left_sidebar_content.sections
+            if section.title == "Target"
+        )
+        target_section.set_expanded(True)
+        self.app.processEvents()
+        self.assertTrue(self.window.controls.target_context_stack.isVisible())
+        self.assertTrue(self.viewer.target_box.isVisible())
+        self.assertGreaterEqual(self.viewer.target_box.width(), 96)
+        self.assertGreater(self.viewer.target_box.height(), 0)
+        self.assertEqual(
+            self.viewer.target_box.sizePolicy().horizontalPolicy(),
+            QSizePolicy.Policy.MinimumExpanding,
+        )
         preview_section = next(
             section for section in self.window.right_sidebar_content.sections
             if section.title == "IK / Constraints"
