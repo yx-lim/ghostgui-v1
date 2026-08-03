@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -9,8 +10,11 @@ from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtWidgets import QApplication
 
 from gui.viewers.opengl_compat import (
+    OPENGL_MODE_ENV,
     compatibility_context_failure,
+    configure_default_surface_format,
     desktop_compatibility_format,
+    surface_format_for_mode,
 )
 from gui.viewers.robot_canvas_3d import RobotCanvas3D
 
@@ -72,6 +76,38 @@ class OpenGLFormatTests(unittest.TestCase):
             )
         )
 
+    def test_default_ab_mode_preserves_the_input_surface_format(self):
+        base = QSurfaceFormat()
+        base.setRenderableType(QSurfaceFormat.RenderableType.OpenGLES)
+        base.setVersion(3, 0)
+        base.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+        base.setDepthBufferSize(16)
+
+        surface_format = surface_format_for_mode(base, "default")
+
+        self.assertEqual(
+            surface_format.renderableType(),
+            QSurfaceFormat.RenderableType.OpenGLES,
+        )
+        self.assertEqual(
+            (surface_format.majorVersion(), surface_format.minorVersion()),
+            (3, 0),
+        )
+        self.assertEqual(
+            surface_format.profile(),
+            QSurfaceFormat.OpenGLContextProfile.CoreProfile,
+        )
+        self.assertEqual(surface_format.depthBufferSize(), 16)
+
+    def test_default_ab_mode_does_not_replace_the_process_format(self):
+        with (
+            patch.dict(os.environ, {OPENGL_MODE_ENV: "default"}),
+            patch.object(QSurfaceFormat, "setDefaultFormat") as set_default,
+        ):
+            configure_default_surface_format()
+
+        set_default.assert_not_called()
+
     def test_realized_context_rejects_es_core_profile_and_missing_depth(self):
         self.assertIn(
             "OpenGL ES",
@@ -131,7 +167,10 @@ class OpenGLCanvasTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_canvas_requests_compatible_format_for_direct_construction(self):
-        canvas = RobotCanvas3D()
+        with patch.dict(
+            os.environ, {OPENGL_MODE_ENV: "compatibility"}, clear=False
+        ):
+            canvas = RobotCanvas3D()
         try:
             surface_format = canvas.format()
             self.assertEqual(
@@ -148,6 +187,22 @@ class OpenGLCanvasTests(unittest.TestCase):
             )
             self.assertGreaterEqual(surface_format.depthBufferSize(), 24)
             self.assertEqual(surface_format.alphaBufferSize(), 0)
+        finally:
+            canvas.shutdown()
+
+    def test_canvas_default_ab_mode_does_not_force_opengl_21(self):
+        with (
+            patch.dict(os.environ, {OPENGL_MODE_ENV: "default"}, clear=False),
+            patch(
+                "gui.viewers.robot_canvas_3d.surface_format_for_mode",
+                wraps=surface_format_for_mode,
+            ) as select_format,
+        ):
+            canvas = RobotCanvas3D()
+        try:
+            self.assertEqual(canvas._opengl_mode, "default")
+            self.assertEqual(canvas.format().alphaBufferSize(), 0)
+            self.assertEqual(select_format.call_args.args[1], "default")
         finally:
             canvas.shutdown()
 

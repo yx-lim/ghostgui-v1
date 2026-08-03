@@ -14,6 +14,7 @@ import zipfile
 REQUIRED_MODULES = frozenset(
     {
         "application/launcher.py",
+        "application/render_diagnostics.py",
         "application/mujoco_viewer_process.py",
         "application/background_jobs.py",
         "application/history.py",

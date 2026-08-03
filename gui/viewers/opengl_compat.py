@@ -2,11 +2,27 @@
 
 from __future__ import annotations
 
+import os
+
 from PySide6.QtGui import QSurfaceFormat
 
 
 MINIMUM_OPENGL_VERSION = (2, 1)
 DEFAULT_DEPTH_BUFFER_SIZE = 24
+OPENGL_MODE_ENV = "GHOSTGUI_OPENGL_MODE"
+OPENGL_MODE_COMPATIBILITY = "compatibility"
+OPENGL_MODE_DEFAULT = "default"
+OPENGL_MODES = (OPENGL_MODE_COMPATIBILITY, OPENGL_MODE_DEFAULT)
+
+
+def normalize_opengl_mode(mode: str | None) -> str:
+    """Normalize an A/B render mode, falling back to the supported runtime."""
+    value = str(mode or "").strip().lower()
+    return value if value in OPENGL_MODES else OPENGL_MODE_COMPATIBILITY
+
+
+def current_opengl_mode() -> str:
+    return normalize_opengl_mode(os.environ.get(OPENGL_MODE_ENV))
 
 
 def desktop_compatibility_format(
@@ -31,10 +47,28 @@ def desktop_compatibility_format(
     return surface_format
 
 
-def configure_default_surface_format() -> QSurfaceFormat:
-    """Set the process-wide format; call before constructing QApplication."""
-    surface_format = desktop_compatibility_format()
-    QSurfaceFormat.setDefaultFormat(surface_format)
+def surface_format_for_mode(
+    base_format: QSurfaceFormat | None = None,
+    mode: str | None = None,
+) -> QSurfaceFormat:
+    """Return either the hardened format or Qt's unmodified default format."""
+    if normalize_opengl_mode(mode or current_opengl_mode()) == (
+        OPENGL_MODE_COMPATIBILITY
+    ):
+        return desktop_compatibility_format(base_format)
+    return (
+        QSurfaceFormat(base_format)
+        if base_format is not None
+        else QSurfaceFormat(QSurfaceFormat.defaultFormat())
+    )
+
+
+def configure_default_surface_format(mode: str | None = None) -> QSurfaceFormat:
+    """Configure the selected process format before constructing QApplication."""
+    selected_mode = normalize_opengl_mode(mode or current_opengl_mode())
+    surface_format = surface_format_for_mode(mode=selected_mode)
+    if selected_mode == OPENGL_MODE_COMPATIBILITY:
+        QSurfaceFormat.setDefaultFormat(surface_format)
     return surface_format
 
 

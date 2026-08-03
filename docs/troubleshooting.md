@@ -39,6 +39,28 @@ with the context supplied by Qt. Confirm that the machine has working GPU
 drivers or a software OpenGL stack. Remote desktops, containers, WSL, and
 headless sessions may need separate display and OpenGL configuration.
 
+### Memory rises sharply when the 3D view opens on macOS
+
+Run the timed A/B diagnostic from the repository environment:
+
+```bash
+python3 scripts/diagnose_macos_rendering.py --model g1 --seconds 20
+```
+
+The harness opens the selected robot twice. The first run uses GhostGUI's
+desktop OpenGL compatibility request; the second uses Qt's unmodified default
+surface format. Each window closes automatically. It records native resident
+memory before and after display-list compilation, the realized OpenGL renderer
+and profile, context rebuild count, Retina scale, and physical framebuffer
+size. The two detailed `stderr.log` paths and their memory comparison are
+printed when it finishes.
+
+Use a larger `--seconds` value if either geometry build is reported as
+unfinished. A large one-time compile delta points to driver-side display-list
+storage, while a rising sequence of periodic samples or multiple contexts
+points to retained resources or context recreation. The diagnostic mode is
+opt-in and does not change ordinary launches.
+
 ### The passive viewer fails on macOS
 
 MuJoCo passive-viewer scripts must run through `mjpython` on macOS. Recreate
@@ -131,3 +153,6 @@ Include:
 - the complete terminal and **Status** messages;
 - whether the issue occurs with a bundled model;
 - minimal model or CSV input when the problem is data-dependent.
+
+For a macOS render-memory report, also attach both `stderr.log` files produced
+by `scripts/diagnose_macos_rendering.py`.

@@ -76,6 +76,21 @@ That test requires a valid OpenGL context, captures the composed window, checks
 that it is nonblank and opaque, and compares stable toolbar, tab, and sidebar
 structure. It skips outside the explicitly configured visual environment.
 
+## macOS Render-Memory Comparison
+
+When a macOS launch consumes unexpectedly high native memory, run:
+
+```bash
+python3 scripts/diagnose_macos_rendering.py --model g1 --seconds 20
+```
+
+This is a manual diagnostic rather than a CI performance threshold. It runs
+the compatibility and Qt-default OpenGL modes in separate processes and state
+directories, then reports peak resident memory and display-list compilation
+deltas. Both windows close automatically. Retain the printed output directory
+because its logs include the realized GPU profile, Retina framebuffer size,
+and periodic memory samples needed to interpret the comparison.
+
 ## Manual GUI Checks
 
 ### Shared Workflow

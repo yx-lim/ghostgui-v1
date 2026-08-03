@@ -20,11 +20,18 @@ from PySide6.QtGui import QMatrix4x4, QVector3D
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QLabel
 
+from application.render_diagnostics import (
+    current_rss_bytes,
+    emit_render_diagnostic,
+    render_diagnostics_enabled,
+)
 from gui.render_scheduler import RenderRequestCoalescer
 from .camera import OrbitCamera
 from .opengl_compat import (
+    OPENGL_MODE_COMPATIBILITY,
     compatibility_context_failure,
-    desktop_compatibility_format,
+    current_opengl_mode,
+    surface_format_for_mode,
 )
 from .trajectory_colors import gl_color_for_frame
 from core.trajectory import rpy_to_quat
@@ -84,7 +91,10 @@ class RobotCanvas3D(QOpenGLWidget):
 
         # This widget is an opaque scene. Request no composited alpha channel
         # and tell Qt not to expose the desktop through transparent GL pixels.
-        surface_format = desktop_compatibility_format(self.format())
+        self._opengl_mode = current_opengl_mode()
+        surface_format = surface_format_for_mode(
+            self.format(), self._opengl_mode
+        )
         surface_format.setAlphaBufferSize(0)
         self.setFormat(surface_format)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
@@ -144,7 +154,15 @@ class RobotCanvas3D(QOpenGLWidget):
         self._geometry_timer.timeout.connect(self._compile_next_geometry)
         self._shutdown = False
         self._resource_context = None
+        self._context_build_count = 0
         self._rendering_failure = None
+        self._diagnostics_enabled = render_diagnostics_enabled()
+        self._geometry_diagnostic_start_rss = None
+        self._diagnostic_timer = QTimer(self)
+        self._diagnostic_timer.setInterval(5000)
+        self._diagnostic_timer.timeout.connect(self._emit_periodic_diagnostic)
+        if self._diagnostics_enabled:
+            self._diagnostic_timer.start()
         self._line_width_range = (1.0, 1.0)
         self._point_size_range = (1.0, 64.0)
         self._max_viewport_dimensions = (
@@ -297,7 +315,10 @@ class RobotCanvas3D(QOpenGLWidget):
         self._shutdown = False
         self._connect_context_lifecycle()
         self._clear_rendering_failure()
-        failure = compatibility_context_failure(self.context())
+        self._emit_context_diagnostic()
+        failure = None
+        if self._opengl_mode == OPENGL_MODE_COMPATIBILITY:
+            failure = compatibility_context_failure(self.context())
         if failure is not None:
             self._report_rendering_failure(failure)
             return
@@ -323,11 +344,104 @@ class RobotCanvas3D(QOpenGLWidget):
     def _connect_context_lifecycle(self):
         context = self.context()
         if context is None or context is self._resource_context:
-            return
+            return False
         self._resource_context = context
+        self._context_build_count += 1
         context.aboutToBeDestroyed.connect(
             self._on_context_about_to_be_destroyed,
             Qt.ConnectionType.DirectConnection,
+        )
+        return True
+
+    @staticmethod
+    def _gl_string(parameter):
+        try:
+            value = GL.glGetString(parameter)
+        except Exception:
+            return None
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return None if value is None else str(value)
+
+    @staticmethod
+    def _format_name(value):
+        return getattr(value, "name", str(value))
+
+    def _emit_context_diagnostic(self):
+        if not self._diagnostics_enabled:
+            return
+        context = self.context()
+        if context is None:
+            emit_render_diagnostic(
+                "opengl_context_created",
+                opengl_mode=self._opengl_mode,
+                context_count=self._context_build_count,
+                context_present=False,
+            )
+            return
+        surface_format = context.format()
+        pixel_width, pixel_height = self._physical_viewport_size()
+        try:
+            framebuffer = int(self.defaultFramebufferObject())
+        except (RuntimeError, TypeError, ValueError):
+            framebuffer = None
+        emit_render_diagnostic(
+            "opengl_context_created",
+            opengl_mode=self._opengl_mode,
+            context_count=self._context_build_count,
+            context_present=True,
+            context_valid=bool(context.isValid()),
+            context_is_opengles=bool(context.isOpenGLES()),
+            opengl_version=(
+                f"{surface_format.majorVersion()}."
+                f"{surface_format.minorVersion()}"
+            ),
+            opengl_profile=self._format_name(surface_format.profile()),
+            renderable_type=self._format_name(
+                surface_format.renderableType()
+            ),
+            deprecated_functions=bool(
+                surface_format.testOption(
+                    surface_format.FormatOption.DeprecatedFunctions
+                )
+            ),
+            depth_buffer_bits=int(surface_format.depthBufferSize()),
+            alpha_buffer_bits=int(surface_format.alphaBufferSize()),
+            stencil_buffer_bits=int(surface_format.stencilBufferSize()),
+            samples=int(surface_format.samples()),
+            logical_width=int(self.width()),
+            logical_height=int(self.height()),
+            physical_width=pixel_width,
+            physical_height=pixel_height,
+            device_pixel_ratio=self._device_pixel_ratio(),
+            default_framebuffer=framebuffer,
+            gl_vendor=self._gl_string(GL.GL_VENDOR),
+            gl_renderer=self._gl_string(GL.GL_RENDERER),
+            gl_version=self._gl_string(GL.GL_VERSION),
+        )
+
+    def _emit_periodic_diagnostic(self):
+        if self._shutdown or not self._diagnostics_enabled:
+            return
+        pixel_width, pixel_height = self._physical_viewport_size()
+        emit_render_diagnostic(
+            "render_memory_sample",
+            opengl_mode=self._opengl_mode,
+            context_count=self._context_build_count,
+            geometry_build_count=self._geometry_build_count,
+            geometry_queue_length=len(self._geometry_queue),
+            display_list_count=len(
+                {
+                    int(list_id)
+                    for list_id in self._geom_lists
+                    if list_id
+                }
+            ),
+            logical_width=int(self.width()),
+            logical_height=int(self.height()),
+            physical_width=pixel_width,
+            physical_height=pixel_height,
+            device_pixel_ratio=self._device_pixel_ratio(),
         )
 
     def _on_context_about_to_be_destroyed(self):
@@ -535,6 +649,13 @@ class RobotCanvas3D(QOpenGLWidget):
         if self._shutdown:
             return
         self._shutdown = True
+        self._diagnostic_timer.stop()
+        emit_render_diagnostic(
+            "renderer_shutdown",
+            opengl_mode=self._opengl_mode,
+            context_count=self._context_build_count,
+            geometry_build_count=self._geometry_build_count,
+        )
         self.render_requests.shutdown()
         self._geometry_timer.stop()
         self.cancel_transform_drag()
@@ -601,6 +722,32 @@ class RobotCanvas3D(QOpenGLWidget):
         # use non-colliding group 1. render_geom_ids handles both conventions.
         self._geometry_queue = sorted(render_ids)
         self._geometry_total = len(self._geometry_queue)
+        if self._diagnostics_enabled:
+            import mujoco
+
+            mesh_ids = {
+                int(model.geom_dataid[geom_id])
+                for geom_id in render_ids
+                if int(model.geom_type[geom_id]) == int(
+                    mujoco.mjtGeom.mjGEOM_MESH
+                )
+                and int(model.geom_dataid[geom_id]) >= 0
+            }
+            self._geometry_diagnostic_start_rss = current_rss_bytes()
+            emit_render_diagnostic(
+                "geometry_compile_started",
+                opengl_mode=self._opengl_mode,
+                context_count=self._context_build_count,
+                render_geom_count=len(render_ids),
+                unique_mesh_count=len(mesh_ids),
+                mesh_vertex_count=sum(
+                    int(model.mesh_vertnum[mesh_id]) for mesh_id in mesh_ids
+                ),
+                mesh_face_count=sum(
+                    int(model.mesh_facenum[mesh_id]) for mesh_id in mesh_ids
+                ),
+                compile_start_rss_bytes=self._geometry_diagnostic_start_rss,
+            )
         self.geometry_progress.emit(0, self._geometry_total)
         if self._geometry_queue:
             self._geometry_timer.start()
@@ -654,6 +801,32 @@ class RobotCanvas3D(QOpenGLWidget):
         if not self._geometry_queue:
             self._geometry_timer.stop()
             self._geometry_build_count += 1
+            if self._diagnostics_enabled:
+                end_rss = current_rss_bytes()
+                start_rss = self._geometry_diagnostic_start_rss
+                delta = (
+                    end_rss - start_rss
+                    if end_rss is not None and start_rss is not None
+                    else None
+                )
+                emit_render_diagnostic(
+                    "geometry_compile_finished",
+                    opengl_mode=self._opengl_mode,
+                    context_count=self._context_build_count,
+                    geometry_build_count=self._geometry_build_count,
+                    compiled_geom_count=self._geometry_total,
+                    display_list_count=len(
+                        {
+                            int(list_id)
+                            for list_id in self._geom_lists
+                            if list_id
+                        }
+                    ),
+                    compile_start_rss_bytes=start_rss,
+                    compile_end_rss_bytes=end_rss,
+                    compile_rss_delta_bytes=delta,
+                )
+                self._geometry_diagnostic_start_rss = None
 
     @staticmethod
     def render_geom_ids(model):
