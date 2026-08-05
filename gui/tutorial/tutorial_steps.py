@@ -80,7 +80,8 @@ FIRST_MOTION_TUTORIAL = [
         title="Generate The Trajectory",
         body=(
             "After you have saved one or more keyframes, Generate samples the "
-            "timeline into a robot trajectory for playback and export."
+            "timeline into a robot trajectory for playback and export. Choose "
+            "Export interval in Planning to set its time step."
         ),
         target="quickGenerateButton",
         before_show="show_3d_view",

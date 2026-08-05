@@ -538,6 +538,20 @@ class RobotViewer3D(QWidget):
             self._on_timeslice_duration_changed
         )
 
+        self.export_dt_label = QLabel("Export interval")
+        self.export_dt_input = QDoubleSpinBox()
+        self.export_dt_input.setObjectName("exportIntervalSpinBox")
+        _compact_spinbox(self.export_dt_input, width=72)
+        self.export_dt_input.setRange(0.01, 10.0)
+        self.export_dt_input.setDecimals(2)
+        self.export_dt_input.setSingleStep(0.01)
+        self.export_dt_input.setValue(0.01)
+        self.export_dt_input.setSuffix(" s")
+        self.export_dt_input.setToolTip(
+            "Choose the uniform time interval used by Generate and trajectory "
+            "export."
+        )
+
         self.timeslice_time_row = QHBoxLayout()
         self.timeslice_time_row.setContentsMargins(0, 0, 0, 0)
         self.timeslice_time_row.setSpacing(8)
@@ -551,6 +565,9 @@ class RobotViewer3D(QWidget):
         )
         self.timeslice_context_layout.addRow(
             self.timeslice_duration_label, self.timeslice_duration_input
+        )
+        self.timeslice_context_layout.addRow(
+            self.export_dt_label, self.export_dt_input
         )
 
         self.timeslice_timeline_group = QGroupBox("Timeline")
@@ -683,6 +700,12 @@ class RobotViewer3D(QWidget):
 
     def timeslice_step(self):
         return float(self.timeslice_step_input.value())
+
+    def export_dt(self):
+        return float(self.export_dt_input.value())
+
+    def set_export_dt(self, export_dt):
+        self.export_dt_input.setValue(float(export_dt))
 
     def _on_timeslice_duration_changed(self, duration):
         self.set_timeline_duration(duration)

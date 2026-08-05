@@ -111,6 +111,8 @@ Records the preview at the active time and advances by the configured keyframe i
 ## Generated Trajectory
 
 A sampled sequence built from saved keyframes and IK. This is the data you usually export for MuJoCo validation or downstream tools.
+
+Export interval sets the generated time step from 0.01 s to 10.00 s. This is separate from the Keyframe interval, which only advances the editing time after Commit Keyframe.
 """.strip(),
     ),
     HelpSection(

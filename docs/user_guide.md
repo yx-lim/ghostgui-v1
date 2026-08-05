@@ -83,8 +83,9 @@ The active time determines where the next keyframe is stored. The time slider
 supports live scrubbing and playback. Releasing the slider selects an editable
 time.
 
-Planning controls include the keyframe interval, timeline duration, playback
-speed, smoothing, collision substeps, and preview/playback opacity.
+Planning controls include the keyframe interval, timeline duration, Export
+interval, playback speed, smoothing, collision substeps, and preview/playback
+opacity.
 
 ### Workflow Toolbar
 
@@ -94,6 +95,14 @@ it.
 **Commit Keyframe** records the current pose at the active time.
 
 **Generate** samples the saved keyframes into a robot trajectory.
+
+**Export interval** sets the uniform time step used by **Generate** and the
+resulting trajectory export. Enter a value from `0.01 s` to `10.00 s`; the
+default `0.01 s` interval produces a 100 Hz trajectory.
+
+This is separate from the **Keyframe interval**. The Keyframe interval only
+controls how far the editor advances after **Commit Keyframe**; it does not set
+the generated trajectory's time step.
 
 **Play/Pause** controls the active generated or editable timeline.
 

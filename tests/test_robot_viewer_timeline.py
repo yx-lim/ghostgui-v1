@@ -1533,6 +1533,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.timeslice_step_input,
             self.viewer.timeslice_duration_label,
             self.viewer.timeslice_duration_input,
+            self.viewer.export_dt_label,
+            self.viewer.export_dt_input,
             self.viewer.collision_substeps_label,
             self.viewer.collision_substeps,
             self.viewer.playback_speed_label,
@@ -1668,6 +1670,27 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 self.viewer.timeslice_duration_input
             ),
             self.viewer.timeslice_duration_label,
+        )
+        self.assertIs(
+            self.viewer.timeslice_context_layout.labelForField(
+                self.viewer.export_dt_input
+            ),
+            self.viewer.export_dt_label,
+        )
+        max_time_row, _ = (
+            self.viewer.timeslice_context_layout.getWidgetPosition(
+                self.viewer.timeslice_duration_input
+            )
+        )
+        export_interval_row, _ = (
+            self.viewer.timeslice_context_layout.getWidgetPosition(
+                self.viewer.export_dt_input
+            )
+        )
+        self.assertEqual(export_interval_row, max_time_row + 1)
+        self.assertEqual(
+            self.viewer.export_dt_input.maximumWidth(),
+            self.viewer.timeslice_duration_input.maximumWidth(),
         )
         self.assertEqual(self.viewer.ghost_stride_label.text(), "Playback spacing")
         self.assertEqual(self.viewer.ghost_alpha_label.text(), "Playback opacity")
@@ -2060,6 +2083,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             canvas.camera_center = np.asarray([0.4, -0.2, 1.1], dtype=float)
             self.window.controls.show_lines_box.setChecked(False)
             self.window.controls.corner_smoothing_slider.set_value(0.35)
+            self.viewer.set_export_dt(0.02)
 
             project = self.window.create_project_at(project_root, "reach_test")
             self.assertTrue((project.root_dir / "ghostgui_project.json").exists())
@@ -2070,6 +2094,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.controls.frame_box.setCurrentText("pelvis")
             self.window.controls.show_lines_box.setChecked(True)
             self.window.controls.corner_smoothing_slider.set_value(0.0)
+            self.viewer.set_export_dt(0.01)
             self.window.viewer_tabs.setCurrentIndex(0)
             self.viewer.clear_editable_timeline(
                 keep_current_pose=False,
@@ -2109,6 +2134,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.assertEqual(self.window.viewer_tabs.currentIndex(), 1)
             self.assertFalse(self.window.controls.show_lines_box.isChecked())
             self.assertAlmostEqual(self.window.controls.corner_smoothing(), 0.35)
+            self.assertAlmostEqual(self.viewer.export_dt(), 0.02)
             self.assertAlmostEqual(self.viewer.canvas.camera_yaw, 12.5)
             self.assertAlmostEqual(self.viewer.canvas.camera_pitch, 31.0)
             self.assertAlmostEqual(self.viewer.canvas.camera_distance, 6.25)
@@ -2874,6 +2900,62 @@ class RobotViewerTimelineTests(unittest.TestCase):
         controls.corner_smoothing_slider.set_value(0.5)
 
         self.assertAlmostEqual(controls.corner_smoothing(), 0.5)
+
+    def test_export_interval_uses_seconds_spinbox(self):
+        control = self.viewer.export_dt_input
+
+        self.assertEqual(self.viewer.export_dt_label.text(), "Export interval")
+        self.assertEqual(control.minimum(), 0.01)
+        self.assertEqual(control.maximum(), 10.0)
+        self.assertEqual(control.singleStep(), 0.01)
+        self.assertEqual(control.decimals(), 2)
+        self.assertEqual(control.suffix(), " s")
+        self.assertAlmostEqual(self.viewer.export_dt(), 0.01)
+
+        self.viewer.set_export_dt(10.0)
+
+        self.assertAlmostEqual(self.viewer.export_dt(), 10.0)
+
+        planning_section = self.window.left_sidebar_content.sections[2]
+        planning_section.set_expanded(True)
+        self.window.resize(1200, 800)
+        self.window.show()
+        self.app.processEvents()
+
+        label_geometry = self.viewer.export_dt_label.geometry()
+        field_geometry = control.geometry()
+        self.assertGreater(field_geometry.left(), label_geometry.right())
+        self.assertLessEqual(
+            abs(field_geometry.center().y() - label_geometry.center().y()),
+            1,
+        )
+
+    def test_generate_trajectory_uses_selected_export_interval(self):
+        self.window.trajectory.add_frame(self.window.controls.current_frame())
+        self.viewer.set_export_dt(0.02)
+        self.window.controls.corner_smoothing_slider.set_value(0.25)
+
+        with patch(
+            "gui.main_window.trajectory_generation.generate_trajectory_status"
+        ) as generate, patch.object(
+            self.viewer, "load_backend_states"
+        ), patch.object(
+            self.window.viewer_3d_mujoco, "set_trajectory_csv"
+        ), patch.object(
+            self.viewer, "robot_trajectory_collision_status", return_value=""
+        ):
+            generate.return_value.csv_path = "/tmp/generated.csv"
+            generate.return_value.result_states = []
+            generate.return_value.status_text = "Generated"
+
+            self.window.on_generate_trajectory()
+
+        generate.assert_called_once_with(
+            self.window.trajectory,
+            self.window.backend_interface,
+            smoothing=0.25,
+            export_dt=0.02,
+        )
 
     def test_refresh_display_passes_trajectory_display_options_to_3d_view(self):
         captured = {}

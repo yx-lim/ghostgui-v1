@@ -81,6 +81,11 @@ the configured smoothing, and asks the active backend to solve robot states.
 The generated states can then be played in the live view or the MuJoCo
 simulation view.
 
+**Export interval** controls this uniform sampling time step from `0.01 s` to
+`10.00 s`. The default `0.01 s` interval is equivalent to 100 Hz. This is
+independent of the **Keyframe interval**, which only advances the editing time
+after **Commit Keyframe**.
+
 Playback speed changes wall-clock viewing speed, not the trajectory timestamps.
 Playback ghosts and Preview Path ghosts are temporary visualizations and are
 not exported as additional states.

@@ -1421,6 +1421,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.show_keyframes_box.setChecked(True)
             self.controls.show_lines_box.setChecked(True)
             self.controls.corner_smoothing_slider.set_value(0.0)
+            viewer.set_export_dt(0.01)
             viewer.show_ghosts.setChecked(False)
             if self.controls.table.currentRow() >= 0:
                 self.controls.table.clearSelection()
@@ -1574,6 +1575,7 @@ class RobotGuiMainWindow(QMainWindow):
                 "show_keyframes": bool(self.controls.show_keyframes()),
                 "show_trajectory_lines": bool(self.controls.show_trajectory_lines()),
                 "smoothing": float(self.controls.corner_smoothing()),
+                "export_dt": float(viewer.export_dt()),
                 "show_playback_ghosts": bool(viewer.show_ghosts.isChecked()),
                 "trajectory_import_dt": float(viewer.trajectory_import_dt.value()),
             },
@@ -1773,6 +1775,12 @@ class RobotGuiMainWindow(QMainWindow):
             )
         if "smoothing" in display:
             self.controls.corner_smoothing_slider.set_value(float(display["smoothing"]))
+        if "export_dt" in display:
+            self.viewer_3d.set_export_dt(display["export_dt"])
+        elif "export_frequency" in display:
+            frequency = float(display["export_frequency"])
+            if np.isfinite(frequency) and frequency > 0.0:
+                self.viewer_3d.set_export_dt(1.0 / frequency)
         if "trajectory_import_dt" in display:
             self.viewer_3d.trajectory_import_dt.setValue(
                 float(display["trajectory_import_dt"])
@@ -2066,6 +2074,9 @@ class RobotGuiMainWindow(QMainWindow):
         )
         viewer_3d.trajectory_import_dt.valueChanged.connect(
             lambda _value: self.mark_project_dirty("Import time step")
+        )
+        viewer_3d.export_dt_input.valueChanged.connect(
+            lambda _value: self.mark_project_dirty("Export interval")
         )
         viewer_3d.timeslice_preview_time_changed.connect(
             self.on_viewer_timeslice_preview_time_changed
@@ -3289,6 +3300,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.trajectory,
             self.backend_interface,
             smoothing=self.controls.corner_smoothing(),
+            export_dt=self.viewer_3d.export_dt(),
         )
         self.viewer_3d.load_backend_states(result.result_states)
         self.viewer_3d_mujoco.set_trajectory_csv(result.csv_path)
