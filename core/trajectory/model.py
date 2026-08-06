@@ -362,15 +362,17 @@ class Trajectory:
 
         t_start = min(track[0].time for track in non_empty_tracks.values())
         t_end = max(track[-1].time for track in non_empty_tracks.values())
-        num_steps = int(round((t_end - t_start) / dt))
+        # A uniform-dt export must not clamp an overshooting final sample onto
+        # t_end, because that creates one shorter, nonuniform last interval.
+        num_steps = int(math.floor(((t_end - t_start) / dt) + 1e-9))
         samples = []
 
         for k in range(num_steps + 1):
             t = t_start + k * dt
             t = round(t, 10)
 
-            if t > t_end:
-                t = t_end
+            if t > t_end + 1e-9:
+                break
 
             targets = {}
 

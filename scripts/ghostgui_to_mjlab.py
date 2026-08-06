@@ -35,41 +35,19 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from application.trajectory_export_formats import (
+    G1_JOINT_ORDER,
+    convert_mjlab_rows,
+    write_mjlab_rows,
+)
+
 
 OUTPUT_FPS = 50.0
 DEFAULT_MAX_DT_JITTER = 0.02  # 2% relative deviation from median dt.
-
-G1_JOINT_ORDER: tuple[str, ...] = (
-    "left_hip_pitch_joint",
-    "left_hip_roll_joint",
-    "left_hip_yaw_joint",
-    "left_knee_joint",
-    "left_ankle_pitch_joint",
-    "left_ankle_roll_joint",
-    "right_hip_pitch_joint",
-    "right_hip_roll_joint",
-    "right_hip_yaw_joint",
-    "right_knee_joint",
-    "right_ankle_pitch_joint",
-    "right_ankle_roll_joint",
-    "waist_yaw_joint",
-    "waist_roll_joint",
-    "waist_pitch_joint",
-    "left_shoulder_pitch_joint",
-    "left_shoulder_roll_joint",
-    "left_shoulder_yaw_joint",
-    "left_elbow_joint",
-    "left_wrist_roll_joint",
-    "left_wrist_pitch_joint",
-    "left_wrist_yaw_joint",
-    "right_shoulder_pitch_joint",
-    "right_shoulder_roll_joint",
-    "right_shoulder_yaw_joint",
-    "right_elbow_joint",
-    "right_wrist_roll_joint",
-    "right_wrist_pitch_joint",
-    "right_wrist_yaw_joint",
-)
 
 GHOSTGUI_BASE_COLUMNS: tuple[str, ...] = (
     "time",
@@ -115,7 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_DT_JITTER,
         help=(
             "Maximum allowed relative frame-spacing deviation from median dt. "
-            f"Default: {DEFAULT_MAX_DT_JITTER:.0%}."
+            f"Default: {DEFAULT_MAX_DT_JITTER:.0%}.".replace("%", "%%")
         ),
     )
     parser.add_argument(
@@ -336,48 +314,11 @@ def convert_rows(
     ghostgui_rows: Sequence[Sequence[float]],
     normalize_quaternions: bool,
 ) -> tuple[list[list[float]], int]:
-    output_rows: list[list[float]] = []
-    non_unit_quaternion_count = 0
-
-    for row_number, row in enumerate(ghostgui_rows, start=1):
-        # Canonical GhostGUI row:
-        # time, xyz, qw qx qy qz, joints...
-        base_xyz = list(row[1:4])
-        qw, qx, qy, qz = row[4:8]
-        quaternion_xyzw = [qx, qy, qz, qw]
-
-        norm = math.sqrt(sum(component * component for component in quaternion_xyzw))
-        if norm < 1e-12:
-            raise ValueError(f"Row {row_number}: quaternion has zero magnitude.")
-
-        if abs(norm - 1.0) > 1e-3:
-            non_unit_quaternion_count += 1
-
-        if normalize_quaternions:
-            quaternion_xyzw = [component / norm for component in quaternion_xyzw]
-
-        joints = list(row[8:])
-        if len(joints) != len(G1_JOINT_ORDER):
-            raise ValueError(
-                f"Row {row_number}: expected {len(G1_JOINT_ORDER)} joints, "
-                f"found {len(joints)}."
-            )
-
-        output_row = base_xyz + quaternion_xyzw + joints
-        if len(output_row) != EXPECTED_OUTPUT_WIDTH:
-            raise RuntimeError("Internal conversion width check failed.")
-
-        output_rows.append(output_row)
-
-    return output_rows, non_unit_quaternion_count
+    return convert_mjlab_rows(ghostgui_rows, normalize_quaternions)
 
 
 def write_headerless_csv(path: Path, rows: Sequence[Sequence[float]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file, lineterminator="\n")
-        for row in rows:
-            writer.writerow([f"{value:.10g}" for value in row])
+    write_mjlab_rows(path, rows)
 
 
 def resolve_mjlab_dir(requested: Path | None) -> Path:

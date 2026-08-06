@@ -90,8 +90,8 @@ FIRST_MOTION_TUTORIAL = [
         id="export",
         title="Export The Result",
         body=(
-            "Use File > Export to save the current committed qpos or timed "
-            "trajectory rows. Unsaved orange previews are not exported."
+            "Use File > Export > Trajectory to choose MuJoCo, DSMS, or mjlab. "
+            "Unsaved orange previews are not exported."
         ),
         target="appMenuBar",
         before_show="expand_setup",

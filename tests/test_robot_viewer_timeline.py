@@ -1452,7 +1452,14 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertEqual(
             [action.text() for action in self.window.export_menu.actions()],
-            ["Qpos…", "Trajectory…"],
+            ["Qpos…", "Trajectory"],
+        )
+        self.assertEqual(
+            [
+                action.text()
+                for action in self.window.trajectory_export_menu.actions()
+            ],
+            ["MuJoCo", "DSMS", "mjlab"],
         )
         self.assertEqual(self.window.viewer_tabs.tabText(0), "3D Pose")
         self.assertIs(
@@ -1503,7 +1510,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 self.window.controls.export_action_box.itemText(index)
                 for index in range(self.window.controls.export_action_box.count())
             ],
-            ["Qpos", "Trajectory"],
+            ["Qpos", "MuJoCo", "DSMS", "mjlab"],
         )
         self.window.controls.import_action_box.setCurrentIndex(1)
         event = QWheelEvent(
@@ -2929,6 +2936,43 @@ class RobotViewerTimelineTests(unittest.TestCase):
             abs(field_geometry.center().y() - label_geometry.center().y()),
             1,
         )
+
+    def test_specialized_export_resamples_editable_timeline_at_export_interval(self):
+        initial = self.viewer.robot_model.home_qpos.copy()
+        self.viewer.clear_robot_trajectory()
+        self.viewer.state_timeline.reset(0.0, initial)
+        for time in (0.02, 0.04, 1.0, 2.0, 3.0, 4.0):
+            qpos = initial.copy()
+            qpos[-1] += time * 0.01
+            self.viewer.state_timeline.set_state(time, qpos)
+        self.viewer.set_export_dt(1.0)
+
+        with patch(
+            "gui.robot_viewer_3d.trajectory_collision_reports",
+            return_value=(None, None),
+        ):
+            export = self.viewer._trajectory_export_snapshot(
+                sample_dt=self.viewer.export_dt()
+            )
+
+        np.testing.assert_allclose(export.times, (0.0, 1.0, 2.0, 3.0, 4.0))
+        np.testing.assert_allclose(np.diff(export.times), 1.0)
+
+    def test_trajectory_export_selections_dispatch_by_format(self):
+        cases = (
+            ("trajectory_mujoco", "choose_trajectory_save_path"),
+            ("trajectory_dsms", "choose_dsms_trajectory_output_dir"),
+            ("trajectory_mjlab", "choose_mjlab_trajectory_save_path"),
+        )
+
+        for action, method_name in cases:
+            with self.subTest(action=action), patch.object(
+                self.viewer,
+                method_name,
+            ) as selected:
+                self.window.on_setup_export_requested(action)
+
+            selected.assert_called_once_with()
 
     def test_generate_trajectory_uses_selected_export_interval(self):
         self.window.trajectory.add_frame(self.window.controls.current_frame())

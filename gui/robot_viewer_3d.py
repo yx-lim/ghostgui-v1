@@ -34,6 +34,12 @@ from application.paths import (
 )
 from application.background_jobs import SerializedBackgroundJobs
 from application.playback import PlaybackClock
+from application.trajectory_export_formats import (
+    export_dsms_trajectory,
+    export_mjlab_trajectory,
+    mjlab_compatibility_error,
+    resample_trajectory_export,
+)
 from application.csv_io import (
     TrajectoryExport,
     read_qpos_csv,
@@ -1644,12 +1650,39 @@ class RobotViewer3D(QWidget):
 
     def choose_trajectory_save_path(self):
         self._open_csv_file_dialog(
-            title="Save robot trajectory",
+            title="Export MuJoCo trajectory",
             directory=TRAJECTORY_CSV_DIR,
             selected=self._save_selected_trajectory_csv,
             save=True,
             filename="robot_trajectory.csv",
         )
+
+    def choose_dsms_trajectory_output_dir(self):
+        self._open_csv_file_dialog(
+            title="Export DSMS trajectory folder",
+            directory=TRAJECTORY_CSV_DIR,
+            selected=self._save_selected_dsms_trajectory,
+            directory_mode=True,
+            name_filter="Folders (*)",
+        )
+
+    def choose_mjlab_trajectory_save_path(self):
+        error = self.mjlab_export_compatibility_error()
+        if error:
+            self.status_label.setText(f"Could not export mjlab trajectory: {error}")
+            return
+        self._open_csv_file_dialog(
+            title="Export mjlab trajectory",
+            directory=TRAJECTORY_CSV_DIR,
+            selected=self._save_selected_mjlab_trajectory,
+            save=True,
+            filename="robot_trajectory_mjlab.csv",
+        )
+
+    def mjlab_export_compatibility_error(self):
+        if self.robot_model is None:
+            return "no robot model is loaded"
+        return mjlab_compatibility_error(self.robot_model)
 
     def _open_csv_file_dialog(
         self,
@@ -1659,6 +1692,8 @@ class RobotViewer3D(QWidget):
         selected,
         save=False,
         filename=None,
+        directory_mode=False,
+        name_filter="CSV files (*.csv);;All files (*)",
     ):
         if self.background_jobs.is_busy():
             self.status_label.setText(
@@ -1670,10 +1705,10 @@ class RobotViewer3D(QWidget):
             return
 
         self.csv_file_selection_stage.select_file(
-            mode="save" if save else "open",
+            mode="directory" if directory_mode else "save" if save else "open",
             title=title,
             directory=directory,
-            name_filter="CSV files (*.csv);;All files (*)",
+            name_filter=name_filter,
             filename=filename,
             selected=selected,
             failed=lambda message: self.status_label.setText(
@@ -1744,6 +1779,99 @@ class RobotViewer3D(QWidget):
             lambda error: self.status_label.setText(
                 f"Could not save trajectory CSV: {error}"
             ),
+        )
+
+    def _save_selected_dsms_trajectory(self, output_dir):
+        try:
+            export = self._trajectory_export_snapshot(
+                sample_dt=self.export_dt()
+            )
+        except ValueError as error:
+            self.status_label.setText(
+                f"Could not export DSMS trajectory: {error}"
+            )
+            return
+        dof = len(self.robot_model.actuated_joints)
+        free_joints = tuple(self.robot_model.free_joints_by_body.values())
+        base_qpos_address = (
+            free_joints[0].qpos_address if len(free_joints) == 1 else None
+        )
+        self.status_label.setText(
+            f"Exporting DSMS trajectory to {Path(output_dir).name}..."
+        )
+        self._submit_csv_job(
+            "export DSMS trajectory",
+            lambda: export_dsms_trajectory(
+                output_dir,
+                export,
+                dof=dof,
+                base_qpos_address=base_qpos_address,
+            ),
+            lambda result: self._show_format_trajectory_saved(
+                "DSMS", result, export
+            ),
+            lambda error: self.status_label.setText(
+                f"Could not export DSMS trajectory: {error}"
+            ),
+        )
+
+    def _save_selected_mjlab_trajectory(self, path):
+        try:
+            export = self._trajectory_export_snapshot(
+                sample_dt=self.export_dt()
+            )
+        except ValueError as error:
+            self.status_label.setText(
+                f"Could not export mjlab trajectory: {error}"
+            )
+            return
+        self.status_label.setText(
+            f"Exporting mjlab trajectory to {Path(path).name}..."
+        )
+        self._submit_csv_job(
+            "export mjlab trajectory",
+            lambda: export_mjlab_trajectory(
+                path,
+                export,
+                self.robot_model,
+                single_sample_dt=self.export_dt(),
+            ),
+            lambda result: self._show_format_trajectory_saved(
+                "mjlab", result, export
+            ),
+            lambda error: self.status_label.setText(
+                f"Could not export mjlab trajectory: {error}"
+            ),
+        )
+
+    def _show_format_trajectory_saved(self, format_name, result, export):
+        if len(result.paths) == 1:
+            destination = str(result.paths[0])
+        else:
+            destination = (
+                f"{result.paths[0].parent} "
+                f"({', '.join(path.name for path in result.paths)})"
+            )
+        fps_note = (
+            ""
+            if result.input_fps is None
+            else f"; input frequency {result.input_fps:.6g} Hz"
+        )
+        preview_note = (
+            "; unaccepted preview was not saved"
+            if export.preview_active
+            else ""
+        )
+        collision_note = ""
+        if self._last_export_collision_warning is not None:
+            report = self._last_export_collision_warning
+            collision_note = (
+                f"; Collision warning at sample {report.sample_index}: "
+                f"{format_collision_pairs(report.collisions)}"
+            )
+        self.status_label.setText(
+            f"Saved {result.sample_count} {format_name} trajectory samples "
+            f"to {destination}{fps_note}{preview_note}{collision_note}"
         )
 
     def _submit_csv_job(self, name, work, succeeded, failed):
@@ -1842,7 +1970,7 @@ class RobotViewer3D(QWidget):
         self._show_trajectory_saved(path, export)
         return path
 
-    def _trajectory_export_snapshot(self):
+    def _trajectory_export_snapshot(self, sample_dt=None):
         if not self.state_timeline:
             raise ValueError("no robot timeline is available")
 
@@ -1865,7 +1993,23 @@ class RobotViewer3D(QWidget):
             )
             source_name = "editable timeline"
 
-        if self.robot_trajectory:
+        export = TrajectoryExport(
+            expected_qpos_count=expected,
+            times=times,
+            qposes=qposes,
+            source_name=source_name,
+            preview_active=bool(self.preview_active),
+        )
+        if sample_dt is not None:
+            export = resample_trajectory_export(
+                export,
+                self.robot_model,
+                sample_dt,
+            )
+            times = export.times
+            qposes = export.qposes
+
+        if self.robot_trajectory and sample_dt is None:
             warning_report = self.robot_trajectory_warning_report
             blocking_report = self.robot_trajectory_blocking_report
         else:
@@ -1882,13 +2026,7 @@ class RobotViewer3D(QWidget):
             )
         self._last_export_collision_warning = warning_report
 
-        return TrajectoryExport(
-            expected_qpos_count=expected,
-            times=times,
-            qposes=qposes,
-            source_name=source_name,
-            preview_active=bool(self.preview_active),
-        )
+        return export
 
     def _show_trajectory_saved(self, path, export):
         preview_note = (

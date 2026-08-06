@@ -32,6 +32,15 @@ from pathlib import Path
 
 import numpy as np
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from application.trajectory_export_formats import (
+    prepare_dsms_arrays,
+    write_dsms_files,
+)
+
 
 def _row_is_numeric(row: list[str]) -> bool:
     """Return True when every field in a CSV row is numeric."""
@@ -115,67 +124,18 @@ def convert(
             f"column {bad[1] + 1}."
         )
 
-    time = data[:, 0].copy()
-    qpos = data[:, 1:].copy()
-
-    if np.any(time < 0):
-        index = int(np.flatnonzero(time < 0)[0])
-        raise ValueError(
-            f"Time must be non-negative; row {index + 1} has {time[index]}."
-        )
-
-    median_dt = None
-    is_uniform = True
-
-    if len(time) > 1:
-        dt = np.diff(time)
-
-        if np.any(dt <= 0):
-            index = int(np.flatnonzero(dt <= 0)[0])
-            raise ValueError(
-                "Time must be strictly increasing. "
-                f"Rows {index + 1} and {index + 2} have a non-positive interval."
-            )
-
-        median_dt = float(np.median(dt))
-        is_uniform = np.allclose(dt, median_dt, rtol=1e-4, atol=1e-9)
-
-        if not is_uniform and not allow_nonuniform_time:
-            maximum_error = float(np.max(np.abs(dt - median_dt)))
-            raise ValueError(
-                "The timestamps are not uniformly sampled. "
-                "shooting-for-contact currently reduces time.csv to the median "
-                f"sample interval. Median dt={median_dt:.9g} s; maximum deviation="
-                f"{maximum_error:.9g} s. Resample the trajectory first, or pass "
-                "--allow-nonuniform-time to split it without resampling."
-            )
-
-    # Floating-base MuJoCo qpos:
-    # x, y, z, qw, qx, qy, qz, joint_0, ...
-    if normalize_quaternion:
-        if nq < 7:
-            raise ValueError(
-                "Quaternion normalization requires at least seven qpos columns."
-            )
-
-        quaternion = qpos[:, 3:7]
-        norms = np.linalg.norm(quaternion, axis=1)
-
-        if np.any(norms < 1e-12):
-            index = int(np.flatnonzero(norms < 1e-12)[0])
-            raise ValueError(
-                f"Frame {index + 1} contains a zero-length base quaternion."
-            )
-
-        qpos[:, 3:7] = quaternion / norms[:, None]
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    qpos_path = output_dir / f"qpos_{dof}dof.csv"
-    time_path = output_dir / "time.csv"
-
-    # Both shooting-for-contact files are headerless.
-    np.savetxt(qpos_path, qpos, delimiter=",", fmt="%.18e")
-    np.savetxt(time_path, time, delimiter=",", fmt="%.9f")
+    prepared = prepare_dsms_arrays(
+        data[:, 0],
+        data[:, 1:],
+        expected_qpos_count=nq,
+        allow_nonuniform_time=allow_nonuniform_time,
+        normalize_quaternion=normalize_quaternion,
+    )
+    time = prepared.times
+    qpos = prepared.qposes
+    median_dt = prepared.median_dt
+    is_uniform = prepared.is_uniform
+    qpos_path, time_path = write_dsms_files(output_dir, time, qpos, dof)
 
     print(f"Input:       {input_csv}")
     print(f"Header:      {'detected and removed' if had_header else 'none'}")

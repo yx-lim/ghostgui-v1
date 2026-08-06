@@ -163,7 +163,17 @@ Use **File → Import** for MuJoCo XML/URDF models, qpos poses, or trajectories.
 Use **File → Export** for:
 
 - **Qpos**: the committed pose as one headerless qpos row.
-- **Trajectory**: time plus qpos values for each trajectory row.
+- **Trajectory → MuJoCo**: time plus MuJoCo qpos values in one CSV.
+- **Trajectory → DSMS**: a folder containing `qpos_<dof>dof.csv` and
+  `time.csv`.
+- **Trajectory → mjlab**: a headerless G1 29-DoF CSV with `x, y, z`, an
+  `x, y, z, w` quaternion, and named G1 joints in mjlab order.
+
+DSMS and mjlab require uniformly sampled timestamps. Their GUI exports sample
+the current generated trajectory, or the editable qpos timeline, at the selected
+**Export interval**. The mjlab selection is available only for a model matching
+the Unitree G1 29-DoF joint contract. It creates the mjlab input CSV but does not
+launch mjlab's external NPZ converter.
 
 An uncommitted orange preview is not exported. Select **Commit Keyframe** first
 when the pose should become part of the saved motion.

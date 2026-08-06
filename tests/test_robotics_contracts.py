@@ -62,6 +62,17 @@ class TrajectoryContractTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     trajectory.sample_tracks_uniform_dt(dt=value)
 
+    def test_uniform_sampling_does_not_clamp_a_short_final_interval(self):
+        trajectory = Trajectory()
+        trajectory.add_frame(TargetFrame(time=0.0, frame_name="pelvis"))
+        trajectory.add_frame(TargetFrame(time=0.15, frame_name="pelvis"))
+
+        samples = trajectory.sample_tracks_uniform_dt(dt=0.02)
+        times = [sample["time"] for sample in samples]
+
+        np.testing.assert_allclose(times, np.arange(0.0, 0.15, 0.02))
+        np.testing.assert_allclose(np.diff(times), 0.02)
+
     def test_qpos_and_time_series_share_one_validator(self):
         contract = QposContract(2)
         np.testing.assert_allclose(contract.validate([1.0, 2.0]), [1.0, 2.0])

@@ -291,6 +291,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
         self.help_dialog = None
         self.build_menu_bar()
+        self.sync_trajectory_export_actions()
         self.app_toolbar = self.build_workflow_toolbar()
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.app_toolbar)
         self.refresh_recent_projects()
@@ -471,20 +472,39 @@ class RobotGuiMainWindow(QMainWindow):
         self.export_menu = self.file_menu.addMenu("&Export")
         self.export_menu.setObjectName("exportMenu")
         self.export_actions = {}
+        self.export_qpos_action = QAction("Qpos…", self)
+        self.export_qpos_action.setObjectName("exportQposAction")
+        self.export_qpos_action.setData("qpos")
+        self.export_qpos_action.triggered.connect(
+            lambda checked=False: self.on_setup_export_requested("qpos")
+        )
+        self.export_menu.addAction(self.export_qpos_action)
+        self.export_actions["qpos"] = self.export_qpos_action
+
+        self.trajectory_export_menu = self.export_menu.addMenu("Trajectory")
+        self.trajectory_export_menu.setObjectName("trajectoryExportMenu")
         for label, action_key in (
-            ("Qpos…", "qpos"),
-            ("Trajectory…", "trajectory"),
+            ("MuJoCo", "trajectory_mujoco"),
+            ("DSMS", "trajectory_dsms"),
+            ("mjlab", "trajectory_mjlab"),
         ):
             action = QAction(label, self)
-            action.setObjectName(f"export{action_key.title()}Action")
+            format_key = action_key.removeprefix("trajectory_")
+            action.setObjectName(
+                "exportTrajectoryAction"
+                if format_key == "mujoco"
+                else f"exportTrajectory{format_key.title()}Action"
+            )
             action.setData(action_key)
             action.triggered.connect(
                 lambda checked=False, key=action_key: (
                     self.on_setup_export_requested(key)
                 )
             )
-            self.export_menu.addAction(action)
+            self.trajectory_export_menu.addAction(action)
             self.export_actions[action_key] = action
+            if format_key == "mujoco":
+                self.export_actions["trajectory"] = action
 
         self.robot_menu = menu_bar.addMenu("&Robot")
         self.robot_menu.setObjectName("robotMenu")
@@ -2551,8 +2571,30 @@ class RobotGuiMainWindow(QMainWindow):
     def on_setup_export_requested(self, action):
         if action == "qpos":
             self.viewer_3d.choose_qpos_save_path()
-        elif action == "trajectory":
+        elif action in ("trajectory", "trajectory_mujoco"):
             self.viewer_3d.choose_trajectory_save_path()
+        elif action == "trajectory_dsms":
+            self.viewer_3d.choose_dsms_trajectory_output_dir()
+        elif action == "trajectory_mjlab":
+            self.viewer_3d.choose_mjlab_trajectory_save_path()
+
+    def sync_trajectory_export_actions(self):
+        action = self.export_actions.get("trajectory_mjlab")
+        if action is None:
+            return
+        error = self.viewer_3d.mjlab_export_compatibility_error()
+        enabled = error is None
+        action.setEnabled(enabled)
+        action.setToolTip(
+            "Export a Unitree G1 29-DoF trajectory for mjlab."
+            if enabled
+            else error
+        )
+        self.controls.set_export_action_enabled(
+            "trajectory_mjlab",
+            enabled,
+            "" if enabled else error,
+        )
 
     def on_choose_mesh_folder(self):
         if self.background_jobs.is_busy():
@@ -2716,6 +2758,7 @@ class RobotGuiMainWindow(QMainWindow):
             viewer=self.viewer_3d,
         )
         self.controls.set_frame_names(session.adapter.trajectory_frames)
+        self.sync_trajectory_export_actions()
         self.update_project_chrome()
         self.update_editor_context()
         self.refresh_display()

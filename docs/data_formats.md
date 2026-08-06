@@ -41,8 +41,51 @@ Requirements:
 - times are nondecreasing;
 - every qpos uses the active model's compiled ordering.
 
-**File → Export → Trajectory** writes this format from the generated trajectory,
-or from the editable qpos timeline when no generated trajectory is active.
+**File → Export → Trajectory → MuJoCo** writes this format from the generated
+trajectory, or from the editable qpos timeline when no generated trajectory is
+active.
+
+## DSMS Reference Folder
+
+**File → Export → Trajectory → DSMS** writes two headerless files into the
+selected folder:
+
+```text
+qpos_<dof>dof.csv  # one MuJoCo qpos row per sample
+time.csv           # one timestamp per sample
+```
+
+The joint DoF in the filename is derived from the active model. A floating-base
+quaternion is normalized when the model has one free joint. The GUI samples the
+current generated trajectory, or the editable qpos timeline, uniformly at the
+selected **Export interval** before writing the DSMS files.
+
+The terminal converter remains available for existing GhostGUI CSV files:
+
+```bash
+python3 scripts/convert_ghostgui_to_dsms.py input.csv output_folder
+```
+
+## mjlab Input CSV
+
+**File → Export → Trajectory → mjlab** writes the G1 29-DoF input layout:
+
+```text
+base_x,base_y,base_z,base_qx,base_qy,base_qz,base_qw,joint_0,...,joint_28
+```
+
+The file is numeric and headerless. Joint values are selected by the required
+G1 joint names rather than by assuming the active model's raw column order.
+The GUI samples the trajectory uniformly at the selected **Export interval** and
+reports the resulting input frequency. It does not run mjlab's external 50 Hz
+NPZ converter.
+
+The standalone converter, including its optional external-converter flags,
+remains available:
+
+```bash
+python3 scripts/ghostgui_to_mjlab.py input.csv output.csv
+```
 
 ## Named Backend CSV
 
@@ -62,7 +105,7 @@ Floating-base orientation uses `w, x, y, z` quaternion order.
 Qpos import reads the first non-empty row and rejects a header or incorrect
 width.
 
-Trajectory import accepts headerless time-plus-qpos rows and requires
+Trajectory import accepts headerless MuJoCo time-plus-qpos rows and requires
 nondecreasing times. The standalone MuJoCo viewer also accepts named backend
 CSV output.
 

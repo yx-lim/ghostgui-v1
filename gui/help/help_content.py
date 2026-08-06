@@ -158,7 +158,11 @@ Export interval sets the generated time step from 0.01 s to 10.00 s. This is sep
 Use **File > Export** to choose what to save.
 
 - **Qpos** saves the current committed pose as one headerless qpos row.
-- **Trajectory** saves timed qpos rows from the generated trajectory, or from the editable timeline when no generated trajectory is active.
+- **Trajectory > MuJoCo** saves timed qpos rows in one CSV.
+- **Trajectory > DSMS** saves qpos and time CSVs in one reference folder.
+- **Trajectory > mjlab** saves a headerless Unitree G1 29-DoF input CSV. It does not launch mjlab's external NPZ converter.
+
+DSMS and mjlab need uniform timestamps. Their GUI exports sample the current generated or editable trajectory at the selected Export interval.
 
 Uncommitted orange previews are intentionally not exported. Use **Commit Keyframe** first when you want the current preview to become part of the saved motion.
 """.strip(),

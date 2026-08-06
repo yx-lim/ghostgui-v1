@@ -157,11 +157,13 @@ class TrajectoryControlPanel(QGroupBox):
             self.export_action_box = NoWheelComboBox()
             self.export_action_box.setObjectName("exportActionCombo")
             self.export_action_box.setToolTip(
-                "Export the committed qpos pose or timed trajectory."
+                "Export the committed qpos pose or choose a trajectory format."
             )
             self.export_action_box.setPlaceholderText("Select...")
             self.export_action_box.addItem("Qpos", "qpos")
-            self.export_action_box.addItem("Trajectory", "trajectory")
+            self.export_action_box.addItem("MuJoCo", "trajectory_mujoco")
+            self.export_action_box.addItem("DSMS", "trajectory_dsms")
+            self.export_action_box.addItem("mjlab", "trajectory_mjlab")
             self.export_action_box.setCurrentIndex(-1)
             self.export_action_box.activated.connect(
                 self._emit_setup_export_action
@@ -494,6 +496,21 @@ class TrajectoryControlPanel(QGroupBox):
         self.export_action_box.setCurrentIndex(-1)
         if action:
             self.setup_export_requested.emit(action)
+
+    def set_export_action_enabled(self, action, enabled, reason=""):
+        if not hasattr(self, "export_action_box"):
+            return
+        index = self.export_action_box.findData(action)
+        if index < 0:
+            return
+        item = self.export_action_box.model().item(index)
+        if item is not None:
+            item.setEnabled(bool(enabled))
+        self.export_action_box.setItemData(
+            index,
+            str(reason or ""),
+            Qt.ItemDataRole.ToolTipRole,
+        )
 
     def set_target_context_widget(self, widget):
         self._set_context_widget(self.target_context_stack, widget)

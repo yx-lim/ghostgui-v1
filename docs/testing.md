@@ -100,6 +100,11 @@ structure. It skips outside the explicitly configured visual environment.
 - Load a qpos file with the correct active-model width.
 - Reject a qpos or trajectory with the wrong width or non-finite values.
 - Export a committed pose and confirm an uncommitted orange preview is absent.
+- Export MuJoCo, DSMS, and mjlab trajectories; confirm DSMS creates two files,
+  both specialized formats apply Export interval to the current trajectory, and
+  mjlab is limited to the G1 29-DoF contract.
+- Confirm `convert_ghostgui_to_dsms.py` and `ghostgui_to_mjlab.py` remain
+  directly runnable from the terminal.
 - Import a model with relative meshes.
 - Exercise the mesh-folder retry path for an unresolved model asset.
 
