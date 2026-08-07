@@ -98,6 +98,15 @@ class ArchitectureGuardrailTests(unittest.TestCase):
 
         self.assertTrue(any("runtime resources" in error for error in errors))
 
+    def test_launcher_configures_opengl_before_qapplication(self):
+        source = (PROJECT_ROOT / "application" / "launcher.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertLess(
+            source.index("configure_default_surface_format()"),
+            source.index("QApplication(["),
+        )
+
     def test_ci_runs_compatibility_release_and_visual_gates(self):
         workflow = (
             PROJECT_ROOT / ".github" / "workflows" / "ci.yml"

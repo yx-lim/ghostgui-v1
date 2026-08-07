@@ -33,9 +33,11 @@ as `libxcb-cursor0`, `libxcb-xinerama0`, `libxcb-xinput0`, or
 
 ### MuJoCo cannot create an OpenGL context
 
-Confirm that the machine has working GPU drivers or a software OpenGL stack.
-Remote desktops, containers, WSL, and headless sessions may need separate
-display and OpenGL configuration.
+GhostGUI requests desktop OpenGL 2.1 compatibility rendering with a 24-bit
+depth buffer. Use the rendering error in **Status** to compare that request
+with the context supplied by Qt. Confirm that the machine has working GPU
+drivers or a software OpenGL stack. Remote desktops, containers, WSL, and
+headless sessions may need separate display and OpenGL configuration.
 
 ### The passive viewer fails on macOS
 

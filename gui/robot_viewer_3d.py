@@ -207,6 +207,7 @@ class RobotViewer3D(QWidget):
         self._pending_scrub_preview_time = None
         self.canvas = RobotCanvas3D()
         self.canvas.geometry_progress.connect(self._on_geometry_progress)
+        self.canvas.rendering_failed.connect(self._on_rendering_failed)
         self.canvas.target_dragged.connect(self.target_dragged.emit)
         self.canvas.target_transform_dragged.connect(self._on_transform_moved)
         self.canvas.transform_drag_finished.connect(
@@ -834,6 +835,10 @@ class RobotViewer3D(QWidget):
             )
         else:
             self.status_label.setText("3D geometry ready.")
+
+    def _on_rendering_failed(self, message):
+        """Mirror persistent canvas failures into the shared Status panel."""
+        self.status_label.setText(str(message))
 
     def update_scene(
         self,
