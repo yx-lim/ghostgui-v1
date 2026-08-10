@@ -154,6 +154,7 @@ def build_joint_weights_widget(viewer):
         presets.extend(("Upper body only", "Legs only"))
     elif viewer.robot_model.model_type == "quadruped":
         presets.append("Quadruped legs only")
+    presets.append("Custom")
     viewer.ik_preset_box.addItems(presets)
     apply_preset = QPushButton("Apply")
     apply_preset.clicked.connect(viewer.apply_ik_preset)

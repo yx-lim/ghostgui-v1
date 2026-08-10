@@ -60,6 +60,12 @@ prefix shared with another End Effector, such as a humanoid waist shared by
 both arms, are excluded. This does not depend on names such as `shoulder`,
 `elbow`, `wrist`, or `waist`.
 
+After **Selected limb only** is applied, it remains live: changing the target
+robot frame from the sidebar, advanced-target selector, or 3D body selection
+recomputes the enabled branch immediately. Editing an individual joint weight
+switches the preset to **Custom**, so later target changes preserve the manual
+weights.
+
 Floating roots are handled separately from ordinary limb-joint weighting.
 
 ## Priority Metadata

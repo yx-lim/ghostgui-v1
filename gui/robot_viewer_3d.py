@@ -203,6 +203,7 @@ class RobotViewer3D(QWidget):
                 )
             }
         )
+        self.active_ik_weight_preset = "All joints normal"
         self.preview_reference_qpos = None
         self.foot_lock_targets = {}
         self.root_lock_target = None
@@ -893,6 +894,7 @@ class RobotViewer3D(QWidget):
             return
         kind, name = self._selected_target()
         self._set_target_to_selected_pose()
+        self._sync_live_ik_weight_preset()
         frame_name = self.reverse_bindings.get((kind, name))
         if frame_name and not self._syncing_target:
             self.target_frame_changed.emit(frame_name)
@@ -991,8 +993,13 @@ class RobotViewer3D(QWidget):
 
     def _ik_influence_changed(self, name, value):
         self.ik_joint_weights[name] = float(value)
+        self.active_ik_weight_preset = "Custom"
+        if hasattr(self, "ik_preset_box"):
+            self.ik_preset_box.setCurrentText("Custom")
         state = "locked" if value <= 1e-9 else f"influence {value:.2f}"
-        self.status_label.setText(f"IK joint {name}: {state}")
+        self.status_label.setText(
+            f"IK joint {name}: {state}; joint-weight preset is now Custom"
+        )
 
     def _set_all_ik_influences(self, selector):
         for name, control in self.ik_influence_controls.items():
@@ -1000,8 +1007,43 @@ class RobotViewer3D(QWidget):
             self.ik_joint_weights[name] = value
             control.set_value(value)
 
+    def _apply_selected_limb_weights(self):
+        kind, object_name = self._selected_target()
+        logical = self.reverse_bindings.get((kind, object_name), "")
+        frame_reference = logical or object_name or ""
+        chain = set(
+            self.robot_model.limb_joint_chain_for_frame(frame_reference)
+            if frame_reference and hasattr(
+                self.robot_model, "limb_joint_chain_for_frame"
+            ) else ()
+        )
+        passive = set(getattr(self.robot_model, "passive_joints", ()))
+        self._set_all_ik_influences(
+            lambda name: 1.0
+            if name in chain and name not in passive else 0.0
+        )
+        return frame_reference, len(chain - passive)
+
+    def _sync_live_ik_weight_preset(self):
+        if self.active_ik_weight_preset != "Selected limb only":
+            return False
+        logical, enabled_count = self._apply_selected_limb_weights()
+        selected = logical or "non-limb target"
+        self.status_label.setText(
+            f"Selected limb only synced to {selected}: "
+            f"{enabled_count} joint weights enabled"
+        )
+        return True
+
     def apply_ik_preset(self):
         preset = self.ik_preset_box.currentText()
+        if preset == "Custom":
+            self.active_ik_weight_preset = preset
+            self.status_label.setText(
+                "Custom joint weights active; target changes will not "
+                "overwrite them"
+            )
+            return
         if preset == "All joints normal":
             defaults = (
                 self.robot_model.default_ik_joint_weights()
@@ -1026,24 +1068,13 @@ class RobotViewer3D(QWidget):
                 lambda name: 1.0 if any(token in name.lower() for token in tokens) else 0.0
             )
         elif preset == "Selected limb only":
-            kind, object_name = self._selected_target()
-            logical = self.reverse_bindings.get((kind, object_name), "")
-            chain = set(
-                self.robot_model.limb_joint_chain_for_frame(logical)
-                if logical and hasattr(
-                    self.robot_model, "limb_joint_chain_for_frame"
-                ) else ()
-            )
-            passive = set(getattr(self.robot_model, "passive_joints", ()))
-            self._set_all_ik_influences(
-                lambda name: 1.0
-                if name in chain and name not in passive else 0.0
-            )
+            self._apply_selected_limb_weights()
         elif preset == "Feet planted":
             self._set_all_ik_influences(lambda name: 1.0)
             checkbox, spin = self.ik_task_controls["foot_lock"]
             checkbox.setChecked(True)
             spin.setValue(max(1.0, spin.value()))
+        self.active_ik_weight_preset = preset
         self.status_label.setText(f"Applied IK preset: {preset}")
 
     def _task_setting(self, name):

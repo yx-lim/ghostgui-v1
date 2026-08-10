@@ -261,6 +261,42 @@ class AdvancedIKTests(unittest.TestCase):
             ):
                 self.assertEqual(viewer.ik_joint_weights[waist_joint], 0.0)
 
+            viewer.select_target("site", "robot/left_palm", emit=False)
+            self.assertGreater(
+                viewer.ik_joint_weights["left_elbow_joint"], 0.0
+            )
+            self.assertEqual(
+                viewer.ik_joint_weights["right_elbow_joint"], 0.0
+            )
+            self.assertEqual(
+                viewer.active_ik_weight_preset, "Selected limb only"
+            )
+
+            window.controls.frame_box.setCurrentText("right_foot")
+            self.assertGreater(
+                viewer.ik_joint_weights["right_knee_joint"], 0.0
+            )
+            self.assertEqual(
+                viewer.ik_joint_weights["left_elbow_joint"], 0.0
+            )
+
+            viewer.select_target(
+                "body", "robot/right_elbow_link", emit=False
+            )
+            self.assertGreater(
+                viewer.ik_joint_weights["right_elbow_joint"], 0.0
+            )
+            self.assertEqual(
+                viewer.ik_joint_weights["waist_yaw_joint"], 0.0
+            )
+
+            viewer._ik_influence_changed("right_knee_joint", 2.0)
+            self.assertEqual(viewer.active_ik_weight_preset, "Custom")
+            self.assertEqual(viewer.ik_preset_box.currentText(), "Custom")
+            viewer.select_target("site", "robot/left_palm", emit=False)
+            self.assertEqual(viewer.ik_joint_weights["right_knee_joint"], 2.0)
+            self.assertEqual(viewer.ik_joint_weights["left_elbow_joint"], 0.0)
+
             viewer.ik_preset_box.setCurrentText("Feet planted")
             viewer.apply_ik_preset()
             foot_checkbox, foot_weight = viewer.ik_task_controls["foot_lock"]
