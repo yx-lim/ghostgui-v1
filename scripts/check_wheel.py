@@ -40,6 +40,7 @@ REQUIRED_RESOURCE_SUFFIXES = frozenset(
         "share/ghostgui/models/g1_29dof.xml",
         "share/ghostgui/models/go2_description.urdf",
         "share/ghostgui/models/h2.urdf",
+        "share/ghostgui/models/assets-h2/pelvis.stl",
         "share/ghostgui/models/z1.urdf",
     }
 )

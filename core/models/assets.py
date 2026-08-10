@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 import re
+import shutil
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -27,6 +29,18 @@ class ConvertedMeshPart:
     path: Path
     rgba: tuple[float, float, float, float]
     material_name: str
+
+
+def _stage_direct_mesh(source_path, cache_dir):
+    """Copy a native MuJoCo mesh into the model's self-contained cache."""
+    source_path = Path(source_path).resolve()
+    mesh_dir = Path(cache_dir).resolve() / "meshes" / "source"
+    mesh_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(source_path.read_bytes()).hexdigest()[:12]
+    destination = mesh_dir / f"{digest}-{source_path.name}"
+    if not destination.is_file():
+        shutil.copyfile(source_path, destination)
+    return destination
 
 
 def resolve_mesh_path(mesh_filename, model_dir, package_map=None):
@@ -240,9 +254,10 @@ def convert_collada_to_obj_parts(source_path, output_dir):
 
 
 def prepare_urdf_visual_meshes(root, model_path, cache_dir, package_map=None):
-    """Resolve URDF visuals and replace DAE meshes with cached OBJ submeshes."""
+    """Resolve URDF meshes into a self-contained runtime model cache."""
     model_path = Path(model_path).resolve()
     converted_files = {}
+    staged_files = {}
     visual_count = 0
     dae_count = 0
     for link in root.findall("link"):
@@ -260,7 +275,11 @@ def prepare_urdf_visual_meshes(root, model_path, cache_dir, package_map=None):
                 raise RuntimeError(resolved.error)
             visual_count += 1
             if resolved.path.suffix.lower() in DIRECT_MUJOCO_MESH_FORMATS:
-                mesh.set("filename", str(resolved.path))
+                staged = staged_files.get(resolved.path)
+                if staged is None:
+                    staged = _stage_direct_mesh(resolved.path, cache_dir)
+                    staged_files[resolved.path] = staged
+                mesh.set("filename", str(staged))
                 materials = visual.findall("material")
                 for extra in materials[1:]:
                     visual.remove(extra)
@@ -289,4 +308,25 @@ def prepare_urdf_visual_meshes(root, model_path, cache_dir, package_map=None):
                     "rgba": " ".join(f"{value:.6g}" for value in part.rgba)
                 })
                 link.insert(insert_at + offset, replacement)
+
+    # Collision meshes are separate URDF elements. Resolve and stage them too,
+    # even when they duplicate a visual, so the sanitized URDF never depends
+    # on paths relative to its cache directory or on the original checkout.
+    for mesh in root.findall(".//collision/geometry/mesh"):
+        resolved = resolve_mesh_path(
+            mesh.get("filename"), model_path.parent, package_map
+        )
+        if resolved.error:
+            raise RuntimeError(resolved.error)
+        if resolved.path.suffix.lower() not in DIRECT_MUJOCO_MESH_FORMATS:
+            raise RuntimeError(
+                "collision mesh must use a MuJoCo-compatible format "
+                f"({', '.join(sorted(DIRECT_MUJOCO_MESH_FORMATS))}): "
+                f"{resolved.path}"
+            )
+        staged = staged_files.get(resolved.path)
+        if staged is None:
+            staged = _stage_direct_mesh(resolved.path, cache_dir)
+            staged_files[resolved.path] = staged
+        mesh.set("filename", str(staged))
     return visual_count, dae_count, sum(len(parts) for parts in converted_files.values())

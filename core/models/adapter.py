@@ -17,7 +17,7 @@ from .registry import RobotModelInfo, get_model_info
 from .assets import prepare_urdf_visual_meshes, resolve_mesh_path
 
 
-MODEL_CACHE_VERSION = 4
+MODEL_CACHE_VERSION = 5
 HOME_GROUND_CLEARANCE = 0.002
 HOME_REPAIR_SAMPLE_COUNT = 512
 

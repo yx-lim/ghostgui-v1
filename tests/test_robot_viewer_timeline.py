@@ -1805,12 +1805,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.window.status_details_button.setChecked(True)
         self.app.processEvents()
         self.assertTrue(self.window.status_details_panel.isVisible())
-        self.assertEqual(
-            self.viewer.target_context_panel.layout()
-            .labelForField(self.viewer.target_box)
-            .text(),
-            "Advanced target",
-        )
+        self.assertEqual(self.viewer.advanced_target_label.text(), "Advanced target")
         self.assertIs(
             self.viewer.target_context_panel.parent(),
             self.window.controls.target_context_stack,
@@ -1825,6 +1820,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertTrue(self.viewer.target_box.isVisible())
         self.assertGreaterEqual(self.viewer.target_box.width(), 96)
         self.assertGreater(self.viewer.target_box.height(), 0)
+        self.assertGreater(
+            self.window.controls.target_context_stack.minimumHeight(),
+            0,
+        )
         self.assertEqual(
             self.viewer.target_box.sizePolicy().horizontalPolicy(),
             QSizePolicy.Policy.MinimumExpanding,

@@ -67,11 +67,17 @@ def main(argv=None):
                 f"missing {key} package asset directory: {package_root}",
             )
 
-    adapter = None
     if args.load_model or args.gui:
-        adapter = MuJoCoRobotAdapter("g1")
-        _require(adapter.mj_model.nq > 0, "installed G1 model did not compile")
-        _require(adapter.trajectory_frames, "installed G1 has no logical frames")
+        for key in ROBOT_MODELS:
+            candidate = MuJoCoRobotAdapter(key)
+            _require(
+                candidate.mj_model.nq > 0,
+                f"installed {key} model did not compile",
+            )
+            _require(
+                candidate.trajectory_frames,
+                f"installed {key} has no logical frames",
+            )
 
     if args.gui:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

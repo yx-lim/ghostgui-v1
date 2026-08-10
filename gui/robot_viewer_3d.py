@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QLayout,
     QLabel,
     QPushButton,
     QScrollArea,
@@ -332,9 +333,14 @@ class RobotViewer3D(QWidget):
         self.qpos_csv_group.setVisible(False)
 
         self.target_context_panel = QWidget()
-        target_layout = QFormLayout(self.target_context_panel)
+        target_layout = QVBoxLayout(self.target_context_panel)
         target_layout.setContentsMargins(0, 0, 0, 0)
-        target_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        target_layout.setSpacing(4)
+        # A late-populated QStackedWidget can otherwise retain the empty
+        # page's zero-height size under QMacStyle. Propagate the native label
+        # and combo minimum sizes to the page and its stack.
+        target_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.advanced_target_label = QLabel("Advanced target")
         self.target_box = QComboBox()
         _compact_combo(self.target_box, minimum_chars=12)
         if self.robot_model:
@@ -351,7 +357,8 @@ class RobotViewer3D(QWidget):
                     if (kind, name) not in known and name != "world":
                         self.target_box.addItem(f"{kind}: {name}", (kind, name))
         self.target_box.currentIndexChanged.connect(self._target_selected)
-        target_layout.addRow("Advanced target", self.target_box)
+        target_layout.addWidget(self.advanced_target_label)
+        target_layout.addWidget(self.target_box)
         self.root_pose_label = StatusValueLabel()
         self.root_pose_label.setWordWrap(True)
 

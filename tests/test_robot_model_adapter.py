@@ -7,6 +7,7 @@ import mujoco
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
+import xml.etree.ElementTree as ET
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -251,6 +252,46 @@ class RobotModelAdapterTests(unittest.TestCase):
         )
         self.assertIsNone(resolved.error)
         self.assertEqual(resolved.path.name, "base.dae")
+
+    def test_urdf_runtime_cache_owns_direct_visual_and_collision_meshes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mesh = root / "body.stl"
+            mesh.write_bytes(tiny_binary_stl(b"cached body"))
+            source = root / "robot.urdf"
+            source.write_text(
+                """
+<robot name="cached_mesh">
+  <link name="base">
+    <inertial>
+      <mass value="1"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+    </inertial>
+    <visual><geometry><mesh filename="body.stl"/></geometry></visual>
+    <collision><geometry><mesh filename="body.stl"/></geometry></collision>
+  </link>
+</robot>
+""".strip(),
+                encoding="utf-8",
+            )
+            cache_root = root / "cache"
+            with patch.dict(
+                os.environ,
+                {"GHOSTGUI_CACHE_DIR": str(cache_root)},
+            ):
+                adapter = MuJoCoRobotAdapter(model=None, model_path=source)
+
+            runtime_root = ET.parse(adapter.runtime_model_path).getroot()
+            mesh_files = [
+                Path(element.get("file"))
+                for element in runtime_root.findall(".//asset/mesh")
+            ]
+            self.assertTrue(mesh_files)
+            self.assertTrue(
+                all(path.is_relative_to(cache_root) for path in mesh_files)
+            )
+            mesh.unlink()
+            mujoco.MjModel.from_xml_path(str(adapter.runtime_model_path))
 
     def test_missing_mesh_has_actionable_error(self):
         result = resolve_mesh_path("package://missing/dae/nope.dae", Path("/tmp"))

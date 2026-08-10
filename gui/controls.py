@@ -514,6 +514,13 @@ class TrajectoryControlPanel(QGroupBox):
 
     def set_target_context_widget(self, widget):
         self._set_context_widget(self.target_context_stack, widget)
+        minimum_height = (
+            max(0, widget.minimumSizeHint().height())
+            if widget is not None
+            else 0
+        )
+        self.target_context_stack.setMinimumHeight(minimum_height)
+        self.target_context_stack.updateGeometry()
 
     def set_robot_context_widget(self, widget):
         self._set_context_widget(self.robot_context_stack, widget)
