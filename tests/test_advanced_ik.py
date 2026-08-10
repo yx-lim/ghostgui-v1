@@ -249,8 +249,17 @@ class AdvancedIKTests(unittest.TestCase):
             viewer.ik_preset_box.setCurrentText("Selected limb only")
             viewer.apply_ik_preset()
             self.assertGreater(viewer.ik_joint_weights["right_elbow_joint"], 0.0)
+            self.assertGreater(
+                viewer.ik_joint_weights["right_shoulder_pitch_joint"], 0.0
+            )
             self.assertEqual(viewer.ik_joint_weights["left_elbow_joint"], 0.0)
             self.assertEqual(viewer.ik_joint_weights["right_knee_joint"], 0.0)
+            for waist_joint in (
+                "waist_yaw_joint",
+                "waist_roll_joint",
+                "waist_pitch_joint",
+            ):
+                self.assertEqual(viewer.ik_joint_weights[waist_joint], 0.0)
 
             viewer.ik_preset_box.setCurrentText("Feet planted")
             viewer.apply_ik_preset()

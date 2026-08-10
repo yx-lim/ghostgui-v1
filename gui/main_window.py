@@ -3339,12 +3339,19 @@ class RobotGuiMainWindow(QMainWindow):
             self.show_status_message("Trajectory is empty. Add keyframes first.")
             return
 
-        result = trajectory_generation.generate_trajectory_status(
-            self.trajectory,
-            self.backend_interface,
-            smoothing=self.controls.corner_smoothing(),
-            export_dt=self.viewer_3d.export_dt(),
-        )
+        try:
+            result = trajectory_generation.generate_trajectory_status(
+                self.trajectory,
+                self.backend_interface,
+                smoothing=self.controls.corner_smoothing(),
+                export_dt=self.viewer_3d.export_dt(),
+                state_timeline=self.viewer_3d.state_timeline,
+            )
+        except (RuntimeError, ValueError) as error:
+            self.show_status_message(
+                f"Could not generate trajectory: {error}"
+            )
+            return
         self.viewer_3d.load_backend_states(result.result_states)
         self.viewer_3d_mujoco.set_trajectory_csv(result.csv_path)
         collision_status = self.viewer_3d.robot_trajectory_collision_status()

@@ -193,11 +193,16 @@ class RobotViewer3D(QWidget):
         self.ghost_source = None
         self.joint_controls = {}
         self.ik_influence_controls = {}
-        self.ik_joint_weights = {
-            name: 1.0 for name in (
-                robot_model.get_joint_names() if robot_model else []
-            )
-        }
+        self.ik_joint_weights = (
+            robot_model.default_ik_joint_weights()
+            if robot_model is not None
+            and hasattr(robot_model, "default_ik_joint_weights")
+            else {
+                name: 1.0 for name in (
+                    robot_model.get_joint_names() if robot_model else []
+                )
+            }
+        )
         self.preview_reference_qpos = None
         self.foot_lock_targets = {}
         self.root_lock_target = None
@@ -998,7 +1003,14 @@ class RobotViewer3D(QWidget):
     def apply_ik_preset(self):
         preset = self.ik_preset_box.currentText()
         if preset == "All joints normal":
-            self._set_all_ik_influences(lambda name: 1.0)
+            defaults = (
+                self.robot_model.default_ik_joint_weights()
+                if hasattr(self.robot_model, "default_ik_joint_weights")
+                else {}
+            )
+            self._set_all_ik_influences(
+                lambda name: defaults.get(name, 1.0)
+            )
         elif preset == "Root locked":
             # Floating roots are already excluded from limb IK. Keep actuated
             # joints normal and make that hard-lock explicit in status.
@@ -1016,21 +1028,17 @@ class RobotViewer3D(QWidget):
         elif preset == "Selected limb only":
             kind, object_name = self._selected_target()
             logical = self.reverse_bindings.get((kind, object_name), "")
-            lower = logical.lower()
-            side = next(
-                (token for token in ("left", "right", "fl", "fr", "rl", "rr")
-                 if lower.startswith(token)),
-                "",
+            chain = set(
+                self.robot_model.limb_joint_chain_for_frame(logical)
+                if logical and hasattr(
+                    self.robot_model, "limb_joint_chain_for_frame"
+                ) else ()
             )
-            limb_tokens = (
-                ("shoulder", "elbow", "wrist", "arm")
-                if "hand" in lower else
-                ("hip", "thigh", "knee", "calf", "ankle", "leg")
+            passive = set(getattr(self.robot_model, "passive_joints", ()))
+            self._set_all_ik_influences(
+                lambda name: 1.0
+                if name in chain and name not in passive else 0.0
             )
-            self._set_all_ik_influences(lambda name: 1.0 if (
-                (not side or name.lower().startswith(side))
-                and any(token in name.lower() for token in limb_tokens)
-            ) else 0.0)
         elif preset == "Feet planted":
             self._set_all_ik_influences(lambda name: 1.0)
             checkbox, spin = self.ik_task_controls["foot_lock"]

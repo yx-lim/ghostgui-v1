@@ -160,7 +160,9 @@ def build_joint_weights_widget(viewer):
     influence_layout.addWidget(viewer.ik_preset_box)
     influence_layout.addWidget(apply_preset)
     for name in viewer.robot_model.get_joint_names():
-        control = IKInfluenceControl(name, 1.0)
+        control = IKInfluenceControl(
+            name, viewer.ik_joint_weights.get(name, 1.0)
+        )
         control.value_changed.connect(viewer._ik_influence_changed)
         viewer.ik_influence_controls[name] = control
         influence_layout.addWidget(control)

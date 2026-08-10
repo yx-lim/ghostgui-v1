@@ -8,7 +8,7 @@ import math
 import numpy as np
 
 from core.math3d import quaternion_angle, rpy_to_quaternion
-from .tasks import TCPOrientationTask, TCPPositionTask
+from .tasks import PostureTask, TCPOrientationTask, TCPPositionTask
 
 
 ROOT_FRAME_NAMES = frozenset({"pelvis", "base", "root"})
@@ -75,6 +75,46 @@ class PoseIKResult:
     ignored_frame_names: tuple[str, ...]
 
 
+def pose_target_errors(
+    state,
+    active_targets,
+    frame_bindings,
+    *,
+    include_orientation=True,
+):
+    """Measure logical target errors without mutating the supplied state."""
+    position_errors = []
+    orientation_errors = []
+    solved = []
+    ignored = []
+    state.forward_kinematics()
+    for frame_name, target in active_targets.items():
+        binding = frame_bindings.get(frame_name)
+        if binding is None:
+            ignored.append(frame_name)
+            continue
+        kind, object_name = binding
+        target_position = np.asarray(
+            [target.x, target.y, target.z], dtype=float
+        )
+        target_quaternion = rpy_to_quaternion(
+            target.roll, target.pitch, target.yaw
+        )
+        position, quaternion = state.get_body_pose(object_name, kind)
+        position_errors.append(float(np.linalg.norm(target_position - position)))
+        if include_orientation:
+            orientation_errors.append(
+                quaternion_angle(quaternion, target_quaternion)
+            )
+        solved.append(frame_name)
+    return (
+        max(position_errors, default=0.0),
+        max(orientation_errors, default=0.0),
+        tuple(solved),
+        tuple(sorted(ignored)),
+    )
+
+
 def solve_pose_targets(
     state,
     active_targets,
@@ -83,12 +123,13 @@ def solve_pose_targets(
     frame_weights=None,
     joint_weights=None,
     settings=None,
+    posture_reference=None,
+    posture_weight=1.0,
 ):
     """Solve logical target frames through ``RobotState3D.solve_weighted_tasks``."""
     settings = settings or IKSolverSettings()
     frame_weights = dict(frame_weights or {})
     tasks = []
-    specifications = []
     ignored = []
     for frame_name, target in active_targets.items():
         if frame_name in ROOT_FRAME_NAMES:
@@ -129,46 +170,48 @@ def solve_pose_targets(
                 kind=kind,
                 target_quaternion=target_quaternion,
             ))
-        specifications.append(
-            (
-                frame_name,
-                kind,
-                object_name,
-                target_position,
-                target_quaternion,
-            )
+    if posture_reference is not None and hasattr(
+        state, "solve_hierarchical_tasks"
+    ):
+        ik_result = state.solve_hierarchical_tasks(
+            tasks,
+            [PostureTask(
+                name="Keyframe posture reference",
+                weight=max(0.0, float(posture_weight)),
+                priority=3,
+                required=False,
+                tolerance=1e-4,
+                reference_qpos=np.asarray(posture_reference, dtype=float),
+            )],
+            joint_weights=joint_weights,
+            max_iterations=settings.max_iterations,
+            damping=settings.damping,
+            step_size=settings.step_size,
+            max_step=settings.max_step,
         )
-
-    ik_result = state.solve_weighted_tasks(
-        tasks,
-        joint_weights=joint_weights,
-        max_iterations=settings.max_iterations,
-        damping=settings.damping,
-        step_size=settings.step_size,
-        max_step=settings.max_step,
+    else:
+        ik_result = state.solve_weighted_tasks(
+            tasks,
+            joint_weights=joint_weights,
+            max_iterations=settings.max_iterations,
+            damping=settings.damping,
+            step_size=settings.step_size,
+            max_step=settings.max_step,
+        )
+    position_error, orientation_error, solved, measured_ignored = (
+        pose_target_errors(
+            state,
+            active_targets,
+            frame_bindings,
+            include_orientation=settings.orientation_weight > 0.0,
+        )
     )
-    state.forward_kinematics()
-    position_errors = []
-    orientation_errors = []
-    for (
-        _frame_name,
-        kind,
-        object_name,
-        target_position,
-        target_quaternion,
-    ) in specifications:
-        position, quaternion = state.get_body_pose(object_name, kind)
-        position_errors.append(
-            float(np.linalg.norm(target_position - position))
-        )
-        if settings.orientation_weight > 0.0:
-            orientation_errors.append(
-                quaternion_angle(quaternion, target_quaternion)
-            )
     return PoseIKResult(
         ik_result=ik_result,
-        position_error=max(position_errors, default=0.0),
-        orientation_error=max(orientation_errors, default=0.0),
-        solved_frame_names=tuple(item[0] for item in specifications),
-        ignored_frame_names=tuple(sorted(ignored)),
+        position_error=position_error,
+        orientation_error=orientation_error,
+        solved_frame_names=tuple(
+            name for name in solved if name not in ROOT_FRAME_NAMES
+        ),
+        ignored_frame_names=tuple(sorted(set(ignored) | set(measured_ignored))),
     )

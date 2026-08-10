@@ -1,12 +1,14 @@
 # Advanced IK
 
-GhostGUI uses MuJoCo position and rotation Jacobians with weighted,
-damped-least-squares inverse kinematics. The **IK / Constraints** sidebar
-controls the solver used for the orange preview.
+GhostGUI uses MuJoCo position and rotation Jacobians with damped-least-squares
+inverse kinematics. The **IK / Constraints** sidebar controls the weighted
+solver used for the orange preview.
 
-Interactive preview and generated-trajectory solving share the same weighted
-task implementation and validated solver settings. Positions are meters,
-angles are radians, and quaternions use MuJoCo `w, x, y, z` order throughout.
+Interactive preview and generated-trajectory solving share the same task and
+coordinate contracts. Generated motion with complete committed keyframes uses
+a hierarchical solver: Cartesian targets are primary and posture is optimized
+only in their joint-space null space. Positions are meters, angles are radians,
+and quaternions use MuJoCo `w, x, y, z` order throughout.
 
 ## Solver Controls
 
@@ -38,8 +40,10 @@ TCP position is enabled by default. Secondary posture and regularization tasks
 are opt-in so an ordinary target drag can use the model's available kinematic
 range.
 
-A weight of zero disables a task's influence. Larger values give the task more
-influence within the shared weighted solve, but do not create a hard hierarchy.
+A weight of zero disables a task's influence. In the interactive solver, larger
+values give the task more influence within the shared weighted solve. Generated
+posture references use a separate secondary hierarchy and cannot intentionally
+trade primary Cartesian accuracy for posture accuracy.
 
 ## Joint Influence
 
@@ -50,7 +54,11 @@ Each controllable joint has an influence value:
 - values above `1` prefer movement through that joint.
 
 Model-aware presets include all joints, selected limb, planted feet, and
-body-region choices appropriate to humanoid or quadruped models.
+body-region choices appropriate to humanoid or quadruped models. The selected
+limb is derived from the compiled MuJoCo root-to-target body chain. Joints in a
+prefix shared with another End Effector, such as a humanoid waist shared by
+both arms, are excluded. This does not depend on names such as `shoulder`,
+`elbow`, `wrist`, or `waist`.
 
 Floating roots are handled separately from ordinary limb-joint weighting.
 
@@ -62,9 +70,10 @@ Tasks record descriptive priority values:
 2. selected TCP position and orientation;
 3. posture and regularization.
 
-The current solver sorts the tasks but combines them into one weighted stack.
-It does not implement strict null-space projection, so lower-priority tasks can
-still trade off with higher-priority tasks according to their weights.
+The interactive orange-preview solver sorts these tasks but combines them into
+one weighted stack, so optional interactive tasks may still trade off according
+to their weights. Generated motion with qpos anchors instead projects the
+posture task into the null space of the Cartesian task stack.
 
 Interactive requirements follow the active gizmo handle. Translation requires
 the selected TCP position while keeping enabled orientation as a best-effort
@@ -99,12 +108,12 @@ body-frame pairs with an explicit maximum allowed penetration.
 
 ## Backend Selection
 
-The normal trajectory backend is the shared MuJoCo weighted pose solver. An
-approximate analytic backend exists for degraded environments, but it has no
-exact-qpos or whole-body-IK guarantee. Using it requires the
-`allow_approximate` fallback policy, emits a runtime warning, and is identified
-as approximate in the status output. Unexpected solver exceptions are never
-converted into fallback results.
+The normal trajectory backend is the MuJoCo hierarchical pose/posture solver.
+An approximate Unitree G1 analytic backend exists for degraded environments,
+but it has no exact-qpos or whole-body-IK guarantee. It is never selected for a
+generic or non-G1 model. G1 use requires the `allow_approximate` fallback
+policy, emits a runtime warning, and is identified as approximate in the status
+output. Unexpected solver exceptions are never converted into fallback results.
 
 Inspect the **Status** details for the selected frame, error, singularity
 metrics, and collision names. `IK reach limit` identifies solver reach or

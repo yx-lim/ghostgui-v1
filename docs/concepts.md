@@ -76,15 +76,26 @@ the active time when present. It does not delete neighboring keyframes.
 
 ## Generation And Playback
 
-Generation samples the logical target tracks created by the keyframes, applies
-the configured smoothing, and asks the active backend to solve robot states.
-The generated states can then be played in the live view or the MuJoCo
-simulation view.
+Generation samples the logical target tracks created by the keyframes and the
+complete qpos states stored by **Commit Keyframe**. A committed qpos is exact at
+its Keyframe time. Between Keyframes, manifold-aware qpos interpolation provides
+a posture reference while Cartesian End Effector targets remain primary IK
+constraints. This preserves redundant elbow and wrist choices without allowing
+posture to intentionally reduce End Effector accuracy.
+
+Legacy or target-only trajectories without complete committed timeslices retain
+target-only IK behavior. If a logical target conflicts with an exact qpos
+anchor, generation stops and asks for the Keyframe to be recommitted.
 
 **Export interval** controls this uniform sampling time step from `0.01 s` to
 `10.00 s`. The default `0.01 s` interval is equivalent to 100 Hz. This is
 independent of the **Keyframe interval**, which only advances the editing time
 after **Commit Keyframe**.
+
+Every exact qpos anchor must lie on the uniform export-time grid. If a Keyframe
+time is not divisible from the trajectory start by the selected **Export
+interval**, generation stops with an alignment message instead of inserting a
+short nonuniform sample.
 
 Playback speed changes wall-clock viewing speed, not the trajectory timestamps.
 Playback ghosts and Preview Path ghosts are temporary visualizations and are

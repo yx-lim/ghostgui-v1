@@ -23,7 +23,7 @@ from application.paths import ghostgui_user_data_dir
 
 
 SUPPORTED_MODEL_EXTENSIONS = {".urdf", ".xml"}
-MODEL_PROFILE_SCHEMA_VERSION = 1
+MODEL_PROFILE_SCHEMA_VERSION = 2
 MODEL_PROFILE_SUFFIX = ".ghostgui.json"
 BUILT_IN_MODEL_FILENAMES = {
     "g1_29dof.urdf",
@@ -95,14 +95,21 @@ def model_profile_path(model_path):
     return model_path.with_name(f"{model_path.stem}{MODEL_PROFILE_SUFFIX}")
 
 
-def _load_profile_home_joints(model_path):
+def _load_model_profile(model_path):
     profile_path = model_profile_path(model_path)
     try:
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    if profile.get("schema_version") != MODEL_PROFILE_SCHEMA_VERSION:
+    if not isinstance(profile, dict):
         return {}
+    if profile.get("schema_version") not in (1, MODEL_PROFILE_SCHEMA_VERSION):
+        return {}
+    return profile
+
+
+def _load_profile_home_joints(model_path):
+    profile = _load_model_profile(model_path)
     values = profile.get("home_joints")
     if not isinstance(values, dict):
         return {}
@@ -119,14 +126,82 @@ def _load_profile_home_joints(model_path):
     return home_joints
 
 
+def _profile_string_tuple(profile, key, default=()):
+    values = profile.get(key, default)
+    if isinstance(values, str):
+        values = (values,)
+    if not isinstance(values, (list, tuple)) or not all(
+        isinstance(value, str) and value.strip() for value in values
+    ):
+        return tuple(default)
+    return tuple(value.strip() for value in values)
+
+
+def _profile_string_mapping(profile, key):
+    values = profile.get(key, {})
+    if not isinstance(values, dict):
+        return {}
+    result = {}
+    for name, candidates in values.items():
+        if not isinstance(name, str) or not name.strip():
+            return {}
+        if isinstance(candidates, str):
+            candidates = (candidates,)
+        if not isinstance(candidates, (list, tuple)) or not all(
+            isinstance(candidate, str) and candidate.strip()
+            for candidate in candidates
+        ):
+            return {}
+        result[name.strip()] = tuple(
+            candidate.strip() for candidate in candidates
+        )
+    return result
+
+
+def _profile_body_labels(profile):
+    values = profile.get("body_labels", {})
+    if not isinstance(values, dict) or not all(
+        isinstance(name, str)
+        and isinstance(label, str)
+        and name.strip()
+        and label.strip()
+        for name, label in values.items()
+    ):
+        return {}
+    return {name.strip(): label.strip() for name, label in values.items()}
+
+
+def _profile_contact_pairs(profile):
+    values = profile.get("allowed_contact_body_pairs", ())
+    if not isinstance(values, (list, tuple)):
+        return ()
+    pairs = []
+    for value in values:
+        if (
+            not isinstance(value, (list, tuple))
+            or len(value) != 3
+            or not isinstance(value[0], str)
+            or not isinstance(value[1], str)
+            or isinstance(value[2], bool)
+            or not isinstance(value[2], (int, float))
+            or not math.isfinite(float(value[2]))
+            or float(value[2]) < 0.0
+        ):
+            return ()
+        pairs.append((value[0], value[1], float(value[2])))
+    return tuple(pairs)
+
+
 def _write_generated_home_profile(model_path, adapter):
     profile_path = model_profile_path(model_path)
+    profile = _load_model_profile(model_path)
+    profile.update({
+        "schema_version": MODEL_PROFILE_SCHEMA_VERSION,
+        "home_source": "collision_repair",
+        "home_joints": adapter.home_joint_values(),
+    })
     profile_path.write_text(
-        json.dumps({
-            "schema_version": MODEL_PROFILE_SCHEMA_VERSION,
-            "home_source": "collision_repair",
-            "home_joints": adapter.home_joint_values(),
-        }, indent=2, sort_keys=True),
+        json.dumps(profile, indent=2, sort_keys=True),
         encoding="utf-8",
     )
     return profile_path
@@ -326,16 +401,52 @@ def _rewrite_mjcf_meshes(root, source_path, asset_dir, mesh_roots=None):
 def _model_info_for_path(path, key=None, name_hints=()):
     path = Path(path).expanduser().resolve()
     stem = _slug(key or path.stem)
+    profile = _load_model_profile(path)
+    default_root_bodies = (
+        "base", "base_link", "trunk", "pelvis", "link00", "root", "world"
+    )
+    default_root_joints = ("floating_base", "root", "freejoint")
+    root_body_candidates = _profile_string_tuple(
+        profile, "root_body_candidates", default_root_bodies
+    )
+    root_joint_candidates = _profile_string_tuple(
+        profile, "root_joint_candidates", default_root_joints
+    )
+    floating_base = profile.get("floating_base")
+    if not isinstance(floating_base, bool):
+        floating_base = None
+    model_type = profile.get("model_type", "generic")
+    if not isinstance(model_type, str) or not model_type.strip():
+        model_type = "generic"
+    blocking_depth = profile.get("collision_blocking_penetration_m", 0.001)
+    if (
+        isinstance(blocking_depth, bool)
+        or not isinstance(blocking_depth, (int, float))
+        or not math.isfinite(float(blocking_depth))
+        or float(blocking_depth) < 0.0
+    ):
+        blocking_depth = 0.001
     return RobotModelInfo(
         key=stem,
         display_name=_display_name_from_hints(stem, path.stem, *name_hints),
-        model_type="generic",
+        model_type=model_type.strip(),
         model_path=path,
-        root_body_candidates=(
-            "base", "base_link", "trunk", "pelvis", "link00", "root", "world"
+        root_body_candidates=root_body_candidates,
+        root_joint_candidates=root_joint_candidates,
+        logical_frames=_profile_string_mapping(profile, "logical_frames"),
+        ignored_body_tokens=_profile_string_tuple(
+            profile,
+            "ignored_body_tokens",
+            RobotModelInfo.__dataclass_fields__["ignored_body_tokens"].default,
         ),
-        root_joint_candidates=("floating_base", "root", "freejoint"),
+        floating_base=floating_base,
+        end_effector_frames=_profile_string_tuple(profile, "end_effectors"),
+        joint_groups=_profile_string_mapping(profile, "joint_groups"),
+        passive_joints=_profile_string_tuple(profile, "passive_joints"),
         home_joints=_load_profile_home_joints(path),
+        body_labels=_profile_body_labels(profile),
+        collision_blocking_penetration_m=float(blocking_depth),
+        allowed_contact_body_pairs=_profile_contact_pairs(profile),
     )
 
 
@@ -413,6 +524,7 @@ def import_robot_model(source_path, library_root=None, mesh_roots=None):
     library_root.mkdir(parents=True, exist_ok=True)
 
     source_stem = _slug(source_path.stem)
+    source_profile_path = model_profile_path(source_path)
     suffix = source_path.suffix.lower()
     stem = _unique_stem(library_root, source_stem, suffix)
     model_path = library_root / f"{stem}{suffix}"
@@ -437,8 +549,11 @@ def import_robot_model(source_path, library_root=None, mesh_roots=None):
             else:
                 _rewrite_mjcf_meshes(root, source_path, staged_asset_dir, mesh_roots)
             tree.write(staged_model_path, encoding="unicode")
-            adapter = _validate_model_file(staged_model_path)
             staged_profile_path = None
+            if source_profile_path.is_file():
+                staged_profile_path = model_profile_path(staged_model_path)
+                shutil.copy2(source_profile_path, staged_profile_path)
+            adapter = _validate_model_file(staged_model_path)
             if adapter.home_pose_was_repaired:
                 staged_profile_path = _write_generated_home_profile(
                     staged_model_path, adapter

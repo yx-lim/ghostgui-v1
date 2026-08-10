@@ -23,7 +23,7 @@ from application.paths import (
     prepare_csv_save_path,
 )
 from core.math3d import rpy_to_quaternion as _shared_rpy_to_quaternion
-from core.ik import IKSolverSettings, solve_pose_targets
+from core.ik import IKSolverSettings, pose_target_errors, solve_pose_targets
 
 try:
     import mujoco
@@ -512,11 +512,12 @@ class PythonTrajectoryBackend:
 
 class MujocoIKBackend(PythonTrajectoryBackend):
     """
-    MuJoCo pose IK backend.
+    MuJoCo pose IK backend with secondary posture preservation.
 
     Pelvis/base/root targets set the floating base directly. Other active
     target frames are solved against real MuJoCo bodies/sites using position
-    and rotation Jacobians with damped least squares.
+    and rotation Jacobians with damped least squares. Generated qpos references
+    are optimized only in the primary Cartesian task stack's null space.
     """
 
     def __init__(self, model_path=MODEL_PATH, mj_model=None, adapter=None):
@@ -528,6 +529,11 @@ class MujocoIKBackend(PythonTrajectoryBackend):
             raise ValueError(
                 "MuJoCo IK requires a model adapter so interactive and batch "
                 "solves share one robotics contract"
+            )
+        if len(adapter.free_joints_by_body) > 1:
+            raise ValueError(
+                "Trajectory generation supports zero or one MuJoCo free root; "
+                f"this model has {len(adapter.free_joints_by_body)}."
             )
         self.joint_names = list(adapter.actuated_joints)
         self.default_joint_positions = [
@@ -612,7 +618,7 @@ class MujocoIKBackend(PythonTrajectoryBackend):
                 self.task_weights[frame_name] = float(weight)
 
     def backend_label(self):
-        return "MuJoCo pose IK backend"
+        return "MuJoCo hierarchical pose/posture IK backend"
 
     def qpos_to_configuration(self, time=0.0, status="MuJoCo IK"):
         q = PythonRobotConfiguration(
@@ -674,6 +680,7 @@ class MujocoIKBackend(PythonTrajectoryBackend):
         damping=0.04,
         step_size=0.7,
         max_step=0.08,
+        posture_reference=None,
     ):
         settings = IKSolverSettings(
             max_iterations=max_iterations,
@@ -689,7 +696,9 @@ class MujocoIKBackend(PythonTrajectoryBackend):
             active_targets,
             self.adapter.logical_frame_bindings,
             frame_weights=self.task_weights,
+            joint_weights=self.adapter.default_ik_joint_weights(),
             settings=settings,
+            posture_reference=posture_reference,
         )
         self.data = self.state.mj_data
         self.last_orientation_error = result.orientation_error
@@ -749,6 +758,8 @@ class MujocoIKBackend(PythonTrajectoryBackend):
         for sample in samples:
             targets = sample["targets"]
             active_targets.update(targets)
+            posture_reference = sample.get("qpos_reference")
+            qpos_anchor = sample.get("qpos_anchor")
             pelvis_target = None
 
             for name in ["pelvis", "base", "root"]:
@@ -756,15 +767,55 @@ class MujocoIKBackend(PythonTrajectoryBackend):
                     pelvis_target = targets[name]
                     break
 
-            if pelvis_target is not None:
-                self.set_base_from_target(pelvis_target)
+            if qpos_anchor is not None:
+                self.state.set_qpos(qpos_anchor)
+                self.data = self.state.mj_data
+                (
+                    error,
+                    self.last_orientation_error,
+                    _solved,
+                    _ignored,
+                ) = pose_target_errors(
+                    self.state,
+                    active_targets,
+                    self.adapter.logical_frame_bindings,
+                    include_orientation=True,
+                )
+                success = (
+                    error <= 0.01
+                    and self.last_orientation_error <= 0.06
+                )
+                iterations = 0
+                if not success:
+                    raise ValueError(
+                        "Committed qpos anchor conflicts with its logical "
+                        f"targets at t={float(sample['time']):.6g}s "
+                        f"(position error {error:.4f} m, orientation error "
+                        f"{self.last_orientation_error:.4f} rad). Recommit "
+                        "the Keyframe from the intended Joint Angles."
+                    )
+            else:
+                if posture_reference is not None:
+                    self.state.set_qpos(posture_reference)
+                    self.data = self.state.mj_data
+                if pelvis_target is not None:
+                    self.set_base_from_target(pelvis_target)
+                error, success, iterations = self.solve_pose_ik(
+                    active_targets,
+                    posture_reference=posture_reference,
+                )
 
-            error, success, iterations = self.solve_pose_ik(active_targets)
+            status_prefix = (
+                "Exact committed qpos anchor: "
+                if qpos_anchor is not None else
+                "MuJoCo hierarchical pose/posture IK: "
+                if posture_reference is not None else
+                "MuJoCo pose IK: "
+            )
             q = self.qpos_to_configuration(
                 time=sample["time"],
                 status=(
-                    "MuJoCo pose IK: "
-                    f"position_error={error:.4f}, "
+                    f"{status_prefix}position_error={error:.4f}, "
                     f"orientation_error={self.last_orientation_error:.4f}, "
                     f"iterations={iterations}"
                 ),
@@ -773,12 +824,31 @@ class MujocoIKBackend(PythonTrajectoryBackend):
             q.orientation_error = self.last_orientation_error
             q.success = success
 
-            if pelvis_target is None:
+            if pelvis_target is None and qpos_anchor is None:
                 q.status += "; held previous base pose"
 
             self.last_solution.append(q)
 
         return self.last_solution
+
+    def export_last_solution_csv(self, csv_path):
+        """Write canonical headerless time-plus-qpos rows for any MuJoCo model."""
+        if not self.last_solution:
+            raise RuntimeError("No solved trajectory to export.")
+        csv_path = prepare_csv_save_path(csv_path)
+        with atomic_text_writer(csv_path, newline="") as handle:
+            writer = csv.writer(handle)
+            for configuration in self.last_solution:
+                qpos = np.asarray(configuration.qpos, dtype=float)
+                if qpos.shape != (self.model.nq,):
+                    raise ValueError(
+                        f"expected generated qpos width {self.model.nq}, "
+                        f"found {qpos.size}"
+                    )
+                writer.writerow([
+                    float(configuration.time),
+                    *map(float, qpos),
+                ])
 
 
 class BackendInterface:
@@ -804,6 +874,10 @@ class BackendInterface:
             ) from exc
 
         self.grouped_fallback_backend = PythonTrajectoryBackend()
+        self.adapter = adapter
+        self._g1_approximation_supported = (
+            adapter is None or getattr(adapter.info, "key", None) == "g1"
+        )
         self.ik_backend = None
         self.ik_error = None
         self.last_backend = None
@@ -812,6 +886,11 @@ class BackendInterface:
         self.selection = None
 
         if preferred_backend is BackendKind.ANALYTIC:
+            if not self._g1_approximation_supported:
+                raise BackendUnavailableError(
+                    "The approximate analytic backend is Unitree G1-specific; "
+                    "generic models require the exact MuJoCo backend."
+                )
             self.backend = self.grouped_fallback_backend
             self.using_cpp_backend = False
             self.using_mujoco_ik_backend = False
@@ -825,6 +904,11 @@ class BackendInterface:
             return
 
         if preferred_backend is BackendKind.CPP:
+            if not self._g1_approximation_supported:
+                raise BackendUnavailableError(
+                    "The compiled compatibility backend is Unitree G1-specific; "
+                    "generic models require the exact MuJoCo backend."
+                )
             if CPP_BACKEND_AVAILABLE:
                 self.backend = robot_backend.RobotBackend()
                 self.backend.set_joint_names(LAB_JOINT_NAMES)
@@ -855,10 +939,15 @@ class BackendInterface:
         else:
             self.ik_error = "mujoco or numpy is unavailable"
 
-        if fallback_policy is FallbackPolicy.ERROR:
+        if (
+            fallback_policy is FallbackPolicy.ERROR
+            or not self._g1_approximation_supported
+        ):
             raise BackendUnavailableError(
-                f"{preferred_backend.value} backend is unavailable: "
-                f"{self.ik_error}"
+                f"{preferred_backend.value} backend is unavailable for "
+                f"{getattr(getattr(adapter, 'info', None), 'display_name', 'this model')}: "
+                f"{self.ik_error}. Generic models cannot use the G1-specific "
+                "analytic fallback."
             )
         reason = (
             f"{preferred_backend.value} backend unavailable: {self.ik_error}"
@@ -881,7 +970,7 @@ class BackendInterface:
 
     def backend_name(self):
         labels = {
-            BackendKind.MUJOCO: "MuJoCo weighted pose IK backend",
+            BackendKind.MUJOCO: "MuJoCo hierarchical pose/posture IK backend",
             BackendKind.CPP: "C++ pelvis-target backend (limited capabilities)",
             BackendKind.ANALYTIC: "Approximate analytic trajectory backend",
         }

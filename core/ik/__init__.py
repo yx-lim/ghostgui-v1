@@ -23,7 +23,12 @@ from .tasks import (
     TCPPositionTask,
     TaskLinearization,
 )
-from .solver import IKSolverSettings, PoseIKResult, solve_pose_targets
+from .solver import (
+    IKSolverSettings,
+    PoseIKResult,
+    pose_target_errors,
+    solve_pose_targets,
+)
 
 __all__ = [
     "BodyPoseTask",
@@ -43,6 +48,7 @@ __all__ = [
     "JointRegularizationTask",
     "PostureTask",
     "PoseIKResult",
+    "pose_target_errors",
     "RootPoseTask",
     "TCPOrientationTask",
     "TCPPositionTask",

@@ -22,13 +22,45 @@ For a source named `example.urdf`, the default output resembles:
 ```text
 models/
 ├── example.urdf
-├── example.ghostgui.json   # only when the home pose was repaired
+├── example.ghostgui.json   # optional semantics and/or repaired home pose
 └── assets-example/
     └── copied-mesh-files
 ```
 
 If that name already exists, GhostGUI appends a numeric suffix. Imported models
 are discovered from the `models/` directory on later launches.
+
+## Optional Model Profile
+
+Place `<model>.ghostgui.json` beside a source model before import when its
+semantics cannot be inferred safely. GhostGUI copies the profile with the model.
+Schema version 2 can declare model type, fixed/floating-base policy, logical
+frames, End Effectors, joint groups, passive joints, home Joint Angles, body
+labels, and contact tolerances. For example:
+
+```json
+{
+  "schema_version": 2,
+  "model_type": "manipulator",
+  "floating_base": false,
+  "root_body_candidates": ["link0"],
+  "logical_frames": {
+    "base": ["link0"],
+    "tool": ["gripper_site", "hand"]
+  },
+  "end_effectors": ["tool"],
+  "joint_groups": {
+    "arm": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "joint7"],
+    "gripper": ["finger_joint1", "finger_joint2"]
+  },
+  "passive_joints": ["finger_joint2"]
+}
+```
+
+Joint counts and qpos addresses are never taken from the profile. They always
+come from the compiled MuJoCo model. A profile supplies names and intent only.
+Passive joints remain visible under **Joint Angles** and in qpos data, but start
+with zero IK influence.
 
 ## Home-Pose Safety
 
@@ -99,6 +131,10 @@ An imported model without a registry entry uses generic hints:
 - root-joint candidates such as `floating_base`, `root`, or `freejoint`;
 - bodies and sites exposed by the compiled MuJoCo model.
 
+If no conventional root name resolves, GhostGUI uses the compiled kinematic
+root. Selected-limb IK follows the compiled root-to-target joint chain instead
+of matching vendor joint-name tokens.
+
 This is enough for direct joint editing and advanced target selection, but it
 may not produce the preferred names or target set.
 
@@ -130,3 +166,8 @@ pass.
 - Complex COLLADA features beyond triangulated geometry may require conversion
   to OBJ or STL before import.
 - Logical frame semantics cannot always be inferred from arbitrary names.
+- Joint editing and IK currently support hinge and slide joints plus zero or one
+  free root. Ball joints and multiple-free-root generation fail with an explicit
+  capability message.
+- Closed-chain, tendon-coupled, or equality-coupled mechanisms may require
+  passive-joint declarations and model-specific validation.

@@ -27,6 +27,10 @@ class RobotModelInfo:
         "camera", "imu", "radar", "rotor", "logo", "sensor", "contour",
         "constraint", "support",
     )
+    floating_base: bool | None = None
+    end_effector_frames: tuple[str, ...] = ()
+    joint_groups: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    passive_joints: tuple[str, ...] = ()
     home_joints: dict[str, float] = field(default_factory=dict)
     body_labels: dict[str, str] = field(default_factory=dict)
     collision_blocking_penetration_m: float = 0.001
@@ -49,6 +53,7 @@ ROBOT_MODELS = {
             "left_foot": ("robot/left_foot", "left_foot", "left_ankle_roll_link"),
             "right_foot": ("robot/right_foot", "right_foot", "right_ankle_roll_link"),
         },
+        end_effector_frames=("left_hand", "right_hand", "left_foot", "right_foot"),
     ),
     "go2": RobotModelInfo(
         key="go2",
@@ -65,6 +70,7 @@ ROBOT_MODELS = {
             "RL_foot": ("RL_foot", "RL_calf"),
             "RR_foot": ("RR_foot", "RR_calf"),
         },
+        end_effector_frames=("FL_foot", "FR_foot", "RL_foot", "RR_foot"),
         # The source calls the central chassis ``base`` while users generally
         # identify it as the quadruped's trunk.
         body_labels={"base": "Trunk"},
@@ -100,6 +106,7 @@ ROBOT_MODELS = {
                 "right_ankle_pitch_link", "right_ankle_roll_link", "right_foot",
             ),
         },
+        end_effector_frames=("left_hand", "right_hand", "left_foot", "right_foot"),
     ),
     "z1": RobotModelInfo(
         key="z1",
@@ -113,6 +120,7 @@ ROBOT_MODELS = {
             "tool": ("link06", "tool", "ee_link"),
             "wrist": ("link05", "link06"),
         },
+        end_effector_frames=("tool",),
         # Unitree's published ``forward`` state.  The URDF has no initial
         # joint-state field, so leaving these joints at MuJoCo's zero default
         # folds link06 into link02 and starts the editor in self-collision.

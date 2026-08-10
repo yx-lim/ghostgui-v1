@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
 import warnings
@@ -115,6 +116,19 @@ class BackendSelectionTests(unittest.TestCase):
         self.assertTrue(interface.selection.degraded)
         self.assertTrue(interface.selection.capabilities.approximate)
         self.assertTrue(captured)
+
+    def test_generic_model_never_falls_back_to_g1_analytic_backend(self):
+        adapter = SimpleNamespace(
+            info=SimpleNamespace(key="custom", display_name="Custom Robot")
+        )
+        with patch.object(backend_interface, "MUJOCO_IK_AVAILABLE", False):
+            with self.assertRaisesRegex(
+                BackendUnavailableError, "cannot use the G1-specific"
+            ):
+                BackendInterface(
+                    adapter=adapter,
+                    fallback_policy=FallbackPolicy.ALLOW_APPROXIMATE,
+                )
 
     def test_unexpected_backend_programming_errors_are_not_hidden(self):
         with (

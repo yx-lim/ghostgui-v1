@@ -88,11 +88,15 @@ representations for the same time.
 
 The trajectory layer interpolates target positions and orientations. Quaternion
 orientation interpolation uses SLERP. The generation service samples tracks at
-a uniform interval and sends them to the active backend.
+a uniform interval and attaches complete committed qpos anchors from the active
+`RobotStateTimeline`.
 
-The Python MuJoCo backend solves target frames with Jacobian IK and returns named
-robot configurations. The application can also play raw qpos trajectories
-directly.
+The Python MuJoCo backend outputs exact qpos at anchor times. Between anchors it
+uses manifold-interpolated qpos as a posture reference, solves Cartesian targets
+as primary Jacobian tasks, and projects posture correction into their null
+space. Generated CSV rows use the compiled model's `nq`; generic models never
+fall back to the G1-specific analytic backend. The application can also play raw
+qpos trajectories directly.
 
 ## Files And Projects
 

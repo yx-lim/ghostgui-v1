@@ -228,6 +228,17 @@ class RobotModel3D:
                     dof_address=int(self.mj_model.jnt_dofadr[joint_id]),
                 )
                 continue
+            if joint_type == int(mujoco.mjtJoint.mjJNT_BALL):
+                raw_name = mujoco.mj_id2name(
+                    self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, joint_id
+                ) or f"ball_joint_{joint_id}"
+                raise ValueError(
+                    f"Unsupported MuJoCo ball joint {raw_name!r}: GhostGUI "
+                    "currently supports scalar hinge/slide Joint Angles and "
+                    "zero or one free root. Convert this joint to an explicit "
+                    "scalar representation or add ball-joint support before "
+                    "editing the model."
+                )
             if joint_type not in supported:
                 continue
             raw_name = mujoco.mj_id2name(
@@ -657,6 +668,205 @@ class RobotState3D:
             final_error,
             max_iterations,
             message,
+            near_singularity,
+            min_singular_value,
+            condition_number,
+        )
+
+    def solve_hierarchical_tasks(
+        self,
+        primary_tasks,
+        secondary_tasks=(),
+        *,
+        joint_weights: Optional[Mapping[str, float]] = None,
+        max_iterations: int = 80,
+        damping: float = 0.04,
+        step_size: float = 0.7,
+        max_step: float = 0.08,
+    ) -> IKResult:
+        """Solve primary tasks while optimizing secondary tasks in their null space."""
+        joints = list(self.robot_model.joints.values())
+        dofs = [joint.dof_address for joint in joints]
+        qpos_addresses = [joint.qpos_address for joint in joints]
+        influence = np.asarray([
+            max(0.0, float((joint_weights or {}).get(joint.name, 1.0)))
+            for joint in joints
+        ], dtype=float)
+        primary = [
+            task for task in primary_tasks
+            if task.enabled and task.weight > 0.0
+        ]
+        secondary = [
+            task for task in secondary_tasks
+            if task.enabled and task.weight > 0.0
+        ]
+        if not primary:
+            return self.solve_weighted_tasks(
+                secondary,
+                joint_weights=joint_weights,
+                max_iterations=max_iterations,
+                damping=damping,
+                step_size=step_size,
+                max_step=max_step,
+            )
+        if not np.any(influence > 1e-12):
+            return IKResult(False, float("inf"), 0, "All IK joints are locked")
+
+        def damped_pseudoinverse(matrix):
+            if matrix.size == 0 or matrix.shape[0] == 0:
+                return np.zeros((matrix.shape[1], matrix.shape[0]), dtype=float)
+            lhs = (
+                matrix @ matrix.T
+                + float(damping) ** 2 * np.eye(matrix.shape[0])
+            )
+            try:
+                solved = np.linalg.solve(lhs, np.eye(matrix.shape[0]))
+            except np.linalg.LinAlgError:
+                solved = np.linalg.pinv(lhs)
+            return matrix.T @ solved
+
+        final_error = float("inf")
+        near_singularity = False
+        min_singular_value = float("inf")
+        condition_number = 0.0
+        active_count = len(primary) + len(secondary)
+        iteration_count = max(1, int(max_iterations))
+        for iteration in range(iteration_count):
+            self.forward_kinematics()
+            primary_linearizations = [
+                task.linearize(self.mj_model, self.mj_data, dofs, qpos_addresses)
+                for task in primary
+            ]
+            primary_jacobian = np.vstack([
+                item.jacobian for item in primary_linearizations
+            ])
+            primary_error = np.concatenate([
+                item.error for item in primary_linearizations
+            ])
+            transformed_primary = (
+                primary_jacobian * influence[np.newaxis, :]
+            )
+            (
+                current_near_singularity,
+                current_min_singular_value,
+                current_condition_number,
+            ) = self._singularity_metrics(transformed_primary)
+            near_singularity = near_singularity or current_near_singularity
+            min_singular_value = min(
+                min_singular_value, current_min_singular_value
+            )
+            condition_number = max(
+                condition_number, current_condition_number
+            )
+
+            required = [
+                item for item in primary_linearizations if item.required
+            ]
+            convergence_set = required or primary_linearizations
+            final_error = max(
+                (item.error_norm for item in convergence_set), default=0.0
+            )
+            primary_converged = all(
+                item.error_norm <= item.tolerance for item in convergence_set
+            )
+
+            primary_delta = (
+                damped_pseudoinverse(transformed_primary) @ primary_error
+            )
+            _u, singular_values, vh = np.linalg.svd(
+                transformed_primary, full_matrices=True
+            )
+            if singular_values.size:
+                rank_tolerance = max(
+                    transformed_primary.shape
+                ) * np.finfo(float).eps * float(singular_values[0])
+                rank = int(np.sum(singular_values > rank_tolerance))
+            else:
+                rank = 0
+            null_basis = vh[rank:].T
+            null_projector = (
+                null_basis @ null_basis.T
+                if null_basis.size
+                else np.zeros(
+                    (transformed_primary.shape[1], transformed_primary.shape[1]),
+                    dtype=float,
+                )
+            )
+
+            secondary_delta = np.zeros_like(primary_delta)
+            if secondary and null_basis.size:
+                secondary_linearizations = [
+                    task.linearize(
+                        self.mj_model, self.mj_data, dofs, qpos_addresses
+                    )
+                    for task in secondary
+                ]
+                secondary_jacobian = np.vstack([
+                    item.jacobian for item in secondary_linearizations
+                ])
+                secondary_error = np.concatenate([
+                    item.error for item in secondary_linearizations
+                ])
+                transformed_secondary = (
+                    secondary_jacobian * influence[np.newaxis, :]
+                )
+                projected_secondary = transformed_secondary @ null_projector
+                secondary_residual = (
+                    secondary_error
+                    - transformed_secondary @ primary_delta
+                )
+                secondary_delta = null_projector @ (
+                    damped_pseudoinverse(projected_secondary)
+                    @ secondary_residual
+                )
+
+            actual_secondary_step = influence * secondary_delta
+            if primary_converged and (
+                not secondary
+                or np.max(np.abs(actual_secondary_step), initial=0.0)
+                <= max(1e-5, float(max_step) * 0.01)
+            ):
+                return IKResult(
+                    True,
+                    final_error,
+                    iteration,
+                    f"Hierarchical IK converged ({active_count} active tasks)",
+                    near_singularity,
+                    min_singular_value,
+                    condition_number,
+                )
+
+            delta = influence * (primary_delta + secondary_delta)
+            delta = np.clip(delta, -float(max_step), float(max_step))
+            for joint, amount in zip(joints, delta):
+                self.mj_data.qpos[joint.qpos_address] += (
+                    float(step_size) * amount
+                )
+            self._clamp_joints()
+
+        self.forward_kinematics()
+        final_linearizations = [
+            task.linearize(self.mj_model, self.mj_data, dofs, qpos_addresses)
+            for task in primary
+        ]
+        required = [item for item in final_linearizations if item.required]
+        convergence_set = required or final_linearizations
+        final_error = max(
+            (item.error_norm for item in convergence_set), default=0.0
+        )
+        success = all(
+            item.error_norm <= item.tolerance * 2.0
+            for item in convergence_set
+        )
+        return IKResult(
+            success,
+            final_error,
+            iteration_count,
+            (
+                f"Hierarchical IK reached tolerance ({active_count} active tasks)"
+                if success else
+                f"Hierarchical IK did not converge ({active_count} active tasks)"
+            ),
             near_singularity,
             min_singular_value,
             condition_number,

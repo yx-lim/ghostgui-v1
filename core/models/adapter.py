@@ -69,15 +69,39 @@ class MuJoCoRobotAdapter(RobotModel3D):
         self._ground_home_qpos()
         self.joint_names = self.get_joint_names()
         self.actuated_joints = list(self.joint_names)
+        self.passive_joints = tuple(
+            name for name in self.info.passive_joints if name in self.joints
+        )
+        passive = set(self.passive_joints)
+        self.ik_joint_names = [
+            name for name in self.joint_names if name not in passive
+        ]
+        self.joint_groups = {
+            group: tuple(name for name in names if name in self.joints)
+            for group, names in self.info.joint_groups.items()
+        }
         self.joint_limits = {
             name: self.get_joint_limits(name) for name in self.actuated_joints
         }
-        self.root_body = self._first_body(self.info.root_body_candidates)
+        self.root_body = (
+            self._first_body(self.info.root_body_candidates)
+            or self._infer_root_body()
+        )
         self.root_joint = self._first_joint(self.info.root_joint_candidates)
         self.logical_frame_bindings = self._build_logical_frames()
+        configured_end_effectors = set(self.info.end_effector_frames)
         self.end_effectors = {
             key: value for key, value in self.logical_frame_bindings.items()
-            if key.lower().endswith(("foot", "hand"))
+            if (
+                key in configured_end_effectors
+                or (
+                    not configured_end_effectors
+                    and any(token in key.lower() for token in (
+                        "foot", "hand", "tool", "gripper", "tcp",
+                        "end_effector", "end-effector",
+                    ))
+                )
+            )
         }
         self.trajectory_frames = list(self.logical_frame_bindings)
         self.kinematic_tree = self._build_kinematic_tree()
@@ -92,6 +116,8 @@ class MuJoCoRobotAdapter(RobotModel3D):
         return cls(model=model, model_path=model_path)
 
     def _prepare_model_path(self, path: Path) -> Path:
+        if path.suffix.lower() == ".xml":
+            return self._prepare_mjcf_path(path)
         if path.suffix.lower() != ".urdf":
             return path
         try:
@@ -136,7 +162,7 @@ class MuJoCoRobotAdapter(RobotModel3D):
         # parent so root editing has the same well-defined semantics as MJCF.
         root_link = self._urdf_root_link(root)
         root_link = self._collapse_virtual_world_root(root, root_link)
-        if root_link:
+        if root_link and self.info.floating_base is not False:
             world_link = ET.Element("link", {"name": "ghostgui_world"})
             floating = ET.Element("joint", {
                 "name": "floating_base", "type": "floating"
@@ -167,6 +193,64 @@ class MuJoCoRobotAdapter(RobotModel3D):
             "mujoco_version": getattr(mujoco, "__version__", "unknown"),
             "warning": self.load_warning,
         }, indent=2), encoding="utf-8")
+        return runtime_path
+
+    def _prepare_mjcf_path(self, path: Path) -> Path:
+        """Resolve the imported-library adjacent mesh convention without edits."""
+        try:
+            tree = ET.parse(path)
+        except ET.ParseError:
+            return path
+        root = tree.getroot()
+        if root.tag != "mujoco":
+            return path
+        compiler = root.find("compiler")
+        meshdir = compiler.get("meshdir") if compiler is not None else None
+        if not meshdir or Path(meshdir).is_absolute():
+            return path
+        declared = (path.parent / meshdir).resolve()
+        if declared.is_dir():
+            return path
+
+        adjacent = (path.parent / f"assets-{path.stem}").resolve()
+        if not adjacent.is_dir():
+            return path
+        referenced = [
+            mesh.get("file") for mesh in root.findall(".//asset/mesh")
+            if mesh.get("file")
+        ]
+        missing = [
+            name for name in referenced
+            if not Path(name).is_absolute() and not (adjacent / name).is_file()
+        ]
+        if missing:
+            preview = ", ".join(missing[:5])
+            more = f" and {len(missing) - 5} more" if len(missing) > 5 else ""
+            raise RuntimeError(
+                f"MJCF mesh directory {declared} does not exist. Found adjacent "
+                f"assets at {adjacent}, but required meshes are missing: "
+                f"{preview}{more}. Import the complete model asset folder."
+            )
+
+        cache_key = hashlib.sha256()
+        cache_key.update(path.read_bytes())
+        cache_key.update(str(adjacent).encode("utf-8"))
+        cache_root = Path(os.environ.get(
+            "GHOSTGUI_CACHE_DIR",
+            Path.home() / ".cache" / "ghostgui",
+        ))
+        cache_dir = cache_root / "models" / f"mjcf-{cache_key.hexdigest()[:24]}"
+        runtime_path = cache_dir / "model.xml"
+        if not runtime_path.exists():
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            if compiler is None:
+                compiler = ET.Element("compiler")
+                root.insert(0, compiler)
+            compiler.set("meshdir", str(adjacent))
+            tree.write(runtime_path, encoding="unicode")
+        self.load_warning = (
+            f"{path.name}: resolved meshes from adjacent {adjacent.name} folder."
+        )
         return runtime_path
 
     def _urdf_root_link(self, root):
@@ -213,6 +297,7 @@ class MuJoCoRobotAdapter(RobotModel3D):
         digest = hashlib.sha256()
         digest.update(f"ghostgui-model-cache-v{MODEL_CACHE_VERSION}".encode())
         digest.update(getattr(mujoco, "__version__", "unknown").encode())
+        digest.update(f"floating-base={self.info.floating_base!r}".encode())
         digest.update(path.read_bytes())
         for mesh in root.findall(".//mesh"):
             filename = mesh.attrib.get("filename", "")
@@ -651,6 +736,89 @@ class MuJoCoRobotAdapter(RobotModel3D):
 
     def _first_joint(self, candidates):
         return self._find_name(candidates, self.joints)
+
+    def _infer_root_body(self):
+        """Return the compiled kinematic root when vendor naming is unknown."""
+        for body_id in range(1, self.mj_model.nbody):
+            if int(self.mj_model.body_parentid[body_id]) != 0:
+                continue
+            name = mujoco.mj_id2name(
+                self.mj_model, mujoco.mjtObj.mjOBJ_BODY, body_id
+            )
+            if name:
+                return name
+        return None
+
+    def default_ik_joint_weights(self):
+        passive = set(self.passive_joints)
+        return {
+            name: 0.0 if name in passive else 1.0
+            for name in self.joint_names
+        }
+
+    def joint_chain_for_frame(self, frame_name):
+        """Return scalar joints on the compiled root-to-frame body chain."""
+        binding = self.resolve_logical_frame(frame_name)
+        if binding is None:
+            return ()
+        kind, object_name = binding
+        if kind == "site":
+            site_id = mujoco.mj_name2id(
+                self.mj_model, mujoco.mjtObj.mjOBJ_SITE, object_name
+            )
+            if site_id < 0:
+                return ()
+            body_id = int(self.mj_model.site_bodyid[site_id])
+        else:
+            body_id = mujoco.mj_name2id(
+                self.mj_model, mujoco.mjtObj.mjOBJ_BODY, object_name
+            )
+            if body_id < 0:
+                return ()
+
+        body_ids = []
+        while body_id > 0:
+            body_ids.append(body_id)
+            body_id = int(self.mj_model.body_parentid[body_id])
+        body_ids.reverse()
+        body_set = set(body_ids)
+        return tuple(
+            joint.name
+            for joint in sorted(
+                self.joints.values(), key=lambda item: item.joint_id
+            )
+            if int(self.mj_model.jnt_bodyid[joint.joint_id]) in body_set
+        )
+
+    def limb_joint_chain_for_frame(self, frame_name):
+        """Return the branch-local part of an End Effector's joint chain.
+
+        A whole root-to-frame chain can include shared torso joints.  When a
+        second End Effector follows the same prefix and then diverges, that
+        common prefix belongs to the shared body rather than the selected
+        limb.  Nested or identical End Effector chains are not treated as a
+        branch so serial tools keep their complete controllable chain.
+        """
+        chain = self.joint_chain_for_frame(frame_name)
+        branch_start = 0
+        for other_frame in self.end_effectors:
+            if other_frame == frame_name:
+                continue
+            other_chain = self.joint_chain_for_frame(other_frame)
+            common_count = 0
+            for selected_joint, other_joint in zip(chain, other_chain):
+                if selected_joint != other_joint:
+                    break
+                common_count += 1
+            if (
+                0 < common_count < len(chain)
+                and common_count < len(other_chain)
+            ):
+                branch_start = max(branch_start, common_count)
+        return chain[branch_start:]
+
+    def joint_group(self, name):
+        return tuple(self.joint_groups.get(str(name), ()))
 
     def _build_logical_frames(self):
         bindings = {}

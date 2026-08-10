@@ -93,6 +93,8 @@ structure. It skips outside the explicitly configured visual environment.
   COLLADA-derived visual geometry.
 - **H2:** confirm the humanoid targets and bundled STL visuals.
 - **Z1:** confirm base, wrist, and tool targets and six arm joints.
+- **Generic manipulator:** confirm a synthetic nine-joint model exposes all
+  Joint Angles while its selected arm chain excludes gripper-only joints.
 - Switch away from a model and back; confirm its editor session is preserved.
 
 ### Import And Export
@@ -106,7 +108,13 @@ structure. It skips outside the explicitly configured visual environment.
 - Confirm `convert_ghostgui_to_dsms.py` and `ghostgui_to_mjlab.py` remain
   directly runnable from the terminal.
 - Import a model with relative meshes.
+- Import a schema-2 model profile and confirm fixed/floating base policy,
+  logical frames, End Effectors, joint groups, and passive-joint influence.
 - Exercise the mesh-folder retry path for an unresolved model asset.
+- Commit two redundant seven-joint G1 arm postures, generate motion, and confirm
+  every generated anchor reproduces the complete committed qpos exactly.
+- Confirm an off-grid committed Keyframe is rejected with an Export interval
+  alignment message and a generic model cannot use the G1 analytic fallback.
 
 ### Path Independence
 

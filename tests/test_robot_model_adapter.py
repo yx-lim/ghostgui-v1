@@ -18,6 +18,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from gui.main_window import RobotGuiMainWindow
+from application.backend_interface import MujocoIKBackend
 from core.models import HomePoseCollisionError, MuJoCoRobotAdapter
 from gui.viewers.robot_canvas_3d import RobotCanvas3D
 from core.ik import CollisionAwareIKSolver, CollisionChecker
@@ -143,6 +144,175 @@ class RobotModelAdapterTests(unittest.TestCase):
                 adapter.mj_model, mujoco.mjtObj.mjOBJ_BODY, "arm_link02"
             )
             self.assertEqual(adapter.get_body_display_name(body_id), "Arm Link 2")
+
+    def test_profiled_nine_joint_manipulator_uses_compiled_model_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "models"
+            model_dir.mkdir()
+            source = model_dir / "nine_joint_arm.xml"
+            nested_links = ""
+            for index, axis in enumerate((
+                "0 0 1", "0 1 0", "1 0 0", "0 1 0",
+                "1 0 0", "0 1 0", "0 0 1",
+            ), start=1):
+                nested_links += (
+                    f'<body name="link{index}" pos="0 0 0.1">'
+                    f'<joint name="joint{index}" axis="{axis}"/>'
+                    '<geom type="capsule" size="0.015 0.05" '
+                    'pos="0 0 0.05" contype="0" conaffinity="0"/>'
+                )
+            source.write_text(
+                (
+                    '<mujoco model="nine_joint_arm">'
+                    '<compiler autolimits="true"/>'
+                    '<default><joint range="-2 2"/>'
+                    '<geom density="100"/></default>'
+                    '<worldbody><body name="base">'
+                    '<geom type="box" size="0.04 0.04 0.04" '
+                    'contype="0" conaffinity="0"/>'
+                    + nested_links
+                    + '<site name="tool_site" pos="0 0 0.12"/>'
+                    '<body name="left_finger"><joint name="finger_joint1" '
+                    'type="slide" axis="1 0 0" range="0 0.04"/>'
+                    '<geom type="sphere" size="0.01" contype="0" '
+                    'conaffinity="0"/></body>'
+                    '<body name="right_finger"><joint name="finger_joint2" '
+                    'type="slide" axis="-1 0 0" range="0 0.04"/>'
+                    '<geom type="sphere" size="0.01" contype="0" '
+                    'conaffinity="0"/></body>'
+                    + '</body>' * 7
+                    + '</body></worldbody></mujoco>'
+                ),
+                encoding="utf-8",
+            )
+            model_profile_path = model_dir / "nine_joint_arm.ghostgui.json"
+            model_profile_path.write_text(json.dumps({
+                "schema_version": 2,
+                "model_type": "manipulator",
+                "floating_base": False,
+                "root_body_candidates": ["base"],
+                "logical_frames": {
+                    "base": ["base"],
+                    "tool": ["tool_site"],
+                },
+                "end_effectors": ["tool"],
+                "joint_groups": {
+                    "arm": [f"joint{index}" for index in range(1, 8)],
+                    "gripper": ["finger_joint1", "finger_joint2"],
+                },
+                "passive_joints": ["finger_joint2"],
+            }), encoding="utf-8")
+
+            info = discover_imported_models(model_dir)["nine_joint_arm"]
+            adapter = MuJoCoRobotAdapter(info)
+
+            self.assertEqual(adapter.model_type, "manipulator")
+            self.assertEqual(len(adapter.actuated_joints), 9)
+            self.assertEqual(adapter.mj_model.nq, 9)
+            self.assertEqual(adapter.root_body, "base")
+            self.assertEqual(adapter.end_effectors, {
+                "tool": ("site", "tool_site")
+            })
+            self.assertEqual(
+                adapter.joint_chain_for_frame("tool"),
+                tuple(f"joint{index}" for index in range(1, 8)),
+            )
+            self.assertEqual(
+                adapter.limb_joint_chain_for_frame("tool"),
+                tuple(f"joint{index}" for index in range(1, 8)),
+            )
+            self.assertEqual(
+                adapter.joint_group("gripper"),
+                ("finger_joint1", "finger_joint2"),
+            )
+            self.assertEqual(
+                adapter.default_ik_joint_weights()["finger_joint2"], 0.0
+            )
+
+            backend = MujocoIKBackend(
+                mj_model=adapter.mj_model,
+                adapter=adapter,
+            )
+            result = backend.solve_grouped_trajectory([{
+                "time": 0.25,
+                "targets": {},
+                "qpos_reference": adapter.home_qpos.copy(),
+                "qpos_anchor": adapter.home_qpos.copy(),
+            }])
+            with tempfile.TemporaryDirectory() as output_tmp:
+                output = Path(output_tmp) / "nine_joint.csv"
+                backend.export_last_solution_csv(output)
+                saved = np.loadtxt(output, delimiter=",", ndmin=2)
+
+            self.assertEqual(len(result), 1)
+            self.assertEqual(saved.shape, (1, adapter.mj_model.nq + 1))
+            np.testing.assert_allclose(saved[0, 1:], adapter.home_qpos)
+
+    def test_profile_can_keep_imported_urdf_base_fixed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_dir = root / "models"
+            model_dir.mkdir()
+            source = model_dir / "fixed_arm.urdf"
+            source.write_text(
+                """
+<robot name="fixed_arm">
+  <link name="base">
+    <inertial><mass value="1"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+    <visual><geometry><box size="0.1 0.1 0.1"/></geometry></visual>
+  </link>
+  <joint name="joint1" type="revolute">
+    <parent link="base"/><child link="tool"/><axis xyz="0 0 1"/>
+    <limit effort="10" lower="-1" upper="1" velocity="1"/>
+  </joint>
+  <link name="tool">
+    <inertial><mass value="1"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+    <visual><geometry><sphere radius="0.03"/></geometry></visual>
+  </link>
+</robot>
+""".strip(),
+                encoding="utf-8",
+            )
+            (model_dir / "fixed_arm.ghostgui.json").write_text(
+                json.dumps({
+                    "schema_version": 2,
+                    "floating_base": False,
+                    "root_body_candidates": ["base"],
+                    "logical_frames": {"base": ["base"], "tool": ["tool"]},
+                    "end_effectors": ["tool"],
+                }),
+                encoding="utf-8",
+            )
+            info = discover_imported_models(model_dir)["fixed_arm"]
+            with patch.dict(
+                os.environ, {"GHOSTGUI_CACHE_DIR": str(root / "cache")}
+            ):
+                adapter = MuJoCoRobotAdapter(info)
+
+            self.assertEqual(adapter.mj_model.nq, 1)
+            self.assertEqual(adapter.free_joints_by_body, {})
+            self.assertEqual(adapter.resolve_logical_frame("tool"), ("body", "tool"))
+
+    def test_ball_joint_fails_with_explicit_capability_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "ball.xml"
+            source.write_text(
+                """
+<mujoco model="ball">
+  <worldbody>
+    <body name="base">
+      <joint name="spherical" type="ball"/>
+      <geom type="sphere" size="0.05"/>
+    </body>
+  </worldbody>
+</mujoco>
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Unsupported MuJoCo ball"):
+                MuJoCoRobotAdapter(model=None, model_path=source)
 
     def test_unitree_abbreviations_and_registry_overrides_are_user_friendly(self):
         go2 = MuJoCoRobotAdapter("go2")
@@ -335,6 +505,39 @@ class RobotModelAdapterTests(unittest.TestCase):
             self.assertTrue((root / "models" / "assets-go3" / "body.stl").exists())
             saved = info.model_path.read_text()
             self.assertIn('filename="assets-go3/body.stl"', saved)
+
+    def test_import_copies_model_profile_semantics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "profiled.urdf"
+            source.write_text(
+                """
+<robot name="profiled">
+  <link name="base">
+    <inertial><mass value="1"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+    <visual><geometry><box size="0.1 0.1 0.1"/></geometry></visual>
+  </link>
+</robot>
+""".strip(),
+                encoding="utf-8",
+            )
+            source.with_name("profiled.ghostgui.json").write_text(
+                json.dumps({
+                    "schema_version": 2,
+                    "model_type": "manipulator",
+                    "floating_base": False,
+                    "root_body_candidates": ["base"],
+                    "logical_frames": {"base": ["base"]},
+                }),
+                encoding="utf-8",
+            )
+
+            info = import_robot_model(source, root / "models")
+
+            self.assertEqual(info.model_type, "manipulator")
+            self.assertFalse(info.floating_base)
+            self.assertEqual(info.logical_frames, {"base": ("base",)})
+            self.assertTrue(model_profile_path(info.model_path).exists())
 
     def test_import_urdf_can_use_chosen_mesh_folder(self):
         with tempfile.TemporaryDirectory() as tmp:

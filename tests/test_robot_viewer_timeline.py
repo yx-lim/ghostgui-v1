@@ -2998,6 +2998,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.backend_interface,
             smoothing=0.25,
             export_dt=0.02,
+            state_timeline=self.viewer.state_timeline,
         )
 
     def test_refresh_display_passes_trajectory_display_options_to_3d_view(self):
