@@ -11,6 +11,7 @@ Every change should pass:
 python3 -m compileall -q application core gui scripts tests
 python3 scripts/check_architecture.py
 python3 scripts/check_docs.py
+python3 scripts/check_qt_install.py
 QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -v
 python3 -m pip wheel . --no-deps --no-build-isolation --wheel-dir wheelhouse
 python3 scripts/check_wheel.py --require-resources wheelhouse/*.whl
@@ -26,6 +27,10 @@ Core code cannot depend on Qt or OpenGL. Application code cannot import GUI
 modules. The launcher is the explicit composition-root exception that assembles
 the Qt application. Compatibility facades may preserve old import paths, but
 new ownership must follow these boundaries.
+
+The Qt installation check requires PySide6 Essentials and rejects the full
+PySide6 and Addons distributions. The wheel validator enforces the same
+dependency contract in built package metadata.
 
 ## Baseline
 

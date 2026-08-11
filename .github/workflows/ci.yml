@@ -46,9 +46,10 @@ jobs:
             libxkbcommon-x11-0 \
             xauth \
             xvfb
-          python -m pip install --upgrade pip
-          python -m pip install .
+          python -m pip install --no-cache-dir --upgrade pip
+          python -m pip install --no-cache-dir .
           python -m pip check
+          python scripts/check_qt_install.py
 
       - name: Static, architecture, and documentation guardrails
         run: |
@@ -79,6 +80,8 @@ jobs:
           wheel-smoke/bin/python -m pip install \
             --no-deps \
             "$GITHUB_WORKSPACE"/wheelhouse/*.whl
+          wheel-smoke/bin/python \
+            "$GITHUB_WORKSPACE"/scripts/check_qt_install.py
           wheel-smoke/bin/python \
             "$GITHUB_WORKSPACE"/scripts/smoke_installed_package.py \
             --load-model \

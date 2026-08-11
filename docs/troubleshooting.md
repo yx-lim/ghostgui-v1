@@ -24,6 +24,20 @@ Windows PowerShell:
 If `.venv` does not exist, rerun the platform installer from the repository
 root.
 
+### The installer reports legacy full-Qt distributions
+
+An environment created before the lightweight dependency change can retain
+`PySide6` and `PySide6-Addons`; pip does not remove dependencies that are no
+longer declared. Preserve any additional packages you installed in `.venv`,
+remove or move that dedicated environment, and rerun the platform installer.
+Do not uninstall the overlapping PySide6 distributions individually.
+
+Verify the replacement environment with:
+
+```bash
+python scripts/check_qt_install.py
+```
+
 ### Qt fails to initialize on Linux
 
 Confirm that the packages in `scripts/install_linux.sh` were installed.

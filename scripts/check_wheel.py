@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path, PurePosixPath
+import re
 import sys
 import zipfile
 
@@ -44,6 +45,24 @@ REQUIRED_RESOURCE_SUFFIXES = frozenset(
         "share/ghostgui/models/z1.urdf",
     }
 )
+REQUIRED_RUNTIME_DEPENDENCY = "pyside6-essentials"
+FORBIDDEN_RUNTIME_DEPENDENCIES = frozenset({"pyside6", "pyside6-addons"})
+
+
+def _normalize_distribution_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", str(name).strip()).lower()
+
+
+def _metadata_requirements(metadata_text: str) -> set[str]:
+    requirements = set()
+    for line in metadata_text.splitlines():
+        if not line.lower().startswith("requires-dist:"):
+            continue
+        value = line.split(":", 1)[1].strip()
+        match = re.match(r"([A-Za-z0-9][A-Za-z0-9._-]*)", value)
+        if match:
+            requirements.add(_normalize_distribution_name(match.group(1)))
+    return requirements
 
 
 def validate_wheel(
@@ -55,6 +74,13 @@ def validate_wheel(
     try:
         with zipfile.ZipFile(wheel_path) as archive:
             names = set(archive.namelist())
+            metadata_names = [
+                name for name in names if name.endswith(".dist-info/METADATA")
+            ]
+            metadata_text = "\n".join(
+                archive.read(name).decode("utf-8", errors="replace")
+                for name in metadata_names
+            )
             entry_point_names = [
                 name
                 for name in names
@@ -88,6 +114,18 @@ def validate_wheel(
         or "ghostgui = application.launcher:main" not in entry_point_text
     ):
         errors.append("ghostgui console entry point is missing or incorrect")
+
+    requirements = _metadata_requirements(metadata_text)
+    if metadata_names and REQUIRED_RUNTIME_DEPENDENCY not in requirements:
+        errors.append("wheel does not require PySide6-Essentials")
+    forbidden_requirements = sorted(
+        requirements & FORBIDDEN_RUNTIME_DEPENDENCIES
+    )
+    if forbidden_requirements:
+        errors.append(
+            "wheel requires heavyweight Qt distributions: "
+            + ", ".join(forbidden_requirements)
+        )
 
     unsafe_members = sorted(
         name

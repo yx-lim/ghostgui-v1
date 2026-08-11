@@ -24,6 +24,15 @@ def _load_script(name):
 
 architecture = _load_script("check_architecture")
 wheel_check = _load_script("check_wheel")
+qt_install_check = _load_script("check_qt_install")
+
+
+VALID_WHEEL_METADATA = """\
+Metadata-Version: 2.1
+Name: ghostgui
+Version: 0.1.0
+Requires-Dist: PySide6-Essentials
+"""
 
 
 class ArchitectureGuardrailTests(unittest.TestCase):
@@ -65,6 +74,8 @@ class ArchitectureGuardrailTests(unittest.TestCase):
                         "[console_scripts]\n"
                         "ghostgui = application.launcher:main\n"
                         if name.endswith("entry_points.txt")
+                        else VALID_WHEEL_METADATA
+                        if name.endswith("METADATA")
                         else ""
                     )
                     archive.writestr(name, content)
@@ -87,6 +98,8 @@ class ArchitectureGuardrailTests(unittest.TestCase):
                         "[console_scripts]\n"
                         "ghostgui = application.launcher:main\n"
                         if name.endswith("entry_points.txt")
+                        else VALID_WHEEL_METADATA
+                        if name.endswith("METADATA")
                         else ""
                     )
                     archive.writestr(name, content)
@@ -97,6 +110,80 @@ class ArchitectureGuardrailTests(unittest.TestCase):
             )
 
         self.assertTrue(any("runtime resources" in error for error in errors))
+
+    def test_wheel_validator_rejects_full_pyside_dependency(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wheel_path = Path(directory) / "ghostgui.whl"
+            names = set(wheel_check.REQUIRED_MODULES)
+            names.update(
+                f"ghostgui-0.1.0{suffix}"
+                for suffix in wheel_check.REQUIRED_METADATA_SUFFIXES
+            )
+            with zipfile.ZipFile(wheel_path, "w") as archive:
+                for name in names:
+                    content = ""
+                    if name.endswith("entry_points.txt"):
+                        content = (
+                            "[console_scripts]\n"
+                            "ghostgui = application.launcher:main\n"
+                        )
+                    elif name.endswith("METADATA"):
+                        content = VALID_WHEEL_METADATA.replace(
+                            "Requires-Dist: PySide6-Essentials",
+                            "Requires-Dist: PySide6",
+                        )
+                    archive.writestr(name, content)
+
+            errors = wheel_check.validate_wheel(wheel_path)
+
+        self.assertTrue(any("PySide6-Essentials" in error for error in errors))
+        self.assertTrue(any("heavyweight Qt" in error for error in errors))
+
+    def test_wheel_validator_rejects_addons_alongside_essentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wheel_path = Path(directory) / "ghostgui.whl"
+            names = set(wheel_check.REQUIRED_MODULES)
+            names.update(
+                f"ghostgui-0.1.0{suffix}"
+                for suffix in wheel_check.REQUIRED_METADATA_SUFFIXES
+            )
+            with zipfile.ZipFile(wheel_path, "w") as archive:
+                for name in names:
+                    content = ""
+                    if name.endswith("entry_points.txt"):
+                        content = (
+                            "[console_scripts]\n"
+                            "ghostgui = application.launcher:main\n"
+                        )
+                    elif name.endswith("METADATA"):
+                        content = (
+                            VALID_WHEEL_METADATA
+                            + "Requires-Dist: PySide6-Addons\n"
+                        )
+                    archive.writestr(name, content)
+
+            errors = wheel_check.validate_wheel(wheel_path)
+
+        self.assertFalse(any("does not require" in error for error in errors))
+        self.assertTrue(any("pyside6-addons" in error for error in errors))
+
+    def test_qt_install_guard_accepts_only_essentials(self):
+        self.assertEqual(
+            qt_install_check.validate_distribution_names(
+                {"PySide6-Essentials", "numpy", "mujoco"}
+            ),
+            [],
+        )
+        issues = qt_install_check.validate_distribution_names(
+            {"PySide6", "PySide6-Addons", "PySide6-Essentials"}
+        )
+        self.assertTrue(any("legacy full-Qt" in issue for issue in issues))
+        self.assertEqual(
+            qt_install_check.validate_distribution_names(
+                set(), require_essentials=False
+            ),
+            [],
+        )
 
     def test_launcher_configures_opengl_before_qapplication(self):
         source = (PROJECT_ROOT / "application" / "launcher.py").read_text(
@@ -117,6 +204,7 @@ class ArchitectureGuardrailTests(unittest.TestCase):
             "scripts/run_test_suite.py",
             "scripts/check_architecture.py",
             "scripts/check_docs.py",
+            "scripts/check_qt_install.py",
             "scripts/check_wheel.py",
             "--require-resources",
             "scripts/smoke_installed_package.py",

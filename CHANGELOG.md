@@ -38,6 +38,8 @@ in this repository.
 - Added cancellable background work, deterministic session/process teardown,
   render coalescing, and context-bound OpenGL cleanup.
 - Packaged model, mesh, theme, and help resources for installed wheels.
+- Replaced the full PySide6 dependency with PySide6 Essentials and added
+  installation and package guards that prevent Qt Addons from returning.
 
 ### Fixed
 

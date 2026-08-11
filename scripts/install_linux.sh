@@ -25,8 +25,14 @@ fi
 
 source .venv/bin/activate
 
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e .
+if ! python scripts/check_qt_install.py --preflight; then
+    echo "Remove or move the dedicated .venv, then rerun this installer."
+    exit 1
+fi
+
+python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+python -m pip install --no-cache-dir -e .
+python scripts/check_qt_install.py
 
 echo
 echo "GhostGUI installed successfully."

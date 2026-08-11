@@ -13,8 +13,15 @@ For an existing checkout:
 
 ```bash
 source .venv/bin/activate
+python scripts/check_qt_install.py --preflight
 python -m pip install -e .
+python scripts/check_qt_install.py
 ```
+
+If the Qt check finds the legacy full PySide6 or Addons distributions, recreate
+the dedicated environment with the platform installer. Installing the new
+project metadata into an old environment does not remove orphaned packages.
+Keep unrelated tools that require Qt Addons in a separate environment.
 
 Launch a model through the packaged entry point:
 

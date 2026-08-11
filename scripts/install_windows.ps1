@@ -21,8 +21,17 @@ if (-not (Test-Path ".venv")) {
 
 . ".\.venv\Scripts\Activate.ps1"
 
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e .
+python scripts/check_qt_install.py --preflight
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Remove or move the dedicated .venv, then rerun this installer."
+}
+
+python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+python -m pip install --no-cache-dir -e .
+python scripts/check_qt_install.py
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "GhostGUI did not install the lightweight Qt dependency set."
+}
 
 Write-Host ""
 Write-Host "GhostGUI installed successfully."

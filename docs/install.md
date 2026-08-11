@@ -11,12 +11,14 @@ platforms.
 - Git
 - Platform packages installed by the scripts below
 
-GhostGUI uses the dependencies declared in `pyproject.toml`. Each platform
-installer creates or reuses `.venv`, upgrades the Python packaging tools, and
-installs the checkout in editable mode:
+GhostGUI uses PySide6 Essentials for Qt Core, GUI, Widgets, and OpenGL Widgets;
+it does not require the much larger PySide6 Addons distribution. Each platform
+installer creates or reuses `.venv`, verifies that it does not contain the
+legacy full-Qt packages, upgrades the Python packaging tools, and installs the
+checkout in editable mode without retaining downloaded wheels:
 
 ```bash
-python -m pip install -e .
+python -m pip install --no-cache-dir -e .
 ```
 
 Editable installation keeps the registered model and mesh paths anchored to the
@@ -61,6 +63,27 @@ powershell -ExecutionPolicy Bypass -File scripts/run_windows.ps1
 
 The installer uses the Python launcher (`py -3`) when available and falls back
 to `python`.
+
+## Migrating An Existing Environment
+
+Changing the project dependency does not make pip remove packages that were
+installed previously. If `.venv` contains `PySide6` or `PySide6-Addons`, the
+installer stops before changing it. Targeted uninstallation is not supported
+because the PySide6 wheels contain overlapping files.
+
+Check an activated environment with:
+
+```bash
+python scripts/check_qt_install.py
+```
+
+To reclaim the space, preserve any separately installed packages you need,
+remove the dedicated `.venv`, and rerun the platform installer. The installer
+never removes the environment automatically. Projects, robot models, and CSV
+files are not stored inside `.venv`.
+
+After a fresh installation, the check must report `Essentials only`. The exact
+size varies by operating system, architecture, Python, and Qt version.
 
 ## Launching An Installed Checkout
 

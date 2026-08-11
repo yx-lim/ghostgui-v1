@@ -126,7 +126,7 @@ returns so its thread is not destroyed while running.
 Include the following when reporting an operational failure:
 
 - operating system, display server, GPU or software-renderer details;
-- Python, PySide6, MuJoCo, and GhostGUI versions;
+- Python, PySide6 Essentials, MuJoCo, and GhostGUI versions;
 - installed-wheel or source-checkout mode;
 - selected model key and source path;
 - relevant environment overrides from the runtime-storage table;

@@ -31,7 +31,7 @@ Use a test module while iterating:
 ```bash
 python3 -m unittest tests.test_robot_viewer_timeline -v
 python3 -m unittest tests.test_advanced_ik -v
-python3 -m unittest tests.test_model_resources -v
+python3 -m unittest tests.test_robot_model_adapter -v
 ```
 
 Choose the test that owns the changed contract rather than relying only on a
@@ -46,8 +46,11 @@ package data:
 ```bash
 python3 -m pip wheel . --no-deps --no-build-isolation --wheel-dir wheelhouse
 python3 scripts/check_wheel.py --require-resources wheelhouse/*.whl
-python3 -m venv --system-site-packages /tmp/ghostgui-wheel-smoke
-/tmp/ghostgui-wheel-smoke/bin/python -m pip install --no-deps wheelhouse/*.whl
+python3 -m venv /tmp/ghostgui-wheel-smoke
+/tmp/ghostgui-wheel-smoke/bin/python -m pip install \
+  --no-cache-dir wheelhouse/*.whl
+/tmp/ghostgui-wheel-smoke/bin/python \
+  scripts/check_qt_install.py
 cd /tmp
 /tmp/ghostgui-wheel-smoke/bin/python \
   /path/to/ghostgui/scripts/smoke_installed_package.py --load-model --gui
@@ -55,7 +58,10 @@ cd /tmp
 
 The smoke gate verifies the console entry point, all registered model sources,
 theme and documentation resources, G1 compilation, visualization startup, and
-clean GUI shutdown.
+clean GUI shutdown. The Qt dependency check verifies that the environment
+contains PySide6 Essentials without the full PySide6 or Addons distributions.
+Use a new temporary path for every clean smoke run, or remove only the previous
+temporary smoke environment first.
 
 ## Headless And Visual Gates
 
