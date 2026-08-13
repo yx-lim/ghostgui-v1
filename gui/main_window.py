@@ -37,6 +37,7 @@ from core.trajectory import (
     rpy_to_quat,
 )
 from application import model_sessions, timeslice_service, trajectory_generation
+from application import timeline_editing
 from application.editor_commands import (
     AddKeyframe,
     ClearTrajectory,
@@ -79,6 +80,12 @@ from .app_sidebars import AppLeftSidebar, AppRightSidebar, SidebarSplitter
 from .help import HelpCenterDialog
 from .project_browser import ProjectBrowserDialog
 from .theme import ensure_application_theme, theme_icon
+from .timeline_edit_dialog import (
+    insert_time_dialog,
+    move_range_dialog,
+    scale_range_dialog,
+    shift_motion_dialog,
+)
 from .tutorial import TutorialManager
 from .visualization import SceneSnapshot, build_main_window_visualization
 from core.models import MuJoCoRobotAdapter, ROBOT_MODELS
@@ -98,6 +105,7 @@ UI_SETTINGS_FILENAME = "ui.ini"
 INITIAL_RENDER_PROGRESS_DELAY_MS = 500
 PROJECT_AUTOSAVE_INTERVAL_MS = 30000
 MAX_HISTORY_DEPTH = 100
+MAX_TIMELINE_DURATION = 120.0
 
 
 class RobotGuiMainWindow(QMainWindow):
@@ -510,6 +518,51 @@ class RobotGuiMainWindow(QMainWindow):
         self.robot_menu.setObjectName("robotMenu")
         self.robot_menu.aboutToShow.connect(self.refresh_robot_menu)
         self.refresh_robot_menu()
+
+        self.timeline_menu = menu_bar.addMenu("&Timeline")
+        self.timeline_menu.setObjectName("timelineMenu")
+
+        self.insert_time_action = QAction(
+            "Insert Time at Current Time…", self
+        )
+        self.insert_time_action.setObjectName("insertTimelineTimeAction")
+        self.insert_time_action.setToolTip(
+            "Open a held interval and shift all later Keyframes to the right."
+        )
+        self.insert_time_action.triggered.connect(
+            self.on_insert_time_requested
+        )
+        self.timeline_menu.addAction(self.insert_time_action)
+
+        self.shift_motion_action = QAction("Shift Entire Motion…", self)
+        self.shift_motion_action.setObjectName("shiftEntireMotionAction")
+        self.shift_motion_action.setToolTip(
+            "Move every target and robot-pose Keyframe by one time offset."
+        )
+        self.shift_motion_action.triggered.connect(
+            self.on_shift_entire_motion_requested
+        )
+        self.timeline_menu.addAction(self.shift_motion_action)
+
+        self.move_time_range_action = QAction("Move Time Range…", self)
+        self.move_time_range_action.setObjectName("moveTimelineRangeAction")
+        self.move_time_range_action.setToolTip(
+            "Move a non-overlapping Keyframe range after checking conflicts."
+        )
+        self.move_time_range_action.triggered.connect(
+            self.on_move_time_range_requested
+        )
+        self.timeline_menu.addAction(self.move_time_range_action)
+
+        self.scale_time_range_action = QAction("Scale Time Range…", self)
+        self.scale_time_range_action.setObjectName("scaleTimelineRangeAction")
+        self.scale_time_range_action.setToolTip(
+            "Change actual motion speed by scaling Keyframe timestamps."
+        )
+        self.scale_time_range_action.triggered.connect(
+            self.on_scale_time_range_requested
+        )
+        self.timeline_menu.addAction(self.scale_time_range_action)
 
         self.view_menu = menu_bar.addMenu("&View")
         self.view_menu.setObjectName("viewMenu")
@@ -1442,6 +1495,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.show_lines_box.setChecked(True)
             self.controls.corner_smoothing_slider.set_value(0.0)
             viewer.set_export_dt(0.01)
+            viewer.set_dsms_motion_speed(1.0)
             viewer.show_ghosts.setChecked(False)
             if self.controls.table.currentRow() >= 0:
                 self.controls.table.clearSelection()
@@ -1596,6 +1650,7 @@ class RobotGuiMainWindow(QMainWindow):
                 "show_trajectory_lines": bool(self.controls.show_trajectory_lines()),
                 "smoothing": float(self.controls.corner_smoothing()),
                 "export_dt": float(viewer.export_dt()),
+                "dsms_motion_speed": float(viewer.dsms_motion_speed()),
                 "show_playback_ghosts": bool(viewer.show_ghosts.isChecked()),
                 "trajectory_import_dt": float(viewer.trajectory_import_dt.value()),
             },
@@ -1801,6 +1856,8 @@ class RobotGuiMainWindow(QMainWindow):
             frequency = float(display["export_frequency"])
             if np.isfinite(frequency) and frequency > 0.0:
                 self.viewer_3d.set_export_dt(1.0 / frequency)
+        if "dsms_motion_speed" in display:
+            self.viewer_3d.set_dsms_motion_speed(display["dsms_motion_speed"])
         if "trajectory_import_dt" in display:
             self.viewer_3d.trajectory_import_dt.setValue(
                 float(display["trajectory_import_dt"])
@@ -2097,6 +2154,9 @@ class RobotGuiMainWindow(QMainWindow):
         )
         viewer_3d.export_dt_input.valueChanged.connect(
             lambda _value: self.mark_project_dirty("Export interval")
+        )
+        viewer_3d.dsms_motion_speed_input.valueChanged.connect(
+            lambda _value: self.mark_project_dirty("DSMS motion speed")
         )
         viewer_3d.timeslice_preview_time_changed.connect(
             self.on_viewer_timeslice_preview_time_changed
@@ -2863,6 +2923,198 @@ class RobotGuiMainWindow(QMainWindow):
     # ============================================================
     # GUI interaction callbacks
     # ============================================================
+
+    def on_insert_time_requested(self):
+        at_time = self.viewer_3d.get_current_time()
+        dialog = insert_time_dialog(
+            self,
+            at_time=at_time,
+            default_duration=self.viewer_3d.timeslice_step(),
+            export_interval=self.viewer_3d.export_dt(),
+        )
+        if not dialog.exec():
+            return
+        if dialog.snap_enabled():
+            at_time = timeline_editing.snap_time(
+                at_time, self.viewer_3d.export_dt()
+            )
+        self.insert_timeline_time(at_time, dialog.value("duration"))
+
+    def on_shift_entire_motion_requested(self):
+        dialog = shift_motion_dialog(
+            self,
+            default_offset=self.viewer_3d.timeslice_step(),
+            export_interval=self.viewer_3d.export_dt(),
+        )
+        if not dialog.exec():
+            return
+        self.shift_entire_motion(dialog.value("offset"))
+
+    def on_move_time_range_requested(self):
+        step = self.viewer_3d.timeslice_step()
+        start_time = self.viewer_3d.get_current_time()
+        end_time = min(self.viewer_3d.timeline_duration, start_time + step)
+        if end_time <= start_time + 1e-9:
+            start_time = max(0.0, end_time - step)
+        dialog = move_range_dialog(
+            self,
+            start_time=start_time,
+            end_time=end_time,
+            destination_start=end_time,
+            export_interval=self.viewer_3d.export_dt(),
+        )
+        if not dialog.exec():
+            return
+        self.move_timeline_range(
+            dialog.value("start"),
+            dialog.value("end"),
+            dialog.value("destination"),
+        )
+
+    def on_scale_time_range_requested(self):
+        bounds = timeline_editing.timeline_content_bounds(self.document)
+        if bounds is None or bounds[1] <= bounds[0] + 1e-9:
+            QMessageBox.warning(
+                self,
+                "Scale Time Range failed",
+                "Scaling requires at least two distinct Keyframe times.",
+            )
+            return
+        step = self.viewer_3d.timeslice_step()
+        start_time = self.viewer_3d.get_current_time()
+        end_time = min(self.viewer_3d.timeline_duration, start_time + step)
+        if end_time <= start_time + 1e-9:
+            start_time = max(0.0, end_time - step)
+        dialog = scale_range_dialog(
+            self,
+            start_time=start_time,
+            end_time=end_time,
+            entire_start=bounds[0],
+            entire_end=bounds[1],
+            export_interval=self.viewer_3d.export_dt(),
+        )
+        if not dialog.exec():
+            return
+        start_time, end_time = dialog.range_values()
+        self.scale_timeline_range(
+            start_time,
+            end_time,
+            dialog.speed(),
+            snap_interval=dialog.snap_interval(),
+        )
+
+    def insert_timeline_time(self, at_time, duration):
+        try:
+            plan = timeline_editing.plan_insert_time(
+                self.document,
+                at_time,
+                duration,
+                maximum_time=MAX_TIMELINE_DURATION,
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Insert Time failed", str(exc))
+            return False
+        message = (
+            f"Inserted {duration:.2f} s at t={at_time:.2f} s; moved "
+            f"{plan.moved_frame_count} target frames and "
+            f"{plan.moved_state_count} robot poses."
+        )
+        return self._apply_timeline_edit(plan, "Insert Time", message)
+
+    def shift_entire_motion(self, offset):
+        try:
+            plan = timeline_editing.plan_shift_entire_motion(
+                self.document,
+                offset,
+                maximum_time=MAX_TIMELINE_DURATION,
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Shift Entire Motion failed", str(exc))
+            return False
+        message = (
+            f"Shifted the entire motion by {offset:+.2f} s; moved "
+            f"{plan.moved_frame_count} target frames and "
+            f"{plan.moved_state_count} robot poses."
+        )
+        return self._apply_timeline_edit(
+            plan, "Shift Entire Motion", message
+        )
+
+    def move_timeline_range(self, start_time, end_time, destination_start):
+        try:
+            plan = timeline_editing.plan_move_time_range(
+                self.document,
+                start_time,
+                end_time,
+                destination_start,
+                maximum_time=MAX_TIMELINE_DURATION,
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Move Time Range failed", str(exc))
+            return False
+        message = (
+            f"Moved the {start_time:.2f}–{end_time:.2f} s range to "
+            f"{destination_start:.2f} s; moved {plan.moved_frame_count} target "
+            f"frames and {plan.moved_state_count} robot poses."
+        )
+        return self._apply_timeline_edit(plan, "Move Time Range", message)
+
+    def scale_timeline_range(
+        self,
+        start_time,
+        end_time,
+        speed,
+        *,
+        snap_interval=None,
+    ):
+        try:
+            plan = timeline_editing.plan_scale_time_range(
+                self.document,
+                start_time,
+                end_time,
+                speed,
+                snap_interval=snap_interval,
+                maximum_time=MAX_TIMELINE_DURATION,
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Scale Time Range failed", str(exc))
+            return False
+        result_end = start_time + (end_time - start_time) / speed
+        result_start = start_time
+        if snap_interval is not None:
+            result_start = timeline_editing.snap_time(
+                start_time, snap_interval
+            )
+            result_end = timeline_editing.snap_time(
+                result_end, snap_interval
+            )
+        message = (
+            f"Scaled the {start_time:.2f}–{end_time:.2f} s range to "
+            f"{speed:.2f}× ({result_start:.2f}–{result_end:.2f} s); moved "
+            f"{plan.moved_frame_count} target frames and "
+            f"{plan.moved_state_count} robot poses."
+        )
+        return self._apply_timeline_edit(
+            plan, "Scale Time Range", message
+        )
+
+    def _apply_timeline_edit(self, plan, description, message):
+        self.editor_controller.execute(
+            timeline_editing.ApplyTimelineEditPlan(plan)
+        )
+        self.viewer_3d.clear_robot_trajectory()
+        self.viewer_3d_mujoco.clear_trajectory()
+        self.backend_interface.clear_last_solution()
+        self.set_editor_timeline_duration(plan.timeline_duration)
+        self.controls.time_slider.set_value(plan.current_time)
+        self.viewer_3d.set_current_time(plan.current_time)
+        self.controls.table.clearSelection()
+        self.refresh_display()
+        self.viewer_3d.status_label.setText(
+            f"{message} Generated motion was cleared; select Generate again."
+        )
+        self.record_history_action(description)
+        return True
 
     def on_pose_changed(self, x, y, z, roll, pitch, yaw):
         """

@@ -74,6 +74,33 @@ an active drag, and restores the selected model's home qpos.
 **Delete Keyframe** removes both the logical target data and qpos state stored at
 the active time when present. It does not delete neighboring keyframes.
 
+## Timeline Retiming
+
+The **Timeline** menu changes Keyframe timestamps without re-solving the robot.
+**Insert Time** creates a held interval, **Shift Entire Motion** translates all
+Keyframes by one offset, **Move Time Range** relocates a non-overlapping
+inclusive range, and **Scale Time Range** changes actual motion speed around a
+fixed range start.
+
+Retiming always treats the logical End Effector targets and committed qpos
+states as one edit. GhostGUI validates the complete result before replacing
+either source, so a range conflict or negative timestamp leaves both unchanged.
+Generated motion is derived data and is cleared after a successful retime; run
+**Generate** again. The complete replacement is one Undo/Redo action.
+
+Insert Time samples both sources at the insertion boundary and writes the same
+pose at the beginning and end of the opened interval. This makes the inserted
+time a hold instead of stretching the preceding interpolation. Move Time Range
+is a literal Keyframe move: it does not layer, blend, or independently combine
+limbs, and a conflicting destination is rejected.
+
+Scale Time Range applies `new time = range start + (old time - range start) /
+speed`. Thus `2×` halves a range's duration while `0.5×` doubles it. Slower
+scaling is rejected if the expanded range would overlap a later Keyframe.
+Optional Export-interval snapping applies to every resulting Keyframe and is
+also preflighted for timestamp collapse. Because this changes authoritative
+Keyframe times, it affects Generate and all export formats.
+
 ## Generation And Playback
 
 Generation samples the logical target tracks created by the keyframes and the
@@ -98,6 +125,9 @@ interval**, generation stops with an alignment message instead of inserting a
 short nonuniform sample.
 
 Playback speed changes wall-clock viewing speed, not the trajectory timestamps.
+DSMS motion speed is different: it divides elapsed timestamps during DSMS
+export, producing an actual slower or faster downstream reference while leaving
+the qpos path unchanged. It does not affect MuJoCo or mjlab exports.
 Playback ghosts and Preview Path ghosts are temporary visualizations and are
 not exported as additional states.
 

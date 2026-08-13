@@ -105,8 +105,11 @@ structure. It skips outside the explicitly configured visual environment.
 - Export MuJoCo, DSMS, and mjlab trajectories; confirm DSMS creates two files,
   both specialized formats apply Export interval to the current trajectory, and
   mjlab is limited to the G1 29-DoF contract.
+- Export DSMS at `0.50×` and `2.00×`; confirm elapsed timestamps and reported
+  duration/frequency scale correctly while qpos rows and sample count remain
+  unchanged. Reject zero, negative, and non-finite speeds.
 - Confirm `convert_ghostgui_to_dsms.py` and `ghostgui_to_mjlab.py` remain
-  directly runnable from the terminal.
+  directly runnable from the terminal, including DSMS `--speed`.
 - Import a model with relative meshes.
 - Import a schema-2 model profile and confirm fixed/floating base policy,
   logical frames, End Effectors, joint groups, and passive-joint influence.

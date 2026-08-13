@@ -58,6 +58,10 @@ class DSMSPreparedTrajectory:
     qposes: np.ndarray
     median_dt: float | None
     is_uniform: bool
+    motion_speed: float
+    source_median_dt: float | None
+    source_duration: float
+    output_duration: float
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,31 @@ class TrajectoryFormatExportResult:
     paths: tuple[Path, ...]
     sample_count: int
     input_fps: float | None = None
+    motion_speed: float | None = None
+    source_fps: float | None = None
+    source_duration: float | None = None
+    output_duration: float | None = None
+
+
+def scale_times_for_motion_speed(times, motion_speed):
+    """Scale elapsed time around the first sample without changing the path."""
+    speed = float(motion_speed)
+    if not math.isfinite(speed) or speed <= 0.0:
+        raise ValueError("motion speed must be a positive finite value")
+    time_array = np.asarray(times, dtype=float)
+    if time_array.ndim != 1:
+        raise ValueError("trajectory times must be one-dimensional")
+    if np.any(~np.isfinite(time_array)):
+        raise ValueError("trajectory times contain a non-finite value")
+    if len(time_array) == 0:
+        return time_array.copy()
+    anchor = float(time_array[0])
+    scaled = anchor + (time_array - anchor) / speed
+    if np.any(~np.isfinite(scaled)):
+        raise ValueError("scaled trajectory times contain a non-finite value")
+    if len(scaled) > 1 and np.any(np.diff(scaled) <= 0.0):
+        raise ValueError("scaled trajectory times must be strictly increasing")
+    return scaled
 
 
 def resample_trajectory_export(export, robot_model, dt):
@@ -125,6 +154,7 @@ def prepare_dsms_arrays(
     allow_nonuniform_time=False,
     normalize_quaternion=True,
     base_qpos_address=0,
+    motion_speed=1.0,
 ):
     """Validate and prepare time/qpos arrays for a DSMS reference folder."""
     expected = int(expected_qpos_count)
@@ -138,7 +168,7 @@ def prepare_dsms_arrays(
 
     time_array = np.asarray(normalized_times, dtype=float)
     qpos_array = np.asarray(normalized_qposes, dtype=float)
-    median_dt = None
+    source_median_dt = None
     is_uniform = True
 
     if len(time_array) > 1:
@@ -149,19 +179,33 @@ def prepare_dsms_arrays(
                 "Time must be strictly increasing. "
                 f"Rows {index + 1} and {index + 2} have a non-positive interval."
             )
-        median_dt = float(np.median(dt))
+        source_median_dt = float(np.median(dt))
         is_uniform = bool(
-            np.allclose(dt, median_dt, rtol=1e-4, atol=1e-9)
+            np.allclose(dt, source_median_dt, rtol=1e-4, atol=1e-9)
         )
         if not is_uniform and not allow_nonuniform_time:
-            maximum_error = float(np.max(np.abs(dt - median_dt)))
+            maximum_error = float(np.max(np.abs(dt - source_median_dt)))
             raise ValueError(
                 "The timestamps are not uniformly sampled. "
                 "Generate the trajectory using Export interval before DSMS "
-                f"export. Median dt={median_dt:.9g} s; maximum deviation="
+                f"export. Median dt={source_median_dt:.9g} s; maximum deviation="
                 f"{maximum_error:.9g} s. The standalone converter can accept "
                 "the timestamps with --allow-nonuniform-time."
             )
+
+    scaled_times = scale_times_for_motion_speed(time_array, motion_speed)
+    speed = float(motion_speed)
+    median_dt = (
+        None if source_median_dt is None else source_median_dt / speed
+    )
+    source_duration = (
+        0.0 if len(time_array) < 2 else float(time_array[-1] - time_array[0])
+    )
+    output_duration = (
+        0.0
+        if len(scaled_times) < 2
+        else float(scaled_times[-1] - scaled_times[0])
+    )
 
     if normalize_quaternion:
         address = int(base_qpos_address)
@@ -184,10 +228,14 @@ def prepare_dsms_arrays(
         )
 
     return DSMSPreparedTrajectory(
-        times=time_array,
+        times=scaled_times,
         qposes=qpos_array,
         median_dt=median_dt,
         is_uniform=is_uniform,
+        motion_speed=speed,
+        source_median_dt=source_median_dt,
+        source_duration=source_duration,
+        output_duration=output_duration,
     )
 
 
@@ -214,6 +262,7 @@ def export_dsms_trajectory(
     *,
     dof,
     base_qpos_address=None,
+    motion_speed=1.0,
 ):
     prepared = prepare_dsms_arrays(
         export.times,
@@ -221,6 +270,7 @@ def export_dsms_trajectory(
         expected_qpos_count=export.expected_qpos_count,
         normalize_quaternion=base_qpos_address is not None,
         base_qpos_address=base_qpos_address or 0,
+        motion_speed=motion_speed,
     )
     paths = write_dsms_files(
         output_dir,
@@ -236,6 +286,14 @@ def export_dsms_trajectory(
             if prepared.median_dt is None
             else 1.0 / prepared.median_dt
         ),
+        motion_speed=prepared.motion_speed,
+        source_fps=(
+            None
+            if prepared.source_median_dt is None
+            else 1.0 / prepared.source_median_dt
+        ),
+        source_duration=prepared.source_duration,
+        output_duration=prepared.output_duration,
     )
 
 

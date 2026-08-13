@@ -91,7 +91,9 @@ FIRST_MOTION_TUTORIAL = [
         title="Export The Result",
         body=(
             "Use File > Export > Trajectory to choose MuJoCo, DSMS, or mjlab. "
-            "Unsaved orange previews are not exported."
+            "Set DSMS motion speed in Planning when DSMS time.csv should carry "
+            "a genuinely slower or faster reference. Unsaved orange previews "
+            "are not exported."
         ),
         target="appMenuBar",
         before_show="expand_setup",

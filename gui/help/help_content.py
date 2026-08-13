@@ -46,7 +46,9 @@ move target -> orange preview -> Commit Keyframe -> Generate -> Export
 
 ## Menu Bar
 
-Create/open/save projects, choose the robot model, import or export data, switch views, and open help.
+Create/open/save projects, choose the robot model, import or export data, retime Keyframes, switch views, and open help.
+
+Use **Timeline → Insert Time at Current Time** to open a held interval and shift later Keyframes. **Shift Entire Motion** applies one offset to the whole motion. **Move Time Range** relocates an inclusive range when its non-overlapping destination is free. **Scale Time Range** changes actual timeline speed: `2×` halves duration and `0.5×` doubles it. These operations keep logical targets and qpos synchronized, clear generated motion, and can be undone once. They reject conflicts rather than layering or blending overlapping motion.
 
 ## Target
 
@@ -63,7 +65,7 @@ Drag either divider to resize its sidebar between 200 and 400 pixels. Use the di
 
 ## Planning
 
-Use the single Time slider to scrub the robot live or follow time-based playback. The frame readout is derived from the trajectory, and releasing the slider commits the selected edit time once. Configure playback speed without changing trajectory timestamps, along with smoothing, collision substeps, playback opacity, and preview opacity; capture committed robot states; generate trajectories; and manage the editable timeline here.
+Use the single Time slider to scrub the robot live or follow time-based playback. The frame readout is derived from the trajectory, and releasing the slider commits the selected edit time once. Configure playback speed without changing trajectory timestamps. DSMS motion speed separately changes actual DSMS export timestamps while preserving qpos. Configure smoothing, collision substeps, playback opacity, and preview opacity; capture committed robot states; generate trajectories; and manage the editable timeline here.
 
 ## Workflow Toolbar
 
@@ -112,7 +114,7 @@ Records the preview at the active time and advances by the configured keyframe i
 
 A sampled sequence built from saved keyframes and IK. This is the data you usually export for MuJoCo validation or downstream tools.
 
-Export interval sets the generated time step from 0.01 s to 10.00 s. This is separate from the Keyframe interval, which only advances the editing time after Commit Keyframe.
+Export interval sets the generated time step from 0.01 s to 10.00 s. This is separate from the Keyframe interval, which only advances the editing time after Commit Keyframe. DSMS motion speed divides elapsed `time.csv` timestamps after sampling; 0.50× doubles actual DSMS duration without changing qpos or other export formats.
 """.strip(),
     ),
     HelpSection(
@@ -162,7 +164,7 @@ Use **File > Export** to choose what to save.
 - **Trajectory > DSMS** saves qpos and time CSVs in one reference folder.
 - **Trajectory > mjlab** saves a headerless Unitree G1 29-DoF input CSV. It does not launch mjlab's external NPZ converter.
 
-DSMS and mjlab need uniform timestamps. Their GUI exports sample the current generated or editable trajectory at the selected Export interval.
+DSMS and mjlab need uniform timestamps. Their GUI exports sample the current generated or editable trajectory at the selected Export interval. DSMS motion speed then scales DSMS timestamps only; visual Playback speed remains independent.
 
 Uncommitted orange previews are intentionally not exported. Use **Commit Keyframe** first when you want the current preview to become part of the saved motion.
 """.strip(),

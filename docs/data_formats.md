@@ -58,13 +58,20 @@ time.csv           # one timestamp per sample
 The joint DoF in the filename is derived from the active model. A floating-base
 quaternion is normalized when the model has one free joint. The GUI samples the
 current generated trajectory, or the editable qpos timeline, uniformly at the
-selected **Export interval** before writing the DSMS files.
+selected **Export interval**, then divides elapsed timestamps by **DSMS motion
+speed** before writing the DSMS files. qpos rows and sample count do not change.
+The first timestamp is preserved; at `0.50×`, duration and sample interval
+double while reference frequency halves.
 
 The terminal converter remains available for existing GhostGUI CSV files:
 
 ```bash
-python3 scripts/convert_ghostgui_to_dsms.py input.csv output_folder
+python3 scripts/convert_ghostgui_to_dsms.py input.csv output_folder --speed 0.5
 ```
+
+The converter defaults to `--speed 1.0` and reports source/output duration,
+sample interval, and reference frequency. DSMS should derive its run duration
+from `time.csv`; a fixed downstream duration must be updated to match.
 
 ## mjlab Input CSV
 

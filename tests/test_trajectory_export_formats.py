@@ -13,6 +13,7 @@ from application.trajectory_export_formats import (
     export_dsms_trajectory,
     export_mjlab_trajectory,
     mjlab_compatibility_error,
+    scale_times_for_motion_speed,
 )
 
 
@@ -81,6 +82,40 @@ class TrajectoryExportFormatTests(unittest.TestCase):
                     base_qpos_address=0,
                 )
 
+    def test_dsms_motion_speed_scales_only_elapsed_timestamps(self):
+        source = sample_export((2.0, 2.02, 2.04))
+        with tempfile.TemporaryDirectory() as directory:
+            result = export_dsms_trajectory(
+                directory,
+                source,
+                dof=29,
+                base_qpos_address=0,
+                motion_speed=0.5,
+            )
+            qposes = np.loadtxt(result.paths[0], delimiter=",", ndmin=2)
+            times = np.loadtxt(result.paths[1], delimiter=",", ndmin=1)
+
+        expected_qposes = np.asarray(source.qposes).copy()
+        expected_qposes[:, 3] = 1.0
+        np.testing.assert_allclose(qposes, expected_qposes)
+        np.testing.assert_allclose(times, (2.0, 2.04, 2.08))
+        self.assertEqual(result.sample_count, 3)
+        self.assertAlmostEqual(result.motion_speed, 0.5)
+        self.assertAlmostEqual(result.source_duration, 0.04)
+        self.assertAlmostEqual(result.output_duration, 0.08)
+        self.assertAlmostEqual(result.source_fps, 50.0)
+        self.assertAlmostEqual(result.input_fps, 25.0)
+
+    def test_dsms_motion_speed_rejects_invalid_values(self):
+        np.testing.assert_allclose(
+            scale_times_for_motion_speed((2.0, 2.02, 2.04), 2.0),
+            (2.0, 2.01, 2.02),
+        )
+        for speed in (0.0, -1.0, float("nan"), float("inf")):
+            with self.subTest(speed=speed):
+                with self.assertRaisesRegex(ValueError, "motion speed"):
+                    scale_times_for_motion_speed((0.0, 0.02), speed)
+
     def test_mjlab_writes_xyzw_and_named_g1_joint_order(self):
         adapter = FakeG1Adapter()
         with tempfile.TemporaryDirectory() as directory:
@@ -135,7 +170,10 @@ class TrajectoryExportFormatTests(unittest.TestCase):
             commands = (
                 (
                     "convert_ghostgui_to_dsms.py",
-                    [str(input_path), "dsms", "--dof", "29", "--nq", "36"],
+                    [
+                        str(input_path), "dsms", "--dof", "29", "--nq", "36",
+                        "--speed", "0.5",
+                    ],
                 ),
                 (
                     "ghostgui_to_mjlab.py",
@@ -160,6 +198,10 @@ class TrajectoryExportFormatTests(unittest.TestCase):
             self.assertTrue((working_dir / "dsms" / "qpos_29dof.csv").exists())
             self.assertTrue((working_dir / "dsms" / "time.csv").exists())
             self.assertTrue((working_dir / "mjlab.csv").exists())
+            np.testing.assert_allclose(
+                np.loadtxt(working_dir / "dsms" / "time.csv", delimiter=","),
+                (0.0, 0.04),
+            )
 
 
 if __name__ == "__main__":

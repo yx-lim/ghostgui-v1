@@ -84,6 +84,14 @@ MuJoCo states:
 logical target-frame keyframes used by the backend. A commit updates both
 representations for the same time.
 
+`application.timeline_editing` owns Insert Time, Shift Entire Motion, Move Time
+Range, and Scale Time Range planning. Planning is read-only and preflights
+timestamp bounds, range overlap, scale expansion, snapped-time collapse, and
+per-track/qpos destination conflicts. The resulting command replaces logical
+target frames and qpos states together with rollback on an unexpected apply
+failure. The GUI invalidates generated playback only after the validated
+command succeeds and records the result as one history transition.
+
 ## Trajectory Generation
 
 The trajectory layer interpolates target positions and orientations. Quaternion
@@ -97,6 +105,12 @@ as primary Jacobian tasks, and projects posture correction into their null
 space. Generated CSV rows use the compiled model's `nq`; generic models never
 fall back to the G1-specific analytic backend. The application can also play raw
 qpos trajectories directly.
+
+Target-specific export transformations live in
+`application/trajectory_export_formats.py`. DSMS export first receives the
+uniformly resampled qpos path, then applies motion-speed scaling to elapsed
+timestamps only. The GUI and standalone converter call this same application
+contract; playback timing and other export formats are not mutated.
 
 ## Files And Projects
 

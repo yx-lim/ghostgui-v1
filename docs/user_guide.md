@@ -62,7 +62,40 @@ select target → edit → orange preview → Commit Keyframe → Generate → E
 ### Menu Bar
 
 Use the menu bar to create, open, and save projects; select the active robot;
-import or export data; switch views; and open help.
+import or export data; retime Keyframes; switch views; and open help.
+
+### Timeline Menu
+
+**Insert Time at Current Time** opens a new interval at the active time. All
+Keyframes at or after that time move later, and GhostGUI inserts matching hold
+anchors at both ends of the new interval. Use this to move a `1–2 s` motion to
+`2–3 s` before creating a new `1–2 s` motion.
+
+**Shift Entire Motion** moves every logical target and committed robot-pose
+Keyframe by one offset. Positive offsets prepend room for new motion. A negative
+offset is rejected if any Keyframe would move before `0 s`.
+
+**Move Time Range** moves every Keyframe in an inclusive source range to a
+non-overlapping destination. GhostGUI checks the complete operation first and
+rejects it if the destination already has a conflicting logical target or robot
+pose. Adjacent ranges are allowed, so `1–2 s` can move to `2–3 s`.
+
+**Scale Time Range** changes actual motion speed by scaling Keyframe timestamps
+around the range start. Select **Scale entire motion** for the complete timeline,
+or clear it and enter a range. `2.00×` halves the duration and `0.50×` doubles
+it. Unlike visual Playback speed or DSMS motion speed, this changes the
+authoritative timeline and therefore affects Generate and every export format.
+
+The dialogs snap values to the **Export interval** by default; clear the
+checkbox when exact off-grid timing is intentional. Each successful retiming
+operation updates logical targets and qpos together, clears stale generated
+motion, expands the timeline when needed, and is one Undo/Redo action. Select
+**Generate** again before playback or export.
+
+These tools do not layer or blend simultaneous whole-body motions. Source and
+destination ranges cannot overlap, and conflicting destination Keyframes are
+left unchanged. Slower range scaling is also rejected when it would expand into
+a later Keyframe; move or insert time first to create enough room.
 
 ### Target
 
@@ -84,8 +117,8 @@ supports live scrubbing and playback. Releasing the slider selects an editable
 time.
 
 Planning controls include the keyframe interval, timeline duration, Export
-interval, playback speed, smoothing, collision substeps, and preview/playback
-opacity.
+interval, DSMS motion speed, playback speed, smoothing, collision substeps, and
+preview/playback opacity.
 
 ### Workflow Toolbar
 
@@ -103,6 +136,11 @@ default `0.01 s` interval produces a 100 Hz trajectory.
 This is separate from the **Keyframe interval**. The Keyframe interval only
 controls how far the editor advances after **Commit Keyframe**; it does not set
 the generated trajectory's time step.
+
+**DSMS motion speed** changes the actual timestamps written to DSMS `time.csv`
+without changing qpos samples. For example, `0.50×` doubles the DSMS reference
+duration. It does not change Keyframes, visual **Playback speed**, MuJoCo CSV,
+or mjlab export.
 
 **Play/Pause** controls the active generated or editable timeline.
 
@@ -174,6 +212,11 @@ the current generated trajectory, or the editable qpos timeline, at the selected
 **Export interval**. The mjlab selection is available only for a model matching
 the Unitree G1 29-DoF joint contract. It creates the mjlab input CSV but does not
 launch mjlab's external NPZ converter.
+
+After sampling, DSMS export divides elapsed timestamps by **DSMS motion speed**.
+The sample count and qpos path stay unchanged, so `0.50×` also halves the DSMS
+reference frequency. Downstream DSMS configuration should derive total duration
+from `time.csv` rather than overriding it with a shorter fixed duration.
 
 An uncommitted orange preview is not exported. Select **Commit Keyframe** first
 when the pose should become part of the saved motion.

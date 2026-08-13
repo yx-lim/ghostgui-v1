@@ -20,6 +20,7 @@ python scripts/convert_ghostgui_to_dsms.py \
   csv/exp_stand_50f \
   --dof 29 \
   --nq 36 \
+  --speed 0.5 \
   --allow-nonuniform-time
 """
 
@@ -101,6 +102,7 @@ def convert(
     delimiter: str,
     allow_nonuniform_time: bool,
     normalize_quaternion: bool,
+    motion_speed: float = 1.0,
 ) -> tuple[Path, Path]:
     """Split a GhostGUI time-plus-qpos CSV into DSMS qpos and time files."""
     if dof <= 0:
@@ -130,6 +132,7 @@ def convert(
         expected_qpos_count=nq,
         allow_nonuniform_time=allow_nonuniform_time,
         normalize_quaternion=normalize_quaternion,
+        motion_speed=motion_speed,
     )
     time = prepared.times
     qpos = prepared.qposes
@@ -143,8 +146,16 @@ def convert(
     print(f"Input shape: {data.shape}")
     print(f"Qpos shape:  {qpos.shape}")
 
+    print(f"Motion speed: {prepared.motion_speed:.9g}x")
+    print(f"Time scale:   {1.0 / prepared.motion_speed:.9g}x")
+    print(f"Duration:     {prepared.source_duration:.9g} s -> "
+          f"{prepared.output_duration:.9g} s")
+
     if median_dt is not None:
-        print(f"Median dt:   {median_dt:.9g} s")
+        print(f"Source dt:   {prepared.source_median_dt:.9g} s")
+        print(f"Output dt:   {median_dt:.9g} s")
+        print(f"Frequency:   {1.0 / prepared.source_median_dt:.9g} Hz -> "
+              f"{1.0 / median_dt:.9g} Hz")
         print(f"Uniform:     {'yes' if is_uniform else 'no (accepted by override)'}")
 
     print(f"Wrote:       {qpos_path}")
@@ -183,6 +194,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Expected MuJoCo qpos width. Default: 36 for G1 29-DoF.",
     )
     parser.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help=(
+            "DSMS motion-speed multiplier. Timestamps are divided by this "
+            "value while qpos samples remain unchanged. Default: 1.0."
+        ),
+    )
+    parser.add_argument(
         "--delimiter",
         default=",",
         help="Input and output delimiter. Default: comma.",
@@ -216,6 +236,7 @@ def main() -> int:
             delimiter=args.delimiter,
             allow_nonuniform_time=args.allow_nonuniform_time,
             normalize_quaternion=not args.no_normalize_quaternion,
+            motion_speed=args.speed,
         )
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)

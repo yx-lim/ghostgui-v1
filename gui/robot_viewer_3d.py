@@ -571,6 +571,20 @@ class RobotViewer3D(QWidget):
             "Choose the uniform time interval used by Generate and trajectory "
             "export."
         )
+        self.dsms_motion_speed_label = QLabel("DSMS motion speed")
+        self.dsms_motion_speed_input = QDoubleSpinBox()
+        self.dsms_motion_speed_input.setObjectName("dsmsMotionSpeedSpinBox")
+        _compact_spinbox(self.dsms_motion_speed_input, width=72)
+        self.dsms_motion_speed_input.setRange(0.10, 4.00)
+        self.dsms_motion_speed_input.setDecimals(2)
+        self.dsms_motion_speed_input.setSingleStep(0.25)
+        self.dsms_motion_speed_input.setValue(1.00)
+        self.dsms_motion_speed_input.setSuffix("×")
+        self.dsms_motion_speed_input.setToolTip(
+            "Scale actual DSMS reference timing without changing qpos. "
+            "For example, 0.5× doubles the exported duration. This does not "
+            "change visual playback speed or other trajectory formats."
+        )
 
         self.timeslice_time_row = QHBoxLayout()
         self.timeslice_time_row.setContentsMargins(0, 0, 0, 0)
@@ -588,6 +602,9 @@ class RobotViewer3D(QWidget):
         )
         self.timeslice_context_layout.addRow(
             self.export_dt_label, self.export_dt_input
+        )
+        self.timeslice_context_layout.addRow(
+            self.dsms_motion_speed_label, self.dsms_motion_speed_input
         )
 
         self.timeslice_timeline_group = QGroupBox("Timeline")
@@ -726,6 +743,12 @@ class RobotViewer3D(QWidget):
 
     def set_export_dt(self, export_dt):
         self.export_dt_input.setValue(float(export_dt))
+
+    def dsms_motion_speed(self):
+        return float(self.dsms_motion_speed_input.value())
+
+    def set_dsms_motion_speed(self, motion_speed):
+        self.dsms_motion_speed_input.setValue(float(motion_speed))
 
     def _on_timeslice_duration_changed(self, duration):
         self.set_timeline_duration(duration)
@@ -1847,6 +1870,7 @@ class RobotViewer3D(QWidget):
         base_qpos_address = (
             free_joints[0].qpos_address if len(free_joints) == 1 else None
         )
+        motion_speed = self.dsms_motion_speed()
         self.status_label.setText(
             f"Exporting DSMS trajectory to {Path(output_dir).name}..."
         )
@@ -1857,6 +1881,7 @@ class RobotViewer3D(QWidget):
                 export,
                 dof=dof,
                 base_qpos_address=base_qpos_address,
+                motion_speed=motion_speed,
             ),
             lambda result: self._show_format_trajectory_saved(
                 "DSMS", result, export
@@ -1903,11 +1928,29 @@ class RobotViewer3D(QWidget):
                 f"{result.paths[0].parent} "
                 f"({', '.join(path.name for path in result.paths)})"
             )
-        fps_note = (
-            ""
-            if result.input_fps is None
-            else f"; input frequency {result.input_fps:.6g} Hz"
-        )
+        if result.motion_speed is not None:
+            speed_note = f"; motion speed {result.motion_speed:.6g}×"
+            duration_note = (
+                ""
+                if result.source_duration is None
+                or result.output_duration is None
+                else f"; duration {result.source_duration:.6g} s → "
+                f"{result.output_duration:.6g} s"
+            )
+            fps_note = (
+                ""
+                if result.source_fps is None or result.input_fps is None
+                else f"; reference frequency {result.source_fps:.6g} Hz → "
+                f"{result.input_fps:.6g} Hz"
+            )
+        else:
+            speed_note = ""
+            duration_note = ""
+            fps_note = (
+                ""
+                if result.input_fps is None
+                else f"; input frequency {result.input_fps:.6g} Hz"
+            )
         preview_note = (
             "; unaccepted preview was not saved"
             if export.preview_active
@@ -1922,7 +1965,8 @@ class RobotViewer3D(QWidget):
             )
         self.status_label.setText(
             f"Saved {result.sample_count} {format_name} trajectory samples "
-            f"to {destination}{fps_note}{preview_note}{collision_note}"
+            f"to {destination}{speed_note}{duration_note}{fps_note}"
+            f"{preview_note}{collision_note}"
         )
 
     def _submit_csv_job(self, name, work, succeeded, failed):
