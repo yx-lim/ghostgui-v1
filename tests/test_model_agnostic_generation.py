@@ -36,13 +36,13 @@ class ModelAgnosticGenerationTests(unittest.TestCase):
         first = self.adapter.home_qpos.copy()
         second = self.adapter.home_qpos.copy()
         values = {
-            "left_shoulder_pitch_joint": (0.21, 0.22),
-            "left_shoulder_roll_joint": (0.19, 0.18),
-            "left_shoulder_yaw_joint": (0.01, 0.02),
-            "left_elbow_joint": (0.59, 0.58),
-            "left_wrist_roll_joint": (0.01, 0.02),
-            "left_wrist_pitch_joint": (-0.01, -0.02),
-            "left_wrist_yaw_joint": (0.01, 0.02),
+            "left_shoulder_pitch_joint": (0.25, 0.30),
+            "left_shoulder_roll_joint": (0.20, 0.10),
+            "left_shoulder_yaw_joint": (-0.20, -0.10),
+            "left_elbow_joint": (0.60, 0.75),
+            "left_wrist_roll_joint": (0.35, 0.25),
+            "left_wrist_pitch_joint": (-0.25, -0.15),
+            "left_wrist_yaw_joint": (0.30, 0.20),
         }
         for name, (first_value, second_value) in values.items():
             address = self.adapter.joints[name].qpos_address

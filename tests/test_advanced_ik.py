@@ -385,34 +385,26 @@ class AdvancedIKTests(unittest.TestCase):
                 finally:
                     window.close()
 
-    def test_ground_penetrating_preview_is_projected_before_accept(self):
+    def test_colliding_preview_cannot_be_accepted(self):
         window = RobotGuiMainWindow("g1")
         try:
             viewer = window.viewer_3d
+            committed = viewer.committed_state.get_qpos()
             viewer.begin_preview()
             qpos = viewer.preview_state.get_qpos()
             free_joint = next(iter(viewer.robot_model.free_joints_by_body.values()))
             qpos[free_joint.qpos_address + 2] -= 0.2
-            requested_z = qpos[free_joint.qpos_address + 2]
             viewer.preview_state.set_qpos(qpos)
             self.assertTrue(viewer.collision_checker.get_collisions(
                 viewer.preview_state
             ))
 
-            self.assertTrue(viewer.accept_preview())
+            viewer.accept_preview()
 
-            accepted = viewer.committed_state.get_qpos()
-            self.assertGreater(
-                accepted[free_joint.qpos_address + 2], requested_z
-            )
-            self.assertFalse(
-                viewer.collision_checker.get_blocking_collisions(
-                    viewer.committed_state
-                )
-            )
-            np.testing.assert_allclose(viewer.get_current_keyframe(), accepted)
-            self.assertFalse(viewer.preview_active)
-            self.assertIn("ground barrier raised", viewer.status_label.text())
+            np.testing.assert_allclose(viewer.committed_state.get_qpos(), committed)
+            np.testing.assert_allclose(viewer.get_current_keyframe(), committed)
+            self.assertTrue(viewer.preview_active)
+            self.assertIn("Cannot commit keyframe", viewer.status_label.text())
         finally:
             window.close()
 

@@ -9,7 +9,6 @@ from typing import Iterable, Mapping, Optional
 
 from core.resources import bundled_resource_root
 from core.robotics import QposContract, validate_trajectory_arrays
-from core.trajectory import interpolate_qpos_manifold
 
 try:
     import mujoco
@@ -944,9 +943,17 @@ class RobotStateTimeline:
         return qpos
 
     def _interpolate(self, start, end, fraction):
-        return interpolate_qpos_manifold(
-            self.robot_model.mj_model, start, end, fraction
+        # MuJoCo's position manifold helpers correctly interpolate free-joint
+        # quaternions instead of linearly blending their four components.
+        velocity = np.zeros(self.robot_model.mj_model.nv, dtype=float)
+        mujoco.mj_differentiatePos(
+            self.robot_model.mj_model, velocity, 1.0, start, end
         )
+        result = np.asarray(start, dtype=float).copy()
+        mujoco.mj_integratePos(
+            self.robot_model.mj_model, result, velocity, float(fraction)
+        )
+        return result
 
     def times(self):
         return sorted(self.states)

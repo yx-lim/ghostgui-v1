@@ -1,19 +1,8 @@
 """Timeline widgets for trajectory editing."""
 
-from dataclasses import dataclass
-import math
-
 from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QSlider, QStyle, QStyleOptionSlider
-
-
-@dataclass(frozen=True)
-class TimelineSafetyMarker:
-    """Paint-ready safety state derived from a structured collision report."""
-
-    time: float
-    blocking: bool
 
 
 class TimesliceSlider(QSlider):
@@ -27,65 +16,15 @@ class TimesliceSlider(QSlider):
     MARKER_HEIGHT = 6
     CURRENT_MARKER_WIDTH = 2
     CURRENT_MARKER_HEIGHT = 10
-    SAFETY_MARKER_WIDTH = 3
-    SAFETY_MARKER_HEIGHT = 8
-    ADVISORY_MARKER_COLOR = QColor(245, 158, 11)
-    BLOCKING_MARKER_COLOR = QColor(220, 38, 38)
 
     def __init__(self, orientation, parent=None):
         super().__init__(orientation, parent)
         self.defined_times = set()
-        self.safety_reports = ()
-        self.safety_markers = ()
         self.marker_snap_pixels = 10
         self._wheel_angle_remainder = 0
 
     def set_defined_times(self, times):
         self.defined_times = {round(float(time), 6) for time in times}
-        self.update()
-
-    def set_safety_reports(self, reports):
-        """Show advisory/blocking ticks for reports carrying absolute time.
-
-        ``reports`` may contain ``None`` so callers can pass the natural
-        ``(warning_report, blocking_report)`` result from motion validation.
-        Reports without a finite ``time`` are ignored because a sample index
-        alone cannot be mapped reliably after trajectory resampling.
-        """
-        if reports is None:
-            reports = ()
-        try:
-            reports = tuple(reports)
-        except TypeError:
-            reports = (reports,)
-
-        valid_reports = []
-        markers_by_time = {}
-        for report in reports:
-            if report is None:
-                continue
-            try:
-                time = float(report.time)
-            except (AttributeError, TypeError, ValueError):
-                continue
-            if not math.isfinite(time):
-                continue
-
-            blocking = bool(getattr(report, "blocking", False))
-            time_key = round(time, 6)
-            previous = markers_by_time.get(time_key)
-            markers_by_time[time_key] = TimelineSafetyMarker(
-                time=time,
-                # A blocking report wins when advisory and blocking reports
-                # describe the same instant.
-                blocking=blocking or bool(previous and previous.blocking),
-            )
-            valid_reports.append(report)
-
-        self.safety_reports = tuple(valid_reports)
-        self.safety_markers = tuple(
-            markers_by_time[key] for key in sorted(markers_by_time)
-        )
         self.update()
 
     def snap_to_nearest_defined_time(self, time, tolerance=0.06):
@@ -105,33 +44,12 @@ class TimesliceSlider(QSlider):
         painter = QPainter(self)
         current_raw = self.value()
 
-        for marker in self.safety_markers:
-            x = self._time_to_pixel(marker.time)
-            color = (
-                self.BLOCKING_MARKER_COLOR
-                if marker.blocking
-                else self.ADVISORY_MARKER_COLOR
-            )
-            painter.fillRect(self._safety_marker_rect(x), color)
-
         for time in sorted(self.defined_times):
             x = self._time_to_pixel(time)
             raw_value = self._time_to_raw(time)
             current = abs(raw_value - current_raw) <= 1
             color = QColor(21, 116, 214) if not current else QColor(15, 158, 255)
             painter.fillRect(self._marker_rect(x, current), color)
-
-    def _safety_marker_rect(self, x):
-        """Place safety ticks above Keyframe ticks around the groove."""
-        groove = self._groove_rect()
-        bottom = min(self.height() - 1, groove.top() + 2)
-        top = max(0, bottom - self.SAFETY_MARKER_HEIGHT + 1)
-        return QRect(
-            int(x) - self.SAFETY_MARKER_WIDTH // 2,
-            top,
-            self.SAFETY_MARKER_WIDTH,
-            max(1, bottom - top + 1),
-        )
 
     def _marker_rect(self, x, current):
         width = (

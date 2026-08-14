@@ -25,17 +25,17 @@ Use this workflow to create one editable robot motion.
 1. Choose the robot model in the app toolbar.
 2. Select a **Target robot frame**, such as `left_hand`.
 3. Move the target with the 3D gizmo or the position/orientation sliders.
-4. The robot shown in orange is the temporary Orange preview. It is not saved yet.
-5. Click **Preview Path** when you want to inspect the adaptive path check from the committed pose to the Orange preview. Unsafe intervals remain visible as red ghosts.
-6. Click **Commit Keyframe** to validate and record the preview at the active time, then advance by the Keyframe interval.
-7. Add another Keyframe at a later time.
-8. Click **Generate** or **Generate / Simulate**. Only a candidate that passes state and between-state safety checks becomes active generated motion.
+4. The orange robot is the temporary preview. It is not saved yet.
+5. Click **Preview Path** when you want to validate the path from the committed pose to the orange preview. Collision samples remain visible as red ghosts.
+6. Click **Commit Keyframe** to record the preview at the active time and advance the timeline.
+7. Add another keyframe at a later time.
+8. Click **Generate** or **Generate / Simulate**.
 9. Export the trajectory or qpos data from the app toolbar.
 
 The main idea is:
 
 ```text
-move target -> Orange preview -> Commit Keyframe -> Generate -> Export
+move target -> orange preview -> Commit Keyframe -> Generate -> Export
 ```
 """.strip(),
     ),
@@ -57,7 +57,7 @@ another body or site exposed by the model.
 
 ## Editing Mode
 
-Use **End Effector** to edit the target frame with X/Y/Z/Roll/Pitch/Yaw controls or the 3D transform gizmo. Use **Joint Angles** to edit joints directly or move the gizmo through IK while watching the joint values update. Both modes update the same Orange preview, and the controls stay synchronized when you switch modes.
+Use **End Effector** to edit the target frame with X/Y/Z/Roll/Pitch/Yaw controls or the 3D transform gizmo. Use **Joint Angles** to edit joints directly or move the gizmo through IK while watching the joint values update. Both modes update the same orange preview, and the controls stay synchronized when you switch modes.
 
 ## Sidebars
 
@@ -69,9 +69,9 @@ Use the single Time slider to scrub the robot live or follow time-based playback
 
 ## Workflow Toolbar
 
-- **Preview Path** visualizes the adaptive path check from the committed pose to the Orange preview and marks unsafe intervals with red ghosts.
-- **Commit Keyframe** records the preview only after its pose and affected neighboring paths pass the hard safety checks.
-- **Generate** samples the saved Keyframes, validates the resulting states and interpolated motion, and promotes only a safe trajectory.
+- **Preview Path** validates the path from the committed pose to the orange preview and marks collision samples with red ghosts.
+- **Commit Keyframe** records the preview at the active time.
+- **Generate** samples the saved keyframes into a robot trajectory.
 - **Play/Pause** controls the current generated or editable timeline.
 - **Reset** returns the active time to the model home pose.
 - **Clear** clears the editable trajectory.
@@ -96,49 +96,25 @@ The frame you are editing, such as a hand, foot, torso, pelvis, body, or site ex
 
 ## Preview State
 
-The Orange preview is the robot shown in orange. It is a temporary IK result from your current drag, pose control, or Joint Angles edit. Blocking IK motion clamps at the last safe substep while the requested contact remains highlighted; the preview is not committed motion.
+The orange robot. It is a temporary IK result from your current drag or slider edit.
 
 ## Committed State
 
-The accepted robot pose at the active time. Generated trajectories and exports use committed timeline states, not an unsaved Orange preview.
+The accepted robot pose at the active time. Generated trajectories and exports use committed timeline states, not unsaved orange previews.
 
 ## Preview Path Button
 
-Visualizes the adaptive motion check between the committed pose and the Orange preview. It does not save the pose by itself, and Commit and Generate run required safety checks even when you do not open Preview Path.
+Validates the motion between the committed pose and the orange preview. It does not save the pose by itself.
 
 ## Commit Keyframe Button
 
-Records the preview at the active time and advances by the configured Keyframe interval only when blocking penetration is absent from the pose and affected neighboring paths.
+Records the preview at the active time and advances by the configured keyframe interval.
 
 ## Generated Trajectory
 
-A sampled sequence built from saved Keyframes and IK. A solved candidate becomes active generated motion only after adaptive state and between-state validation succeeds.
+A sampled sequence built from saved keyframes and IK. This is the data you usually export for MuJoCo validation or downstream tools.
 
 Export interval sets the generated time step from 0.01 s to 10.00 s. This is separate from the Keyframe interval, which only advances the editing time after Commit Keyframe. DSMS motion speed divides elapsed `time.csv` timestamps after sampling; 0.50× doubles actual DSMS duration without changing qpos or other export formats.
-""".strip(),
-    ),
-    HelpSection(
-        "Motion Safety",
-        """
-# Motion Safety
-
-GhostGUI never promotes blocking penetration into a committed Keyframe, active generated motion, playback-ready motion, or export. Intended ground support remains valid, and shallow advisory contact is reported separately.
-
-## Between Keyframes
-
-Safe endpoints do not guarantee a safe transition. GhostGUI adaptively checks the manifold-interpolated path between adjacent states and reports the earliest unsafe time and body pair. This resolution is independent of both the Export interval and the Keyframe interval.
-
-## Repair
-
-Automatic projection is limited to raising one movable floating root over a flat ground plane. Live edits and generated samples report the applied lift; generated correction is rejected if it would violate a required End Effector target or exact Keyframe anchor. A quarantined between-state ground sweep may instead receive a lifted waypoint for review.
-
-Ground projection cannot fix a fixed-base model, uneven terrain, another obstacle, or body-to-body collision. For those failures, edit or add a Keyframe or explicitly select **Try Safe Reroute** when offered. Rerouting uses a bounded local Joint Angle search with fixed endpoint qpos values. It is never forced, is previewed before acceptance, is not a global planner, and may report that no safe route exists.
-
-## Imported Motion
-
-Imported motion with blocking penetration is quarantined for inspection. It does not replace the active safe generated result and cannot be exported until repair or rerouting passes the same adaptive validation.
-
-These checks cover the modeled kinematic path. They do not prove balance, actuator feasibility, controller tracking, or safety on physical hardware.
 """.strip(),
     ),
     HelpSection(
@@ -190,7 +166,7 @@ Use **File > Export** to choose what to save.
 
 DSMS and mjlab need uniform timestamps. Their GUI exports sample the current generated or editable trajectory at the selected Export interval. DSMS motion speed then scales DSMS timestamps only; visual Playback speed remains independent.
 
-Uncommitted Orange previews are intentionally not exported. Use **Commit Keyframe** first when you want the current preview to become part of the saved motion. Export repeats adaptive path validation and stops if it finds blocking penetration. An imported candidate with blocking penetration remains quarantined; any previously accepted safe motion remains available.
+Uncommitted orange previews are intentionally not exported. Use **Commit Keyframe** first when you want the current preview to become part of the saved motion.
 """.strip(),
     ),
     HelpSection(
@@ -200,15 +176,15 @@ Uncommitted Orange previews are intentionally not exported. Use **Commit Keyfram
 
 ## The orange robot moves but export did not change
 
-The Orange preview is temporary. Click **Commit Keyframe** to validate and store it at the active time before exporting.
+The orange robot is only a preview. Click **Commit Keyframe** to store it at the active time before exporting.
 
 ## Preview fails or moves only partway
 
-An **IK reach limit** means the required handle task could not be reached; collision warnings are reported separately. Translation may relax optional orientation and lock tasks once while keeping the required position. **Commit Keyframe** blocks meaningful penetration in the pose and affected neighboring paths but allows shallow advisory contact with a warning. Check the **Status** panel and the **IK / Constraints** section.
+An **IK reach limit** means the required handle task could not be reached; collision warnings are reported separately. Translation may relax optional orientation and lock tasks once while keeping the required position. **Commit Keyframe** blocks meaningful penetration but allows shallow advisory contact with a warning. Check the **Status** panel and the **IK / Constraints** section.
 
 ## Generate gives an unexpected path
 
-Confirm that the saved Keyframes are at the intended times, then inspect **Preview Path**, playback ghosts, and the reported unsafe interval. A ground-only failure may offer a reviewed repair. For body-to-body collision, edit or add a Keyframe or explicitly try a safe reroute.
+Confirm that the saved keyframes are at the intended times, then inspect **Playback** ghosts and the timeline controls.
 
 ## A model has different frames than expected
 

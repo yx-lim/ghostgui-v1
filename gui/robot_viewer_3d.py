@@ -54,14 +54,12 @@ from core.models import (
     interpolate_qpos,
 )
 from core.ik import (
-    adaptive_trajectory_collision_reports,
     CollisionAwareIKSolver,
     CollisionChecker,
-    project_qpos_above_flat_ground,
+    trajectory_collision_reports,
     format_collision_diagnostics,
     format_collision_pairs,
 )
-from core.robotics import validate_trajectory_arrays
 from core.trajectory import quat_to_rpy, rpy_to_quat
 from gui.file_selection import SynchronousFileSelectionStage
 from gui.viewers import ik_panels
@@ -118,7 +116,6 @@ class RobotViewer3D(QWidget):
     delete_timeslice_requested = Signal()
     history_action_finished = Signal(str)
     playback_state_changed = Signal(bool)
-    safe_motion_accepted = Signal(object, object, str, object)
 
     @property
     def _playback_last_tick(self):
@@ -176,13 +173,6 @@ class RobotViewer3D(QWidget):
         self.robot_trajectory_warning_report = None
         self.robot_trajectory_blocking_report = None
         self._last_export_collision_warning = None
-        self.quarantined_motion_qposes = ()
-        self.quarantined_motion_times = ()
-        self.quarantined_motion_report = None
-        self.quarantined_motion_source = None
-        self.quarantined_motion_source_path = None
-        self.safe_motion_candidate_qposes = ()
-        self.safe_motion_candidate_times = ()
         self._prompt_trajectory_import_dt_on_load = False
         self._background_trajectory_postprocess_requested = False
         self.csv_file_selection_stage = (
@@ -547,23 +537,6 @@ class RobotViewer3D(QWidget):
 
         self.delete_timeslice_button = QPushButton("Delete Keyframe")
         self.delete_timeslice_button.clicked.connect(self.delete_timeslice)
-        self.jump_to_unsafe_button = QPushButton("Jump to unsafe time")
-        self.jump_to_unsafe_button.clicked.connect(
-            self.jump_to_motion_safety_issue
-        )
-        self.try_safe_reroute_button = QPushButton("Try Safe Reroute")
-        self.try_safe_reroute_button.clicked.connect(self.try_safe_reroute)
-        self.accept_safe_motion_button = QPushButton("Accept Safe Motion")
-        self.accept_safe_motion_button.clicked.connect(self.accept_safe_motion)
-        self.revert_safe_motion_button = QPushButton("Revert")
-        self.revert_safe_motion_button.clicked.connect(self.revert_safe_motion)
-        for button in (
-            self.jump_to_unsafe_button,
-            self.try_safe_reroute_button,
-            self.accept_safe_motion_button,
-            self.revert_safe_motion_button,
-        ):
-            button.setVisible(False)
         self.timeslice_step_label = QLabel("Keyframe interval")
         self.timeslice_step_input = QDoubleSpinBox()
         _compact_spinbox(self.timeslice_step_input, width=72)
@@ -642,13 +615,6 @@ class RobotViewer3D(QWidget):
         self.timeslice_scrubber_layout.setContentsMargins(0, 0, 0, 0)
         self.timeslice_scrubber_layout.setSpacing(3)
         self.timeslice_scrubber_layout.addLayout(self.timeslice_time_row)
-        self.motion_safety_action_row = QHBoxLayout()
-        self.motion_safety_action_row.setContentsMargins(0, 0, 0, 0)
-        self.motion_safety_action_row.setSpacing(4)
-        self.motion_safety_action_row.addWidget(self.jump_to_unsafe_button)
-        self.motion_safety_action_row.addWidget(self.try_safe_reroute_button)
-        self.motion_safety_action_row.addWidget(self.accept_safe_motion_button)
-        self.motion_safety_action_row.addWidget(self.revert_safe_motion_button)
         self.timeslice_action_row = QVBoxLayout()
         self.timeslice_action_row.setContentsMargins(0, 0, 0, 0)
         self.timeslice_action_row.setSpacing(4)
@@ -657,272 +623,12 @@ class RobotViewer3D(QWidget):
             self.timeslice_scrubber_layout, stretch=1
         )
         self.timeslice_timeline_layout.addLayout(self.timeslice_action_row)
-        self.timeslice_timeline_layout.addLayout(
-            self.motion_safety_action_row
-        )
 
         self.timeslice_layout.addWidget(self.timeslice_timeline_group)
         return self.timeslice_editor
 
     def set_defined_timeslices(self, times):
         self.timeslice_slider.set_defined_times(times)
-
-    def _motion_report_text(self, report):
-        if report is None:
-            return "unknown motion location"
-        location = getattr(report, "location_label", None)
-        if not location:
-            time = getattr(report, "time", None)
-            if time is not None:
-                location = f"t={float(time):.3f} s"
-            else:
-                location = f"sample {getattr(report, 'sample_index', '?')}"
-        collisions = tuple(getattr(report, "collisions", ()) or ())
-        if not collisions:
-            return str(location)
-        return (
-            f"{location}: {format_collision_pairs(collisions)}; "
-            f"Contact geometry: {format_collision_diagnostics(collisions)}"
-        )
-
-    def _set_motion_safety_controls(self):
-        report = self.quarantined_motion_report
-        has_quarantine = bool(self.quarantined_motion_qposes)
-        has_candidate = bool(self.safe_motion_candidate_qposes)
-        self.jump_to_unsafe_button.setVisible(report is not None)
-        self.try_safe_reroute_button.setVisible(has_quarantine)
-        self.accept_safe_motion_button.setVisible(has_candidate)
-        self.revert_safe_motion_button.setVisible(
-            has_quarantine or has_candidate
-        )
-        self.timeslice_slider.set_safety_reports(
-            (report,) if report is not None else ()
-        )
-
-    def _clear_motion_safety_review(self):
-        self.quarantined_motion_qposes = ()
-        self.quarantined_motion_times = ()
-        self.quarantined_motion_report = None
-        self.quarantined_motion_source = None
-        self.quarantined_motion_source_path = None
-        self.safe_motion_candidate_qposes = ()
-        self.safe_motion_candidate_times = ()
-        self._clear_ghost_overlay(source="safety_candidate")
-        self._set_motion_safety_controls()
-
-    def quarantine_motion(
-        self,
-        qposes,
-        times,
-        *,
-        report=None,
-        source="motion",
-        source_path=None,
-    ):
-        """Keep unsafe motion inspectable without publishing it to playback."""
-        if not self.robot_state:
-            return False
-        try:
-            normalized_times, normalized_qposes = validate_trajectory_arrays(
-                times, qposes, int(self.robot_model.mj_model.nq)
-            )
-        except ValueError as error:
-            self.status_label.setText(
-                f"Could not quarantine invalid {source}: {error}"
-            )
-            return False
-        if not normalized_qposes:
-            return False
-
-        self.pause_playback()
-        self.quarantined_motion_qposes = tuple(
-            qpos.copy() for qpos in normalized_qposes
-        )
-        self.quarantined_motion_times = tuple(normalized_times)
-        self.quarantined_motion_report = report
-        self.quarantined_motion_source = str(source)
-        self.quarantined_motion_source_path = (
-            None if source_path is None else str(source_path)
-        )
-        self.safe_motion_candidate_qposes = ()
-        self.safe_motion_candidate_times = ()
-        self.ghost_trajectory = [
-            qpos.copy() for qpos in self.quarantined_motion_qposes
-        ]
-        self.ghost_collision_flags = [
-            False for _qpos in self.quarantined_motion_qposes
-        ]
-        segment_index = getattr(report, "segment_index", None)
-        segment_fraction = (
-            float(getattr(report, "segment_fraction", 0.0))
-            if report is not None else 0.0
-        )
-        if (
-            segment_index is not None
-            and 0.0 < segment_fraction < 1.0
-            and 0 <= int(segment_index) < len(self.ghost_trajectory) - 1
-        ):
-            segment_index = int(segment_index)
-            collision_qpos = self.state_timeline._interpolate(
-                self.quarantined_motion_qposes[segment_index],
-                self.quarantined_motion_qposes[segment_index + 1],
-                segment_fraction,
-            )
-            self.ghost_trajectory.insert(segment_index + 1, collision_qpos)
-            self.ghost_collision_flags.insert(segment_index + 1, True)
-        elif report is not None:
-            sample_index = max(
-                0,
-                min(
-                    int(getattr(report, "sample_index", 0)),
-                    len(self.ghost_collision_flags) - 1,
-                ),
-            )
-            self.ghost_collision_flags[sample_index] = True
-        else:
-            self.ghost_collision_flags = [
-                True for _qpos in self.ghost_trajectory
-            ]
-        self.ghost_source = "safety_candidate"
-        self._rebuild_ghosts()
-        self._set_motion_safety_controls()
-        self.status_label.setText(
-            f"Quarantined unsafe {source}; playback and export still use the "
-            f"last accepted safe motion. First issue: "
-            f"{self._motion_report_text(report)}. Use Jump to unsafe time, "
-            "Try Safe Reroute, or Revert."
-        )
-        return True
-
-    def jump_to_motion_safety_issue(self):
-        report = self.quarantined_motion_report
-        if report is None:
-            return False
-        time = getattr(report, "time", None)
-        if time is None:
-            index = int(getattr(report, "sample_index", 0))
-            if not self.quarantined_motion_times:
-                return False
-            index = max(0, min(index, len(self.quarantined_motion_times) - 1))
-            time = self.quarantined_motion_times[index]
-        time = float(time)
-        qposes = self.quarantined_motion_qposes
-        times = self.quarantined_motion_times
-        if time <= times[0]:
-            qpos = qposes[0]
-        elif time >= times[-1]:
-            qpos = qposes[-1]
-        else:
-            upper = bisect_right(times, time)
-            lower = upper - 1
-            duration = times[upper] - times[lower]
-            fraction = (
-                0.0 if duration <= 0.0
-                else (time - times[lower]) / duration
-            )
-            qpos = self.state_timeline._interpolate(
-                qposes[lower], qposes[upper], fraction
-            )
-        self.display_time = max(
-            0.0, min(time, self.timeline_duration)
-        )
-        self._set_timeslice_widgets(self.display_time)
-        self.playback_state.set_qpos(qpos)
-        self.canvas.set_robot_states(
-            self.playback_state, self.preview_state, self.ghost_renderer
-        )
-        self.canvas.set_preview_visible(False)
-        self.canvas.update()
-        self.timeslice_preview_time_changed.emit(self.display_time)
-        self.status_label.setText(
-            f"Unsafe motion location: {self._motion_report_text(report)}"
-        )
-        return True
-
-    def try_safe_reroute(self):
-        if not self.quarantined_motion_qposes:
-            self.status_label.setText("No quarantined motion is available to reroute.")
-            return False
-        from application.motion_safety import propose_safe_motion_repair
-
-        result = propose_safe_motion_repair(
-            self.robot_model,
-            self.quarantined_motion_qposes,
-            self.quarantined_motion_times,
-            checker=self.collision_checker,
-        )
-        if not result.success:
-            if result.blocking_report is not None:
-                self.quarantined_motion_report = result.blocking_report
-            self._set_motion_safety_controls()
-            self.status_label.setText(
-                f"Safe reroute was not found: {result.status}. "
-                "The quarantined motion remains unchanged."
-            )
-            return False
-
-        self.safe_motion_candidate_qposes = tuple(
-            qpos.copy() for qpos in result.qposes
-        )
-        self.safe_motion_candidate_times = tuple(result.times)
-        self.ghost_trajectory = [
-            qpos.copy() for qpos in self.safe_motion_candidate_qposes
-        ]
-        self.ghost_collision_flags = [
-            False for _qpos in self.safe_motion_candidate_qposes
-        ]
-        self.ghost_source = "safety_candidate"
-        self._rebuild_ghosts()
-        self._set_motion_safety_controls()
-        self.status_label.setText(
-            f"{result.status} Review the proposed Preview Path, then choose "
-            "Accept Safe Motion or Revert."
-        )
-        return True
-
-    def accept_safe_motion(self):
-        if not self.safe_motion_candidate_qposes:
-            self.status_label.setText("No reviewed safe-motion candidate is ready.")
-            return False
-        qposes = tuple(qpos.copy() for qpos in self.safe_motion_candidate_qposes)
-        times = tuple(self.safe_motion_candidate_times)
-        source = self.quarantined_motion_source or "motion"
-        source_path = self.quarantined_motion_source_path
-        self._clear_motion_safety_review()
-        if not self.set_robot_trajectory(qposes, times=times):
-            return False
-
-        if source == "import" and self.state_timeline and qposes:
-            self.state_timeline.reset(times[0], qposes[0])
-            for time, qpos in zip(times[1:], qposes[1:]):
-                self.state_timeline.set_state(time, qpos)
-            self.set_defined_timeslices(times)
-            if source_path is not None:
-                self.trajectory_csv_loaded.emit(source_path)
-
-        self.safe_motion_accepted.emit(qposes, times, source, source_path)
-        self.status_label.setText(
-            f"Accepted {len(qposes)} adaptively validated safe motion states "
-            f"from {source}."
-        )
-        self.history_action_finished.emit("Accept safe motion")
-        return True
-
-    def revert_safe_motion(self):
-        if not (
-            self.quarantined_motion_qposes or self.safe_motion_candidate_qposes
-        ):
-            return False
-        self._clear_motion_safety_review()
-        self._sync_playback_pose_ghosts()
-        self.timeslice_slider.set_safety_reports(
-            (self.robot_trajectory_warning_report,)
-        )
-        self.status_label.setText(
-            "Discarded the quarantined/repaired candidate; the last accepted "
-            "motion is unchanged."
-        )
-        return True
 
     def set_smoothing_widget(self, widget):
         if widget is None:
@@ -1103,52 +809,6 @@ class RobotViewer3D(QWidget):
             # as the committed state before taking the logical-target snapshot.
             self.timeslice_time_changed.emit(slice_time)
 
-        candidate_qpos = self.committed_state.get_qpos()
-        limit_error = self._joint_limit_violation(candidate_qpos)
-        if limit_error is not None:
-            self.status_label.setText(
-                f"Cannot Commit Keyframe: {limit_error}."
-            )
-            return
-        projection = project_qpos_above_flat_ground(
-            self.robot_model,
-            candidate_qpos,
-            checker=self.collision_checker,
-        )
-        if not projection.success:
-            self.status_label.setText(
-                "Cannot Commit Keyframe: safety barrier rejected the "
-                f"committed pose ({projection.reason})."
-            )
-            return
-        if projection.changed:
-            self.set_robot_state_for_current_time(projection.qpos)
-            self.update_current_keyframe_from_robot_state(
-                refresh_ghosts=True
-            )
-            candidate_qpos = projection.qpos
-
-        (
-            interval_warning,
-            interval_blocking,
-            candidate_times,
-            candidate_qposes,
-        ) = self._validate_candidate_keyframe_intervals(
-            candidate_qpos, slice_time
-        )
-        if interval_blocking is not None:
-            self.quarantine_motion(
-                candidate_qposes,
-                candidate_times,
-                report=interval_blocking,
-                source="Keyframe interval",
-            )
-            self.status_label.setText(
-                "Cannot Commit Keyframe: adaptive between-Keyframe validation "
-                f"found {self._motion_report_text(interval_blocking)}."
-            )
-            return
-        self.timeslice_slider.set_safety_reports((interval_warning,))
         self.accept_timeslice_requested.emit()
 
     def delete_timeslice(self):
@@ -1312,31 +972,7 @@ class RobotViewer3D(QWidget):
 
     def _joint_changed(self, name, value):
         self.begin_preview()
-        self._use_editor_canvas_states()
-        self.canvas.set_preview_visible(True)
-        previous_qpos = self.preview_state.get_qpos()
         self.preview_state.set_joint_value(name, value)
-        requested_collisions = (
-            self.collision_checker.get_collisions(self.preview_state)
-            if self.collision_checker else []
-        )
-        projection = project_qpos_above_flat_ground(
-            self.robot_model,
-            self.preview_state.get_qpos(),
-            checker=self.collision_checker,
-        )
-        if not projection.success:
-            self.preview_state.set_qpos(previous_qpos)
-            self._set_target_to_selected_pose()
-            self._update_preview_collisions(requested_collisions)
-            self._sync_joint_controls()
-            self.status_label.setText(
-                f"Safety barrier stopped Joint Angles edit for {name}: "
-                f"{projection.reason}."
-            )
-            return
-        if projection.changed:
-            self.preview_state.set_qpos(projection.qpos)
         self._set_target_to_selected_pose()
         collisions = self._update_preview_collisions()
         if self.last_valid_target_position is not None:
@@ -1347,14 +983,7 @@ class RobotViewer3D(QWidget):
                 pitch,
                 yaw,
             )
-        if projection.changed:
-            self.status_label.setText(
-                f"Preview FK: {name} = {value:+.3f} rad; "
-                f"ground barrier auto-corrected the pose by raising the base "
-                f"{projection.applied_offset * 1000.0:.1f} mm; "
-                "use Commit Keyframe to save"
-            )
-        elif collisions:
+        if collisions:
             names = format_collision_pairs(collisions)
             details = format_collision_diagnostics(collisions)
             self.status_label.setText(
@@ -1560,8 +1189,6 @@ class RobotViewer3D(QWidget):
             self.status_label.setText("Target pose moved; no body/site is selected.")
             return
         self.begin_preview()
-        self._use_editor_canvas_states()
-        self.canvas.set_preview_visible(True)
         if self.last_valid_target_position is None:
             current_position, current_quaternion = self.preview_state.get_body_pose(
                 name, kind
@@ -1620,33 +1247,12 @@ class RobotViewer3D(QWidget):
             tcp_orientation_required=rotation_drag,
         )
         if result.success:
-            projection = project_qpos_above_flat_ground(
-                self.robot_model,
-                result.qpos,
-                checker=self.collision_checker,
-            )
-            if projection.success:
-                result.qpos = projection.qpos
-                self.preview_state.set_qpos(result.qpos)
-                if projection.changed:
-                    result.position, result.quaternion = (
-                        self.preview_state.get_body_pose(name, kind)
-                    )
-                    result.status += (
-                        "; final ground barrier correction "
-                        f"{projection.applied_offset * 1000.0:.1f} mm"
-                    )
-                self.last_valid_target_position = result.position.copy()
-                self.last_valid_target_quaternion = result.quaternion.copy()
-            else:
-                result.success = False
-                result.status = (
-                    "Safety barrier retained the last safe drag pose: "
-                    f"{projection.reason}"
-                )
+            self.preview_state.set_qpos(result.qpos)
+            self.last_valid_target_position = result.position.copy()
+            self.last_valid_target_quaternion = result.quaternion.copy()
 
-        # Blocking contacts clamp at the last safe substep. IK failures can
-        # likewise leave the handle at the last solvable substep.
+        # Collision is a preview warning rather than a drag constraint. IK
+        # failures can still leave the handle at the last solvable substep.
         self.canvas.set_target_pose(
             self.last_valid_target_position,
             self.last_valid_target_quaternion,
@@ -1755,52 +1361,14 @@ class RobotViewer3D(QWidget):
                     blocking_collision_indices.append(index)
                 if not first_collisions:
                     first_collisions = tuple(collisions)
-        adaptive_warning = None
-        adaptive_blocking = None
-        if self.collision_checker is not None:
-            adaptive_warning, adaptive_blocking = (
-                adaptive_trajectory_collision_reports(
-                    self.robot_model,
-                    (start, goal),
-                    times=(0.0, 1.0),
-                    checker=self.collision_checker,
-                )
-            )
-        adaptive_report = adaptive_blocking or adaptive_warning
-        if adaptive_report is not None:
-            fraction = float(
-                getattr(adaptive_report, "segment_fraction", 0.0)
-            )
-            report_index = max(
-                0,
-                min(len(planned) - 1, int(round(fraction * (len(planned) - 1)))),
-            )
-            if report_index not in collision_indices:
-                collision_indices.append(report_index)
-            if adaptive_report.blocking and report_index not in blocking_collision_indices:
-                blocking_collision_indices.append(report_index)
-            if not first_collisions:
-                first_collisions = tuple(adaptive_report.collisions)
         if collision_indices:
             names = format_collision_pairs(first_collisions)
             details = format_collision_diagnostics(first_collisions)
-            barrier_note = (
-                " A blocking contact was found between poses, so Commit "
-                "Keyframe will remain blocked; use Try Safe Reroute."
-                if blocking_collision_indices else
-                " Contacts are advisory, so the path may still be committed."
-            )
-            report_note = (
-                f" Adaptive first issue: "
-                f"{self._motion_report_text(adaptive_report)}."
-                if adaptive_report is not None else ""
-            )
             message = (
                 f"Preview Path contains collision warnings at "
                 f"{len(collision_indices)} of {len(planned)} samples; "
                 f"first at sample {collision_indices[0]}: {names}; "
                 f"contact geometry: {details}. Red poses mark the contacts."
-                f"{report_note}{barrier_note}"
             )
             return (
                 PreviewPathValidation(
@@ -1842,52 +1410,6 @@ class RobotViewer3D(QWidget):
         )
         self.history_action_finished.emit("Preview path")
 
-    def _candidate_timeline_motion(self, qpos, time):
-        time = self.state_timeline.time_key(time)
-        states = [
-            (float(existing_time), self.state_timeline.get_state(existing_time))
-            for existing_time in self.state_timeline.times()
-            if self.state_timeline.time_key(existing_time) != time
-        ]
-        states.append((float(time), np.asarray(qpos, dtype=float).copy()))
-        states.sort(key=lambda item: item[0])
-        return (
-            tuple(item[0] for item in states),
-            tuple(item[1] for item in states),
-        )
-
-    def _validate_candidate_keyframe_intervals(self, qpos, time):
-        """Validate only the intervals whose endpoint this commit replaces."""
-        if self.state_timeline is None or self.collision_checker is None:
-            return None, None, (), ()
-        times, qposes = self._candidate_timeline_motion(qpos, time)
-        candidate_key = self.state_timeline.time_key(time)
-        candidate_index = next(
-            index
-            for index, value in enumerate(times)
-            if self.state_timeline.time_key(value) == candidate_key
-        )
-        pair_starts = []
-        if candidate_index > 0:
-            pair_starts.append(candidate_index - 1)
-        if candidate_index + 1 < len(times):
-            pair_starts.append(candidate_index)
-
-        first_warning = None
-        first_blocking = None
-        for pair_start in pair_starts:
-            warning, blocking = adaptive_trajectory_collision_reports(
-                self.robot_model,
-                qposes[pair_start:pair_start + 2],
-                times=times[pair_start:pair_start + 2],
-                checker=self.collision_checker,
-            )
-            if first_warning is None and warning is not None:
-                first_warning = warning
-            if first_blocking is None and blocking is not None:
-                first_blocking = blocking
-        return first_warning, first_blocking, times, qposes
-
     def accept_preview(self, *, emit_pose_finished=True):
         if not self.preview_active:
             self.status_label.setText("No preview changes to commit.")
@@ -1898,32 +1420,6 @@ class RobotViewer3D(QWidget):
                 "Cannot commit keyframe: preview pose contains non-finite qpos values."
             )
             return False
-        limit_error = self._joint_limit_violation(preview_qpos)
-        if limit_error is not None:
-            self.status_label.setText(
-                f"Cannot commit Keyframe: {limit_error}."
-            )
-            return False
-        projection = project_qpos_above_flat_ground(
-            self.robot_model,
-            preview_qpos,
-            checker=self.collision_checker,
-        )
-        if not projection.success:
-            collisions = (
-                self.collision_checker.get_collisions(self.preview_state)
-                if self.collision_checker else []
-            )
-            self.canvas.set_preview_collisions(collisions)
-            self.status_label.setText(
-                "Cannot commit Keyframe: safety barrier could not correct the "
-                f"preview ({projection.reason})."
-            )
-            return False
-        if projection.changed:
-            preview_qpos = projection.qpos
-            self.preview_state.set_qpos(preview_qpos)
-
         collisions = (
             self.collision_checker.get_collisions(self.preview_state)
             if self.collision_checker else []
@@ -1938,30 +1434,6 @@ class RobotViewer3D(QWidget):
                 f"contact geometry: {details}."
             )
             return False
-        (
-            interval_warning,
-            interval_blocking,
-            candidate_times,
-            candidate_qposes,
-        ) = self._validate_candidate_keyframe_intervals(
-            preview_qpos, self.current_time
-        )
-        if interval_blocking is not None:
-            self.quarantine_motion(
-                candidate_qposes,
-                candidate_times,
-                report=interval_blocking,
-                source="Keyframe interval",
-            )
-            self.canvas.set_preview_collisions(collisions)
-            self.status_label.setText(
-                "Cannot commit Keyframe: the endpoint is safe, but adaptive "
-                "validation found a blocking contact "
-                f"{self._motion_report_text(interval_blocking)}. "
-                "Use Try Safe Reroute or adjust the surrounding Keyframes."
-            )
-            return False
-        self.timeslice_slider.set_safety_reports((interval_warning,))
         self.committed_state.set_qpos(preview_qpos)
         self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
         self.preview_state.set_qpos(self.committed_state.get_qpos())
@@ -1971,19 +1443,9 @@ class RobotViewer3D(QWidget):
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
         self._set_target_to_selected_pose()
-        if projection.changed:
-            self.status_label.setText(
-                f"Committed Keyframe at t={self.current_time:.2f} s after the "
-                f"ground barrier raised the base "
-                f"{projection.applied_offset * 1000.0:.1f} mm"
-            )
-        elif collisions or interval_warning is not None:
-            warning_collisions = (
-                collisions
-                if collisions else interval_warning.collisions
-            )
-            names = format_collision_pairs(warning_collisions)
-            details = format_collision_diagnostics(warning_collisions)
+        if collisions:
+            names = format_collision_pairs(collisions)
+            details = format_collision_diagnostics(collisions)
             self.status_label.setText(
                 f"Committed keyframe at t={self.current_time:.2f} s; "
                 f"Collision warning: {names}; Contact geometry: {details}"
@@ -2498,7 +1960,7 @@ class RobotViewer3D(QWidget):
         if self._last_export_collision_warning is not None:
             report = self._last_export_collision_warning
             collision_note = (
-                f"; Collision warning {report.location_label}: "
+                f"; Collision warning at sample {report.sample_index}: "
                 f"{format_collision_pairs(report.collisions)}"
             )
         self.status_label.setText(
@@ -2532,36 +1994,13 @@ class RobotViewer3D(QWidget):
     def _apply_loaded_qpos(self, loaded):
         self.pause_playback()
         self.canvas.cancel_transform_drag()
-        limit_error = self._joint_limit_violation(loaded.qpos)
-        if limit_error is not None:
-            self.status_label.setText(
-                f"Could not load qpos from {loaded.path.name}: {limit_error}."
-            )
-            return False
-        projection = project_qpos_above_flat_ground(
-            self.robot_model,
-            loaded.qpos,
-            checker=self.collision_checker,
-        )
-        if not projection.success:
-            self.status_label.setText(
-                f"Could not load qpos from {loaded.path.name}: safety barrier "
-                f"rejected the pose ({projection.reason})."
-            )
-            return False
-        self.set_robot_state_for_current_time(projection.qpos)
+        self.set_robot_state_for_current_time(loaded.qpos)
         self.update_current_keyframe_from_robot_state(refresh_ghosts=True)
-        correction = (
-            f"; ground barrier raised the base "
-            f"{projection.applied_offset * 1000.0:.1f} mm"
-            if projection.changed else ""
-        )
         self.status_label.setText(
             f"Loaded {loaded.qpos.size}-value qpos from {loaded.path.name} at "
-            f"t={self.current_time:.2f} s{correction}"
+            f"t={self.current_time:.2f} s"
         )
         self.history_action_finished.emit("Load qpos")
-        return True
 
     def load_trajectory_csv(self, csv_path):
         """Load headerless time,qpos rows into playback and editable qpos states."""
@@ -2581,14 +2020,7 @@ class RobotViewer3D(QWidget):
             self._prompt_trajectory_import_dt_on_load = bool(prompt_import_dt)
         self.pause_playback()
         self.canvas.cancel_transform_drag()
-        if not self.set_robot_trajectory(
-            qposes,
-            times=times,
-            quarantine_source="import",
-            quarantine_source_path=loaded.path,
-        ):
-            self._background_trajectory_postprocess_requested = False
-            return False
+        self.set_robot_trajectory(qposes, times=times)
         if self.state_timeline and qposes:
             self.state_timeline.reset(times[0], qposes[0])
             for time, qpos in zip(times[1:], qposes[1:]):
@@ -2608,7 +2040,6 @@ class RobotViewer3D(QWidget):
             background_postprocess
         )
         self.trajectory_csv_loaded.emit(str(loaded.path))
-        return True
 
     def _trajectory_csv_load_failed(self, error):
         self._prompt_trajectory_import_dt_on_load = False
@@ -2673,31 +2104,19 @@ class RobotViewer3D(QWidget):
             times = export.times
             qposes = export.qposes
 
-        for index, qpos in enumerate(qposes):
-            limit_error = self._joint_limit_violation(qpos)
-            if limit_error is not None:
-                raise ValueError(
-                    f"{source_name} qpos row {index + 1} has {limit_error}"
-                )
-
-        # Always validate the exact export candidate. This catches collisions
-        # between rows even when endpoints are safe, and remains independent
-        # of the user-selected Export interval.
-        warning_report, blocking_report = (
-            adaptive_trajectory_collision_reports(
-                self.robot_model,
-                qposes,
-                times=times,
-                checker=self.collision_checker,
+        if self.robot_trajectory and sample_dt is None:
+            warning_report = self.robot_trajectory_warning_report
+            blocking_report = self.robot_trajectory_blocking_report
+        else:
+            warning_report, blocking_report = trajectory_collision_reports(
+                self.robot_model, qposes, checker=self.collision_checker
             )
-            if qposes else (None, None)
-        )
         if blocking_report is not None:
             names = format_collision_pairs(blocking_report.collisions)
             details = format_collision_diagnostics(blocking_report.collisions)
             raise ValueError(
-                f"{source_name} has a blocking collision "
-                f"{blocking_report.location_label}: {names}; "
+                f"{source_name} has a blocking collision at sample "
+                f"{blocking_report.sample_index}: {names}; "
                 f"contact geometry: {details}"
             )
         self._last_export_collision_warning = warning_report
@@ -2714,7 +2133,7 @@ class RobotViewer3D(QWidget):
         if self._last_export_collision_warning is not None:
             report = self._last_export_collision_warning
             collision_note = (
-                f"; Collision warning {report.location_label}: "
+                f"; Collision warning at sample {report.sample_index}: "
                 f"{format_collision_pairs(report.collisions)}"
             )
         self.status_label.setText(
@@ -2732,7 +2151,7 @@ class RobotViewer3D(QWidget):
             return ""
         severity = "Blocking collision" if report.blocking else "Collision warning"
         return (
-            f"{severity} {getattr(report, 'location_label', '')}: "
+            f"{severity} at generated sample {report.sample_index}: "
             f"{format_collision_pairs(report.collisions)}; "
             f"Contact geometry: {format_collision_diagnostics(report.collisions)}"
         )
@@ -2764,68 +2183,41 @@ class RobotViewer3D(QWidget):
         suffix = " (preview)" if self.preview_active else " (committed)"
         self.root_pose_label.setText(f"{x:+.3f}, {y:+.3f}, {z:+.3f} m{suffix}")
 
-    def set_robot_trajectory(
-        self,
-        qposes,
-        times=None,
-        activate_first_frame=True,
-        *,
-        quarantine_source="motion",
-        quarantine_source_path=None,
-    ):
-        """Publish motion only after endpoint and between-frame validation."""
+    def set_robot_trajectory(self, qposes, times=None, activate_first_frame=True):
         if not self.robot_state:
-            return False
+            return
         self.scrub_preview_timer.stop()
         self._pending_scrub_preview_time = None
-        qposes = tuple(qposes)
-        times = (
-            tuple(float(index) for index in range(len(qposes)))
-            if times is None else tuple(times)
-        )
-        try:
-            valid_times, valid = validate_trajectory_arrays(
-                times, qposes, int(self.robot_state.mj_model.nq)
-            )
-        except ValueError as error:
-            self.status_label.setText(
-                f"Could not publish {quarantine_source}: {error}"
-            )
-            return False
-        for index, qpos in enumerate(valid):
-            limit_error = self._joint_limit_violation(qpos)
-            if limit_error is not None:
-                self.status_label.setText(
-                    f"Could not publish {quarantine_source}: qpos row "
-                    f"{index + 1} has {limit_error}."
-                )
-                return False
-
-        warning_report, blocking_report = (
-            adaptive_trajectory_collision_reports(
-                self.robot_model,
-                valid,
-                times=valid_times,
-                checker=self.collision_checker,
-            )
-            if valid else (None, None)
-        )
-        if blocking_report is not None:
-            self.quarantine_motion(
-                valid,
-                valid_times,
-                report=blocking_report,
-                source=quarantine_source,
-                source_path=quarantine_source_path,
-            )
-            return False
-
-        self._clear_motion_safety_review()
+        valid = []
+        valid_times = []
+        times = list(times) if times is not None else None
+        for index, qpos in enumerate(qposes):
+            try:
+                if len(qpos) == self.robot_state.mj_model.nq:
+                    valid.append(qpos.copy())
+                    if times is not None and index < len(times):
+                        valid_times.append(float(times[index]))
+            except (TypeError, AttributeError):
+                continue
+        if times is None or len(valid_times) != len(valid):
+            valid_times = [float(index) for index in range(len(valid))]
+        elif any(
+            earlier > later
+            for earlier, later in zip(valid_times, valid_times[1:])
+        ):
+            ordered = sorted(zip(valid_times, valid), key=lambda item: item[0])
+            valid_times = [item[0] for item in ordered]
+            valid = [item[1] for item in ordered]
         self.robot_trajectory = valid
         self.robot_trajectory_times = valid_times
-        self.robot_trajectory_warning_report = warning_report
-        self.robot_trajectory_blocking_report = None
-        self.timeslice_slider.set_safety_reports((warning_report,))
+        (
+            self.robot_trajectory_warning_report,
+            self.robot_trajectory_blocking_report,
+        ) = trajectory_collision_reports(
+            self.robot_model,
+            valid,
+            checker=self.collision_checker,
+        ) if valid else (None, None)
         if valid_times:
             self.set_timeline_duration(max(self.timeline_duration, max(valid_times)))
         self._clear_ghost_overlay(source="preview_path")
@@ -2835,7 +2227,6 @@ class RobotViewer3D(QWidget):
             self.status_label.setText(f"Loaded {len(valid)} robot trajectory states.")
         else:
             self._update_frame_readout(self.display_time)
-        return True
 
     def clear_robot_trajectory(self):
         self.pause_playback()
@@ -2845,8 +2236,6 @@ class RobotViewer3D(QWidget):
         self.robot_trajectory_times = []
         self.robot_trajectory_warning_report = None
         self.robot_trajectory_blocking_report = None
-        self._clear_motion_safety_review()
-        self.timeslice_slider.set_safety_reports(())
         self.ghost_trajectory = []
         self.ghost_collision_flags = []
         self.ghost_source = None
@@ -2897,11 +2286,7 @@ class RobotViewer3D(QWidget):
                 if joint:
                     qpos[joint.qpos_address] = value
             qposes.append(qpos)
-        return self.set_robot_trajectory(
-            qposes,
-            times=times,
-            quarantine_source="generated",
-        )
+        self.set_robot_trajectory(qposes, times=times)
 
     def generate_demo_trajectory(self):
         start = self.robot_state.get_qpos()
@@ -2915,12 +2300,8 @@ class RobotViewer3D(QWidget):
         qposes = interpolate_qpos(start, target, 60)
         frame_period = self.play_timer.interval() / 1000.0
         times = [index * frame_period for index in range(len(qposes))]
-        if self.set_robot_trajectory(
-            qposes,
-            times=times,
-            quarantine_source="demo",
-        ):
-            self.history_action_finished.emit("Demo trajectory")
+        self.set_robot_trajectory(qposes, times=times)
+        self.history_action_finished.emit("Demo trajectory")
 
     def _rebuild_ghosts(self):
         if self.ghost_renderer:
@@ -2942,9 +2323,6 @@ class RobotViewer3D(QWidget):
         self._update_ghost_options()
 
     def _sync_playback_pose_ghosts(self):
-        if self.ghost_source == "safety_candidate":
-            self._update_ghost_options()
-            return
         if self.show_ghosts.isChecked() and self.robot_trajectory:
             self.ghost_trajectory = [qpos.copy() for qpos in self.robot_trajectory]
             self.ghost_collision_flags = [False] * len(self.ghost_trajectory)
@@ -2962,7 +2340,7 @@ class RobotViewer3D(QWidget):
     def _update_ghost_options(self):
         visible = bool(
             self.ghost_trajectory and (
-                self.ghost_source in ("preview_path", "safety_candidate")
+                self.ghost_source == "preview_path"
                 or (
                     self.ghost_source == "playback"
                     and self.show_ghosts.isChecked()
@@ -2986,39 +2364,6 @@ class RobotViewer3D(QWidget):
 
     def start_playback(self):
         if not self.robot_trajectory:
-            return
-        for index, qpos in enumerate(self.robot_trajectory):
-            limit_error = self._joint_limit_violation(qpos)
-            if limit_error is not None:
-                self.status_label.setText(
-                    f"Playback blocked: qpos row {index + 1} has "
-                    f"{limit_error}."
-                )
-                return
-        warning_report, blocking_report = (
-            adaptive_trajectory_collision_reports(
-                self.robot_model,
-                self.robot_trajectory,
-                times=self.robot_trajectory_times,
-                checker=self.collision_checker,
-            )
-        )
-        self.robot_trajectory_warning_report = warning_report
-        self.robot_trajectory_blocking_report = blocking_report
-        self.timeslice_slider.set_safety_reports(
-            (warning_report, blocking_report)
-        )
-        if blocking_report is not None:
-            self.quarantine_motion(
-                self.robot_trajectory,
-                self.robot_trajectory_times,
-                report=blocking_report,
-                source="playback revalidation",
-            )
-            self.status_label.setText(
-                "Playback blocked because the active motion no longer passes "
-                f"the safety gate: {self._motion_report_text(blocking_report)}"
-            )
             return
         start_time = self.robot_trajectory_times[0]
         end_time = self.robot_trajectory_times[-1]
