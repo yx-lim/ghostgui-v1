@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from core.ik import Collision
 from application.backend_interface import PythonRobotConfiguration
+from application.trajectory_generation import TrajectorySafetyError
 from application.project_manager import (
     GhostGUIProject,
     ghostgui_projects_dir,
@@ -532,6 +534,177 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertIn("Cannot preview path", self.viewer.status_label.text())
         self.assertIn("outside limits", self.viewer.status_label.text())
 
+    def _between_frame_checker(self, avoid_joint, path_joint):
+        avoid_center = float(
+            self.viewer.robot_model.home_qpos[avoid_joint.qpos_address]
+        )
+        path_center = float(
+            self.viewer.robot_model.home_qpos[path_joint.qpos_address]
+        )
+
+        class BetweenFrameChecker:
+            def get_collisions(self, state):
+                qpos = state.get_qpos()
+                if (
+                    abs(float(qpos[path_joint.qpos_address]) - path_center)
+                    <= 0.021
+                    and abs(float(qpos[avoid_joint.qpos_address]) - avoid_center)
+                    <= 0.041
+                ):
+                    return [
+                        Collision(
+                            "moving_geom",
+                            "torso_geom",
+                            "arm",
+                            "torso",
+                            -0.01,
+                            "self",
+                        )
+                    ]
+                return []
+
+            def get_blocking_collisions(self, state):
+                return [
+                    collision
+                    for collision in self.get_collisions(state)
+                    if collision.blocking
+                ]
+
+        return BetweenFrameChecker(), avoid_center, path_center
+
+    def test_playback_promotion_quarantines_between_frame_collision(self):
+        joints = sorted(
+            (
+                joint
+                for joint in self.viewer.robot_model.joints.values()
+                if joint.limits is not None
+            ),
+            key=lambda joint: joint.name,
+        )
+        avoid_joint, path_joint = joints[:2]
+        checker, _avoid_center, path_center = self._between_frame_checker(
+            avoid_joint, path_joint
+        )
+        start = self.viewer.robot_model.home_qpos.copy()
+        end = start.copy()
+        start[path_joint.qpos_address] = path_center - 0.16
+        end[path_joint.qpos_address] = path_center + 0.16
+        self.viewer.collision_checker = checker
+
+        published = self.viewer.set_robot_trajectory(
+            (start, end), times=(0.0, 1.0)
+        )
+
+        self.assertFalse(published)
+        self.assertEqual(self.viewer.robot_trajectory, [])
+        self.assertEqual(len(self.viewer.quarantined_motion_qposes), 2)
+        self.assertTrue(self.viewer.quarantined_motion_report.is_interior)
+        self.assertFalse(self.viewer.jump_to_unsafe_button.isHidden())
+        self.assertFalse(self.viewer.try_safe_reroute_button.isHidden())
+        self.assertTrue(self.viewer.timeslice_slider.safety_markers[0].blocking)
+
+    def test_commit_rejects_safe_endpoint_when_neighbor_interval_collides(self):
+        joints = sorted(
+            (
+                joint
+                for joint in self.viewer.robot_model.joints.values()
+                if joint.limits is not None
+            ),
+            key=lambda joint: joint.name,
+        )
+        avoid_joint, path_joint = joints[:2]
+        checker, _avoid_center, path_center = self._between_frame_checker(
+            avoid_joint, path_joint
+        )
+        start = self.viewer.robot_model.home_qpos.copy()
+        start[path_joint.qpos_address] = path_center - 0.16
+        goal = start.copy()
+        goal[path_joint.qpos_address] = path_center + 0.16
+        self.viewer.state_timeline.reset(0.0, start)
+        self.viewer.set_robot_state_for_current_time(start)
+        self.viewer.set_current_time(1.0)
+        committed_before = self.viewer.committed_state.get_qpos()
+        self.viewer.begin_preview()
+        self.viewer.preview_state.set_qpos(goal)
+        self.viewer.collision_checker = checker
+
+        accepted = self.viewer.accept_preview()
+
+        self.assertFalse(accepted)
+        self.assertTrue(self.viewer.preview_active)
+        np.testing.assert_allclose(
+            self.viewer.committed_state.get_qpos(), committed_before
+        )
+        self.assertIn("endpoint is safe", self.viewer.status_label.text())
+        self.assertTrue(self.viewer.quarantined_motion_report.is_interior)
+
+    def test_unsafe_import_is_quarantined_without_mutating_timeline(self):
+        joints = sorted(
+            (
+                joint
+                for joint in self.viewer.robot_model.joints.values()
+                if joint.limits is not None
+            ),
+            key=lambda joint: joint.name,
+        )
+        avoid_joint, path_joint = joints[:2]
+        checker, _avoid_center, path_center = self._between_frame_checker(
+            avoid_joint, path_joint
+        )
+        start = self.viewer.robot_model.home_qpos.copy()
+        end = start.copy()
+        start[path_joint.qpos_address] = path_center - 0.16
+        end[path_joint.qpos_address] = path_center + 0.16
+        before_times = self.viewer.state_timeline.times()
+        emitted_paths = []
+        self.viewer.trajectory_csv_loaded.connect(emitted_paths.append)
+        self.viewer.collision_checker = checker
+        loaded = SimpleNamespace(
+            qposes=(start, end),
+            times=(0.0, 1.0),
+            path=Path("/tmp/unsafe-import.csv"),
+        )
+
+        loaded_ok = self.viewer._apply_loaded_trajectory(loaded)
+
+        self.assertFalse(loaded_ok)
+        self.assertEqual(self.viewer.state_timeline.times(), before_times)
+        self.assertEqual(emitted_paths, [])
+        self.assertEqual(self.viewer.quarantined_motion_source, "import")
+        self.assertEqual(self.viewer.robot_trajectory, [])
+
+    def test_safe_reroute_requires_review_before_motion_is_accepted(self):
+        joints = sorted(
+            (
+                joint
+                for joint in self.viewer.robot_model.joints.values()
+                if joint.limits is not None
+            ),
+            key=lambda joint: joint.name,
+        )
+        avoid_joint, path_joint = joints[:2]
+        checker, _avoid_center, path_center = self._between_frame_checker(
+            avoid_joint, path_joint
+        )
+        start = self.viewer.robot_model.home_qpos.copy()
+        end = start.copy()
+        start[path_joint.qpos_address] = path_center - 0.16
+        end[path_joint.qpos_address] = path_center + 0.16
+        self.viewer.collision_checker = checker
+        self.assertFalse(self.viewer.set_robot_trajectory(
+            (start, end), times=(0.0, 1.0)
+        ))
+
+        self.assertTrue(self.viewer.try_safe_reroute())
+        self.assertEqual(self.viewer.robot_trajectory, [])
+        self.assertTrue(self.viewer.safe_motion_candidate_qposes)
+        self.assertFalse(self.viewer.accept_safe_motion_button.isHidden())
+
+        self.assertTrue(self.viewer.accept_safe_motion())
+        self.assertEqual(len(self.viewer.robot_trajectory), 3)
+        self.assertFalse(self.viewer.quarantined_motion_qposes)
+        self.assertIn("Accepted 3", self.viewer.status_label.text())
+
     def test_accept_preview_is_timeline_local(self):
         at_zero = self.viewer.committed_state.get_qpos()
         self.viewer.set_current_time(0.2)
@@ -554,7 +727,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), before)
         self.assertFalse(np.allclose(self.viewer.preview_state.get_qpos(), before))
 
-    def test_joint_collision_highlights_preview_link_and_still_blocks_accept(self):
+    def test_joint_collision_highlights_requested_link_and_clamps_edit(self):
         model = self.viewer.robot_model.mj_model
         geom_id = next(
             candidate
@@ -581,11 +754,13 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.viewer.collision_checker = FixedCollisionChecker()
         name = self.viewer.preview_state.get_joint_names()[0]
         value = self.viewer.preview_state.get_joint_value(name) + 0.01
+        before = self.viewer.preview_state.get_qpos()
 
         self.viewer._joint_changed(name, value)
 
         self.assertTrue(self.viewer.preview_active)
-        self.assertIn("Collision warning", self.viewer.status_label.text())
+        self.assertIn("Safety barrier stopped", self.viewer.status_label.text())
+        np.testing.assert_allclose(self.viewer.preview_state.get_qpos(), before)
         self.assertIn(geom_id, self.viewer.canvas.preview_collision_geom_ids)
         self.assertIn(body_id, self.viewer.canvas.preview_collision_body_ids)
         self.assertTrue(
@@ -594,7 +769,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
         self.assertFalse(self.viewer.accept_preview())
         self.assertTrue(self.viewer.preview_active)
-        self.assertIn("Cannot commit keyframe", self.viewer.status_label.text())
+        self.assertIn("Cannot commit Keyframe", self.viewer.status_label.text())
 
         class NoCollisionChecker:
             def get_collisions(self, _state):
@@ -3056,7 +3231,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.viewer.set_export_dt(1.0)
 
         with patch(
-            "gui.robot_viewer_3d.trajectory_collision_reports",
+            "gui.robot_viewer_3d.adaptive_trajectory_collision_reports",
             return_value=(None, None),
         ):
             export = self.viewer._trajectory_export_snapshot(
@@ -3144,6 +3319,54 @@ class RobotViewerTimelineTests(unittest.TestCase):
             smoothing=0.25,
             export_dt=0.02,
             state_timeline=self.viewer.state_timeline,
+        )
+
+    def test_blocked_generation_quarantines_candidate_without_publishing(self):
+        self.window.trajectory.add_frame(self.window.controls.current_frame())
+        first = self.viewer.committed_state.get_qpos()
+        second = first.copy()
+        second[-1] += 0.01
+        report = object()
+        error = TrajectorySafetyError(
+            "blocking collision at 0.050 s",
+            report=report,
+            candidate_qposes=(first, second),
+            candidate_times=(0.0, 0.1),
+        )
+
+        with patch(
+            "gui.main_window.trajectory_generation.generate_trajectory_status",
+            side_effect=error,
+        ), patch.object(
+            self.viewer,
+            "quarantine_motion",
+            create=True,
+        ) as quarantine, patch.object(
+            self.viewer,
+            "load_backend_states",
+        ) as load_states, patch.object(
+            self.window.viewer_3d_mujoco,
+            "set_trajectory_csv",
+        ) as publish_csv, patch.object(
+            self.window,
+            "record_history_action",
+        ) as record_history:
+            self.window.on_generate_trajectory()
+
+        quarantine.assert_called_once()
+        args, kwargs = quarantine.call_args
+        self.assertEqual(args[1], (0.0, 0.1))
+        np.testing.assert_allclose(args[0][0], first)
+        np.testing.assert_allclose(args[0][1], second)
+        self.assertIs(kwargs["report"], report)
+        self.assertEqual(kwargs["source"], "generated")
+        self.assertIsNone(kwargs["source_path"])
+        load_states.assert_not_called()
+        publish_csv.assert_not_called()
+        record_history.assert_not_called()
+        self.assertIn(
+            "unsafe candidate was quarantined",
+            self.window.status_text.toPlainText(),
         )
 
     def test_refresh_display_passes_trajectory_display_options_to_3d_view(self):

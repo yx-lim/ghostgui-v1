@@ -8,6 +8,8 @@ import mujoco
 import numpy as np
 
 from core.math3d import quaternion_slerp
+from core.robotics import validate_trajectory_arrays
+from core.trajectory import interpolate_qpos_manifold
 from .solver import IKSolverSettings
 from .tasks import TCPOrientationTask, TCPPositionTask
 
@@ -61,7 +63,12 @@ class CollisionPolicy:
 
     allowed_contact_pairs: frozenset[frozenset[str]] = frozenset()
     support_body_ids: frozenset[int] = frozenset()
-    support_penetration_tolerance: float = 0.01
+    # Intended support contact needs a tiny numerical slop, not permission to
+    # sink visibly into the environment.  Environment penetration beyond this
+    # boundary is always blocking, independently of the more permissive
+    # model-specific self-collision threshold.
+    support_penetration_tolerance: float = 0.0005
+    environment_penetration_tolerance: float = 0.0005
     allowed_body_pair_tolerances: tuple[
         tuple[frozenset[str], float], ...
     ] = ()
@@ -73,7 +80,7 @@ class CollisionPolicy:
         robot_model,
         *,
         allowed_contact_pairs=None,
-        support_penetration_tolerance=0.01,
+        support_penetration_tolerance=0.0005,
     ):
         model = robot_model.mj_model
         info = getattr(robot_model, "info", None)
@@ -117,6 +124,9 @@ class CollisionPolicy:
             support_penetration_tolerance=float(
                 support_penetration_tolerance
             ),
+            environment_penetration_tolerance=float(
+                support_penetration_tolerance
+            ),
             blocking_penetration=max(0.0, float(getattr(
                 info, "collision_blocking_penetration_m", 0.001
             ))),
@@ -150,7 +160,11 @@ class CollisionPolicy:
             and float(distance) >= -self.support_penetration_tolerance
         )
 
-    def is_blocking(self, distance):
+    def is_blocking(self, distance, *, kind=None):
+        if kind == "environment":
+            return float(distance) <= -float(
+                self.environment_penetration_tolerance
+            )
         return float(distance) <= -float(self.blocking_penetration)
 
 
@@ -183,6 +197,9 @@ class CollisionChecker:
             support_body_ids=self.policy.support_body_ids,
             support_penetration_tolerance=(
                 self.policy.support_penetration_tolerance
+            ),
+            environment_penetration_tolerance=(
+                self.policy.environment_penetration_tolerance
             ),
             blocking_penetration=self.policy.blocking_penetration,
         )
@@ -226,7 +243,7 @@ class CollisionChecker:
                 body2_id,
                 self._frame_label(body1_id, body1, geom1),
                 self._frame_label(body2_id, body2, geom2),
-                self.policy.is_blocking(float(contact.dist)),
+                self.policy.is_blocking(float(contact.dist), kind=kind),
             )
             pair = tuple(sorted((geom1_id, geom2_id)))
             previous = collisions_by_pair.get(pair)
@@ -271,10 +288,260 @@ class CollisionChecker:
 class TrajectoryCollisionReport:
     sample_index: int
     collisions: tuple[Collision, ...]
+    segment_index: int | None = None
+    segment_fraction: float = 0.0
+    time: float | None = None
 
     @property
     def blocking(self):
         return any(collision.blocking for collision in self.collisions)
+
+    @property
+    def is_interior(self):
+        return (
+            self.segment_index is not None
+            and 0.0 < float(self.segment_fraction) < 1.0
+        )
+
+    @property
+    def location_label(self):
+        """Human-readable location without assuming a particular UI."""
+        time_note = (
+            "" if self.time is None else f" at {float(self.time):.6g} s"
+        )
+        if self.is_interior:
+            percent = 100.0 * float(self.segment_fraction)
+            return (
+                f"segment {self.segment_index} at {percent:.1f}%"
+                f"{time_note}"
+            )
+        return f"sample {self.sample_index}{time_note}"
+
+
+@dataclass(frozen=True)
+class _AdaptiveCollisionSample:
+    qpos: np.ndarray
+    collisions: tuple[Collision, ...]
+    centers: np.ndarray
+    rotations: np.ndarray
+    radii: np.ndarray
+
+
+def _collision_geometry_snapshot(model, state):
+    """Copy collision-geometry transforms used to bound swept movement."""
+    data = getattr(state, "mj_data", None)
+    if data is None:
+        return (
+            np.empty((0, 3), dtype=float),
+            np.empty((0, 3, 3), dtype=float),
+            np.empty(0, dtype=float),
+        )
+
+    geom_xpos = getattr(data, "geom_xpos", None)
+    geom_xmat = getattr(data, "geom_xmat", None)
+    if geom_xpos is not None and geom_xmat is not None:
+        count = int(getattr(model, "ngeom", len(geom_xpos)))
+        geom_ids = np.arange(count, dtype=int)
+        contype = getattr(model, "geom_contype", None)
+        conaffinity = getattr(model, "geom_conaffinity", None)
+        if contype is not None and conaffinity is not None:
+            active = np.logical_or(
+                np.asarray(contype, dtype=int) != 0,
+                np.asarray(conaffinity, dtype=int) != 0,
+            )
+            geom_ids = geom_ids[active]
+        centers = np.asarray(geom_xpos, dtype=float)[geom_ids].copy()
+        rotations = np.asarray(geom_xmat, dtype=float)[geom_ids].reshape(
+            (-1, 3, 3)
+        ).copy()
+        model_radii = getattr(model, "geom_rbound", None)
+        radii = (
+            np.zeros(len(geom_ids), dtype=float)
+            if model_radii is None
+            else np.asarray(model_radii, dtype=float)[geom_ids].copy()
+        )
+        return centers, rotations, radii
+
+    # Minimal/custom state adapters may expose only body transforms.  They
+    # still provide a useful translational bound; configuration-space movement
+    # separately bounds rotations.
+    body_xpos = getattr(data, "xpos", None)
+    body_xmat = getattr(data, "xmat", None)
+    if body_xpos is None or body_xmat is None:
+        return (
+            np.empty((0, 3), dtype=float),
+            np.empty((0, 3, 3), dtype=float),
+            np.empty(0, dtype=float),
+        )
+    centers = np.asarray(body_xpos, dtype=float).reshape((-1, 3)).copy()
+    rotations = np.asarray(body_xmat, dtype=float).reshape((-1, 3, 3)).copy()
+    return centers, rotations, np.zeros(len(centers), dtype=float)
+
+
+def _configuration_movement(model, start, end):
+    displacement = np.zeros(int(model.nv), dtype=float)
+    mujoco.mj_differentiatePos(
+        model, displacement, 1.0, start.qpos, end.qpos
+    )
+    return (
+        0.0
+        if displacement.size == 0
+        else float(np.max(np.abs(displacement)))
+    )
+
+
+def _swept_geometry_movement(start, end):
+    """Conservative endpoint bound for points inside geom bounding spheres."""
+    if start.centers.size == 0 or end.centers.size == 0:
+        return 0.0
+    if start.centers.shape != end.centers.shape:
+        return float("inf")
+    translations = np.linalg.norm(end.centers - start.centers, axis=1)
+    # trace(R0.T @ R1) equals the element-wise Frobenius product.
+    traces = np.einsum("nij,nij->n", start.rotations, end.rotations)
+    cos_angles = np.clip((traces - 1.0) * 0.5, -1.0, 1.0)
+    angles = np.arccos(cos_angles)
+    radii = np.maximum(start.radii, end.radii)
+    rotational_sweep = 2.0 * radii * np.sin(0.5 * angles)
+    return float(np.max(translations + rotational_sweep))
+
+
+def adaptive_trajectory_collision_reports(
+    robot_model,
+    qposes,
+    *,
+    times=None,
+    checker=None,
+    max_joint_step=0.08,
+    max_body_step=0.02,
+    max_depth=12,
+):
+    """Find first advisory and blocking contacts, including between samples.
+
+    Each input sample is checked.  Every adjacent pair is then recursively
+    subdivided on the MuJoCo configuration manifold until both the largest
+    generalized-coordinate step and the largest collision-geometry sweep are
+    bounded by the requested tolerances.  The return shape deliberately
+    matches :func:`trajectory_collision_reports`.
+
+    This is adaptive discrete validation, not an analytic continuous-collision
+    proof.  Its safety resolution is independent of trajectory/export timing.
+    """
+    max_joint_step = float(max_joint_step)
+    max_body_step = float(max_body_step)
+    max_depth = int(max_depth)
+    if not np.isfinite(max_joint_step) or max_joint_step <= 0.0:
+        raise ValueError("max_joint_step must be finite and positive")
+    if not np.isfinite(max_body_step) or max_body_step <= 0.0:
+        raise ValueError("max_body_step must be finite and positive")
+    if max_depth < 0:
+        raise ValueError("max_depth cannot be negative")
+
+    qposes = tuple(qposes)
+    if times is None:
+        times = tuple(float(index) for index in range(len(qposes)))
+    normalized_times, normalized_qposes = validate_trajectory_arrays(
+        times, qposes, int(robot_model.mj_model.nq)
+    )
+    if not normalized_qposes:
+        return None, None
+
+    checker = checker or CollisionChecker(robot_model)
+    state = robot_model.create_state()
+    model = robot_model.mj_model
+
+    def evaluate(qpos):
+        state.set_qpos(qpos)
+        collisions = tuple(checker.get_collisions(state))
+        centers, rotations, radii = _collision_geometry_snapshot(model, state)
+        return _AdaptiveCollisionSample(
+            np.asarray(qpos, dtype=float).copy(),
+            collisions,
+            centers,
+            rotations,
+            radii,
+        )
+
+    endpoint_samples = [evaluate(qpos) for qpos in normalized_qposes]
+    ordered_locations = []
+    if len(endpoint_samples) == 1:
+        ordered_locations.append((
+            0, None, 0.0, normalized_times[0], endpoint_samples[0]
+        ))
+    else:
+        for segment_index in range(len(endpoint_samples) - 1):
+            start = endpoint_samples[segment_index]
+            end = endpoint_samples[segment_index + 1]
+            samples_by_fraction = {0.0: start, 1.0: end}
+
+            def subdivide(lo_fraction, lo_sample, hi_fraction, hi_sample, depth):
+                configuration_movement = _configuration_movement(
+                    model, lo_sample, hi_sample
+                )
+                body_movement = _swept_geometry_movement(lo_sample, hi_sample)
+                if depth >= max_depth or (
+                    configuration_movement <= max_joint_step
+                    and body_movement <= max_body_step
+                ):
+                    return
+                mid_fraction = 0.5 * (lo_fraction + hi_fraction)
+                mid_qpos = interpolate_qpos_manifold(
+                    model,
+                    normalized_qposes[segment_index],
+                    normalized_qposes[segment_index + 1],
+                    mid_fraction,
+                )
+                mid_sample = evaluate(mid_qpos)
+                samples_by_fraction[mid_fraction] = mid_sample
+                subdivide(
+                    lo_fraction, lo_sample, mid_fraction, mid_sample, depth + 1
+                )
+                subdivide(
+                    mid_fraction, mid_sample, hi_fraction, hi_sample, depth + 1
+                )
+
+            subdivide(0.0, start, 1.0, end, 0)
+            start_time = normalized_times[segment_index]
+            duration = normalized_times[segment_index + 1] - start_time
+            for fraction in sorted(samples_by_fraction):
+                if segment_index > 0 and fraction == 0.0:
+                    continue
+                sample_index = (
+                    segment_index + 1 if fraction == 1.0 else segment_index
+                )
+                ordered_locations.append((
+                    sample_index,
+                    segment_index,
+                    fraction,
+                    start_time + fraction * duration,
+                    samples_by_fraction[fraction],
+                ))
+
+    warning_report = None
+    blocking_report = None
+    for sample_index, segment_index, fraction, time, sample in ordered_locations:
+        if sample.collisions and warning_report is None:
+            warning_report = TrajectoryCollisionReport(
+                int(sample_index),
+                sample.collisions,
+                segment_index,
+                float(fraction),
+                float(time),
+            )
+        blocking = tuple(
+            collision for collision in sample.collisions if collision.blocking
+        )
+        if blocking and blocking_report is None:
+            blocking_report = TrajectoryCollisionReport(
+                int(sample_index),
+                blocking,
+                segment_index,
+                float(fraction),
+                float(time),
+            )
+        if warning_report is not None and blocking_report is not None:
+            break
+    return warning_report, blocking_report
 
 
 def first_trajectory_collision(
@@ -339,7 +606,12 @@ class DragSolveResult:
 
 
 class CollisionAwareIKSolver:
-    """Solves incrementally and reports collisions without blocking previews."""
+    """Solve incrementally while keeping the accepted preview collision-safe.
+
+    Each drag substep is solved and collision-checked before it becomes the
+    next accepted state. Advisory contacts may remain visible, but a blocking
+    contact clamps the handle at the last safe substep.
+    """
 
     def __init__(
         self,
@@ -386,6 +658,8 @@ class CollisionAwareIKSolver:
         condition_number = 0.0
         relaxed_constraints = False
         blocked_reason = None
+        barrier_collisions = ()
+        ground_projection_offset = 0.0
         settings = dict(solver_settings or {})
         orientation_weight = (
             self.orientation_weight
@@ -543,6 +817,59 @@ class CollisionAwareIKSolver:
             )
             condition_number = max(condition_number, ik_result.condition_number)
 
+            candidate_collisions = tuple(
+                self.collision_checker.get_collisions(self.candidate_state)
+            )
+            blocking_collisions = tuple(
+                collision
+                for collision in candidate_collisions
+                if collision.blocking
+            )
+            candidate_ground_projected = False
+            if (
+                blocking_collisions
+                and all(
+                    collision.kind == "environment"
+                    for collision in blocking_collisions
+                )
+                and getattr(self, "robot_model", None) is not None
+            ):
+                # Imported lazily to keep the collision data types usable by
+                # the projector without introducing an import-time cycle.
+                from .motion_safety import project_qpos_above_flat_ground
+
+                projection = project_qpos_above_flat_ground(
+                    self.robot_model,
+                    self.candidate_state.get_qpos(),
+                    checker=self.collision_checker,
+                )
+                if projection.success:
+                    self.candidate_state.set_qpos(projection.qpos)
+                    candidate_ground_projected = projection.changed
+                    ground_projection_offset = max(
+                        ground_projection_offset,
+                        float(projection.applied_offset),
+                    )
+                    candidate_collisions = tuple(
+                        self.collision_checker.get_collisions(
+                            self.candidate_state
+                        )
+                    )
+                    blocking_collisions = tuple(
+                        collision
+                        for collision in candidate_collisions
+                        if collision.blocking
+                    )
+            if blocking_collisions:
+                barrier_collisions = blocking_collisions
+                names = format_collision_pairs(blocking_collisions)
+                details = format_collision_diagnostics(blocking_collisions)
+                blocked_reason = (
+                    "Safety barrier stopped the drag before a blocking "
+                    f"collision ({names}); Contact geometry: {details}"
+                )
+                break
+
             accepted_qpos = self.candidate_state.get_qpos()
             solved_position, solved_quaternion = self.candidate_state.get_body_pose(
                 object_name, resolved_kind
@@ -550,7 +877,9 @@ class CollisionAwareIKSolver:
                 candidate_position, candidate_quaternion
             )
             accepted_position = (
-                candidate_position
+                solved_position
+                if candidate_ground_projected
+                else candidate_position
                 if tcp_position_weight > 0.0 and tcp_position_required
                 else solved_position
             )
@@ -574,15 +903,18 @@ class CollisionAwareIKSolver:
             )
 
         if blocked_reason is not None:
+            barrier_note = ""
+            if barrier_collisions and preview_collisions:
+                barrier_note = "; last accepted state" + collision_note
             return DragSolveResult(
                 accepted_qpos,
                 accepted_position,
                 accepted_quaternion,
                 accepted_fraction,
                 accepted_fraction > 0.0,
-                blocked_reason + collision_note,
+                blocked_reason + barrier_note,
                 last_error,
-                preview_collisions,
+                list(barrier_collisions or preview_collisions),
                 near_singularity,
                 min_singular_value,
                 condition_number,
@@ -591,6 +923,11 @@ class CollisionAwareIKSolver:
         relaxation_note = (
             "; optional constraints relaxed" if relaxed_constraints else ""
         )
+        ground_note = (
+            f"; ground barrier raised the base by up to "
+            f"{ground_projection_offset * 1000.0:.1f} mm"
+            if ground_projection_offset > 0.0 else ""
+        )
         return DragSolveResult(
             accepted_qpos,
             accepted_position,
@@ -598,10 +935,10 @@ class CollisionAwareIKSolver:
             1.0,
             True,
             (
-                f"{ik_result.message}{relaxation_note}{collision_note}"
+                f"{ik_result.message}{relaxation_note}{ground_note}{collision_note}"
                 if preview_collisions
                 else f"{ik_result.message}{relaxation_note}; "
-                "state is collision-free"
+                f"state is collision-free{ground_note}"
             ),
             last_error,
             preview_collisions,

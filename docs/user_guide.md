@@ -1,7 +1,7 @@
 # GhostGUI User Guide
 
-GhostGUI creates robot motion by editing target frames or joint angles,
-previewing the result on a live MuJoCo model, committing keyframes, and
+GhostGUI creates robot motion by editing target frames or **Joint Angles**,
+previewing the result on a live MuJoCo model, committing Keyframes, and
 generating a trajectory for playback or export.
 
 ## Launch
@@ -24,17 +24,23 @@ frames, home pose, and 3D geometry.
 `left_hand`, `right_foot`, `base`, or `tool`.
 
 **Orange preview** is the temporary robot pose produced by the transform gizmo,
-pose controls, or joint controls. It is not saved automatically.
+pose controls, or **Joint Angles** controls. It is not saved automatically and
+may remain visible when GhostGUI needs to explain why a proposed edit is unsafe.
 
 **Committed state** is the accepted robot pose at the active time. Keyframes,
 trajectory generation, and exports use committed states.
 
-**Preview Path** validates the transition from the committed state to the orange
-preview. It displays a ghost path, marks collision samples red, and does not
+**Preview Path** displays the adaptive safety check between the committed state
+and the Orange preview. It marks unsafe intervals with red ghosts and does not
 save anything.
 
 **Commit Keyframe** records the current pose at the active time and advances by
-the configured keyframe interval.
+the configured Keyframe interval only when the pose and its neighboring motion
+are free of blocking penetration.
+
+Blocking penetration is never promoted into a committed Keyframe, generated
+motion, playback-ready motion, or export. Intended support contact and shallow
+advisory contact remain distinguishable from blocking penetration.
 
 For the complete state model, see [Preview And Keyframe Concepts](concepts.md).
 
@@ -43,18 +49,19 @@ For the complete state model, see [Preview And Keyframe Concepts](concepts.md).
 1. Choose a robot from the **Robot** menu.
 2. Select a **Target robot frame**, such as `left_hand`.
 3. Move the target with the 3D transform gizmo or the pose controls.
-4. Inspect the orange preview and the **Status** panel.
-5. Optionally select **Preview Path** to validate the transition.
-6. Select **Commit Keyframe** to save the pose at the active time.
-7. Move to another time and commit another keyframe.
-8. Select **Generate**.
+4. Inspect the Orange preview and the **Status** panel.
+5. Optionally select **Preview Path** to inspect the automatic transition check.
+6. Select **Commit Keyframe** to validate and save the pose at the active time.
+7. Move to another time and commit another Keyframe.
+8. Select **Generate**. GhostGUI promotes the result only after motion safety
+   validation succeeds.
 9. Use playback to inspect the motion.
 10. Use **File → Export** to save a pose or trajectory.
 
 The main workflow is:
 
 ```text
-select target → edit → orange preview → Commit Keyframe → Generate → Export
+select target → edit → Orange preview → Commit Keyframe → Generate → Export
 ```
 
 ## Interface
@@ -108,7 +115,7 @@ Use **End Effector** to edit the target frame with X, Y, Z, Roll, Pitch, and Yaw
 controls or the 3D transform gizmo.
 
 Use **Joint Angles** to edit joints directly. The controls and 3D view remain
-synchronized when switching modes, and both modes update the orange preview.
+synchronized when switching modes, and both modes update the Orange preview.
 
 ### Planning
 
@@ -116,18 +123,21 @@ The active time determines where the next keyframe is stored. The time slider
 supports live scrubbing and playback. Releasing the slider selects an editable
 time.
 
-Planning controls include the keyframe interval, timeline duration, Export
+Planning controls include the Keyframe interval, timeline duration, Export
 interval, DSMS motion speed, playback speed, smoothing, collision substeps, and
 preview/playback opacity.
 
 ### Workflow Toolbar
 
-**Preview Path** validates the transition to the orange preview without saving
-it.
+**Preview Path** visualizes the adaptive transition check to the Orange preview
+without saving it. Commit and Generate run their required safety checks even if
+Preview Path was not selected manually.
 
-**Commit Keyframe** records the current pose at the active time.
+**Commit Keyframe** records the current pose at the active time only after the
+pose and affected between-Keyframe intervals pass the hard safety checks.
 
-**Generate** samples the saved keyframes into a robot trajectory.
+**Generate** samples the saved Keyframes into a candidate robot trajectory,
+checks samples and the motion between them, and promotes only a safe result.
 
 **Export interval** sets the uniform time step used by **Generate** and the
 resulting trajectory export. Enter a value from `0.01 s` to `10.00 s`; the
@@ -153,6 +163,39 @@ or mjlab export.
 **Gizmo** shows or hides the transform gizmo.
 
 **Undo/Redo** navigate recorded editing history.
+
+### Motion Safety
+
+GhostGUI separates inspection from promotion. Requested-contact highlights,
+Preview Path, and quarantined-motion ghosts expose rejected motion for
+diagnosis. The Orange preview clamps at its last safe IK substep, and blocking
+penetration cannot enter committed or exportable motion.
+
+Motion validation is adaptive. It checks the interpolated path between adjacent
+states and refines intervals according to Joint Angle and collision-geometry
+movement. This check is independent of the **Export interval**, so two
+collision-free Keyframes do not make an unchecked gap safe.
+
+This is a resolution-bounded adaptive check, not an analytic proof of
+continuous collision freedom. Very small features or inaccurate collision
+geometry can still require tighter validator thresholds or an external motion
+planner.
+
+Automatic ground projection is intentionally narrow. GhostGUI may raise a
+single movable floating root over a flat ground plane and reports the applied
+lift. During generation, the correction is rejected if it would violate a
+required End Effector target or exact Keyframe anchor. It is not silently
+written into existing Keyframes. Ground projection is not used for fixed-base
+models, uneven terrain, other environment geometry, or body-to-body collision.
+
+A quarantined between-state ground sweep may receive a lifted waypoint as a
+review candidate. GhostGUI revalidates both replacement intervals and the full
+path before **Accept Safe Motion** is available.
+
+For body-to-body or other non-repairable collisions, edit or add a Keyframe, or
+explicitly choose **Try Safe Reroute** when it is offered. Rerouting is a
+bounded local Joint Angle search, never forced or silent, and can fail. It
+preserves endpoint qpos values but is not a global or dynamic planner.
 
 ### Sidebars
 
@@ -218,22 +261,35 @@ The sample count and qpos path stay unchanged, so `0.50×` also halves the DSMS
 reference frequency. Downstream DSMS configuration should derive total duration
 from `time.csv` rather than overriding it with a shorter fixed duration.
 
-An uncommitted orange preview is not exported. Select **Commit Keyframe** first
+An uncommitted Orange preview is not exported. Select **Commit Keyframe** first
 when the pose should become part of the saved motion.
+
+Imported motion receives the same state and between-state validation. Motion
+with blocking penetration is quarantined for inspection: it is not treated as
+the active safe generated result and cannot be exported until it is repaired or
+rerouted and passes validation.
+
+Export repeats the safety gate for the path being written. Advisory contact is
+reported, while blocking penetration stops the export.
 
 See [Data Formats](data_formats.md) and [Adding Models](adding_models.md) for the
 file contracts and import requirements.
 
 ## Common Problems
 
-If the orange robot changed but an export did not, the pose is still only a
-preview. Commit a keyframe and export again.
+If the orange robot changed but an export did not, the pose is still only an
+Orange preview. Use **Commit Keyframe** and export again.
 
 If an edit stops or fails, check **Status** and **IK / Constraints** for joint
 limits, singularities, or collisions.
 
-If generation does not match the intended motion, verify the keyframe times and
+If generation does not match the intended motion, verify the Keyframe times and
 active target frame, then inspect playback before exporting.
+
+If generation or import reports a blocked interval, jump to the reported time
+and inspect **Preview Path**. Ground-only failures may offer a reviewed repair.
+For body-to-body collision, adjust or add a Keyframe or explicitly try a safe
+reroute.
 
 See [Troubleshooting](troubleshooting.md) for installation, rendering, model,
 and workflow diagnostics.
@@ -246,3 +302,6 @@ and workflow diagnostics.
   selection.
 - IK priority numbers are descriptive metadata; the current solver uses one
   weighted task stack rather than strict null-space priority projection.
+- Motion safety is kinematic and depends on the model's collision geometry. It
+  does not prove balance, actuator feasibility, controller tracking, or safety
+  on a physical robot.

@@ -2,7 +2,7 @@
 
 GhostGUI uses MuJoCo position and rotation Jacobians with damped-least-squares
 inverse kinematics. The **IK / Constraints** sidebar controls the weighted
-solver used for the orange preview.
+solver used for the Orange preview.
 
 Interactive preview and generated-trajectory solving share the same task and
 coordinate contracts. Generated motion with complete committed keyframes uses
@@ -91,26 +91,87 @@ remains enabled by default.
 
 ## Collision Behavior
 
-During a drag, GhostGUI solves incremental substeps and displays collision
-warnings on the orange preview. Collision substeps control how finely the drag
-motion is sampled.
+GhostGUI treats collision inspection and motion promotion as separate steps.
+The requested-contact highlight, Preview Path, and quarantined-motion ghosts
+keep a rejected candidate diagnosable. The Orange preview itself clamps at its
+last safe IK substep. Blocking penetration cannot be promoted into a committed
+Keyframe, generated motion, playback-ready motion, or export.
 
-Later checks distinguish advisory contact from meaningful penetration:
+Collision results have three practical levels:
 
-- **Preview Path** still rejects non-finite states and raw joint-limit
-  violations. It renders colliding samples as red ghosts instead of hiding the
-  path.
-- **Commit Keyframe** permits advisory shallow contact with a warning, but
-  rejects blocking penetration and non-finite qpos values.
-- trajectory generation reports its first collision, and trajectory export
-  rejects blocking penetration while permitting advisory contact with a
-  warning.
+- intended support contact is valid contact at the ground boundary;
+- shallow advisory contact or a configured near-contact margin is reported but
+  may be committed and exported;
+- blocking penetration is a hard failure.
 
-Model-aware contact policy distinguishes shallow intended foot support from
-penetrating ground collision. Support contacts within the numerical tolerance
-are allowed. Other contacts become blocking only after the registered model's
-penetration threshold. Maintained models may also declare narrowly audited
-body-frame pairs with an explicit maximum allowed penetration.
+The model-aware policy identifies intended support bodies and narrowly audited
+body pairs. A small numerical tolerance prevents contact noise from making a
+resting foot flicker between valid and invalid states. This tolerance is not
+permission for a foot or another body to pass through the ground.
+
+### Between-Keyframe Validation
+
+Checking only the Keyframes or generated rows is insufficient: interpolation
+can collide even when both endpoints are safe. GhostGUI therefore validates the
+manifold-interpolated qpos path between adjacent states. The validator
+adaptively subdivides intervals according to Joint Angle and collision-geometry
+movement, then reports the earliest unsafe time, interval, body pair, and
+penetration depth.
+
+This safety resolution is independent of the **Export interval** and the
+**Keyframe interval**. Export interval controls generated output timestamps;
+Keyframe interval controls how far the editor advances after **Commit
+Keyframe**. Neither is a collision-sampling guarantee.
+
+The current method is resolution-bounded adaptive discrete validation, not an
+analytic continuous-collision proof. By default it subdivides until each
+accepted subinterval moves no generalized coordinate more than `0.08` and no
+collision geometry more than `0.02 m`, with a recursion-depth limit of 12.
+Smaller thresholds increase coverage and cost; unusually small or inaccurate
+collision geometry can still defeat any finite sampling method.
+
+**Preview Path** visualizes the same path contract with red collision ghosts.
+It remains a read-only diagnostic. **Commit Keyframe** automatically checks the
+candidate pose and each affected neighboring interval, even when Preview Path
+was not opened. **Generate** validates the solved trajectory before it becomes
+the active generated result, and export repeats the gate for the path being
+written.
+
+### Repair And Rerouting
+
+Automatic projection is limited to ground-only penetration that can be
+corrected by raising one movable floating root over a flat ground plane. Live
+edits and generated samples apply this hard projection immediately and report
+the lift. Generated projection is rejected if it would violate a required End
+Effector target or exact Keyframe anchor. Committed Keyframes are not rewritten
+behind the user's back.
+
+For an unsafe imported or between-state path, **Try Safe Reroute** can propose a
+review candidate. A flat-ground sweep may receive a lifted waypoint. An
+interior self-collision may receive a bounded scalar-joint detour. Every
+replacement interval and the complete candidate are adaptively revalidated
+before **Accept Safe Motion** becomes available.
+
+Ground repair does not apply to a fixed-base model, uneven terrain, other
+environment geometry, or body-to-body collision. A whole-robot lift cannot
+resolve self-collision and may invalidate world-space targets.
+
+Self-collision and other non-repairable failures remain blocked. The local
+rerouter preserves endpoint qpos values and bounded joint limits; it is not a
+global or dynamically optimal planner. It is never forced, its result is
+previewed before acceptance, and it can report that no safe route was found.
+
+### Imported Motion
+
+Imported motion uses the same state and adaptive interval validation. A file
+with blocking penetration is quarantined as an inspection candidate rather than
+replacing the active safe generated result. It cannot be promoted or exported
+until an edit, accepted ground repair, or explicit reroute produces a path that
+passes validation.
+
+These checks validate the modeled kinematic path. They do not prove dynamic
+balance, actuator or torque feasibility, controller tracking, collision-model
+accuracy, or safety on physical hardware.
 
 ## Backend Selection
 

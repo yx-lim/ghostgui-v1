@@ -7,6 +7,7 @@ from core.ik import (
     CollisionAwareIKSolver,
     CollisionChecker,
     CollisionPolicy,
+    adaptive_trajectory_collision_reports,
     first_trajectory_collision,
 )
 from core.models import IKResult, MuJoCoRobotAdapter, RobotModel3D
@@ -34,6 +35,31 @@ class ThresholdCollisionChecker:
     def get_collisions(self, state):
         return [Collision("a", "b", "one", "two", -0.01, "self")] \
             if state.qpos[0] >= 0.6 else []
+
+
+class JointWindowCollisionChecker:
+    def __init__(self, address, advisory_window, blocking_window):
+        self.address = int(address)
+        self.advisory_window = advisory_window
+        self.blocking_window = blocking_window
+
+    def get_collisions(self, state):
+        value = float(state.get_qpos()[self.address])
+        if self.blocking_window[0] <= value <= self.blocking_window[1]:
+            return [
+                Collision(
+                    "moving", "obstacle", "arm", "torso", -0.01,
+                    "self", blocking=True,
+                )
+            ]
+        if self.advisory_window[0] <= value <= self.advisory_window[1]:
+            return [
+                Collision(
+                    "moving", "obstacle", "arm", "torso", -0.0005,
+                    "self", blocking=False,
+                )
+            ]
+        return []
 
 
 class CollisionCheckerTests(unittest.TestCase):
@@ -99,7 +125,7 @@ class CollisionCheckerTests(unittest.TestCase):
         self.assertIn("mm penetration", collision.diagnostic_label)
         self.assertTrue(collision.blocking)
 
-    def test_z1_shallow_contact_warns_and_deeper_contact_blocks(self):
+    def test_environment_penetration_uses_hard_half_mm_barrier(self):
         model = MuJoCoRobotAdapter("z1")
         checker = CollisionChecker(model)
         free_joint = next(iter(model.free_joints_by_body.values()))
@@ -117,7 +143,7 @@ class CollisionCheckerTests(unittest.TestCase):
         deep_collisions = checker.get_collisions(deep)
 
         self.assertTrue(shallow_collisions)
-        self.assertFalse(any(item.blocking for item in shallow_collisions))
+        self.assertTrue(any(item.blocking for item in shallow_collisions))
         self.assertTrue(any(item.blocking for item in deep_collisions))
         report = first_trajectory_collision(
             model,
@@ -125,7 +151,78 @@ class CollisionCheckerTests(unittest.TestCase):
             checker=checker,
             blocking_only=True,
         )
-        self.assertEqual(report.sample_index, 2)
+        self.assertEqual(report.sample_index, 1)
+
+    def test_adaptive_reports_find_contacts_between_safe_samples(self):
+        joint = next(
+            item for item in self.model.joints.values()
+            if item.limits is not None
+        )
+        address = joint.qpos_address
+        center = float(self.model.home_qpos[address])
+        start = self.model.home_qpos.copy()
+        end = self.model.home_qpos.copy()
+        start[address] = center - 0.16
+        end[address] = center + 0.16
+        checker = JointWindowCollisionChecker(
+            address,
+            (center - 0.085, center - 0.075),
+            (center - 0.005, center + 0.005),
+        )
+
+        # The legacy sampled-only scan deliberately sees two safe endpoints.
+        self.assertIsNone(first_trajectory_collision(
+            self.model, (start, end), checker=checker
+        ))
+
+        warning, blocking = adaptive_trajectory_collision_reports(
+            self.model,
+            (start, end),
+            times=(2.0, 4.0),
+            checker=checker,
+            max_joint_step=0.02,
+            max_body_step=1.0,
+        )
+
+        self.assertIsNotNone(warning)
+        self.assertFalse(warning.blocking)
+        self.assertEqual(warning.segment_index, 0)
+        self.assertAlmostEqual(warning.segment_fraction, 0.25)
+        self.assertAlmostEqual(warning.time, 2.5)
+        self.assertEqual(warning.sample_index, 0)
+        self.assertTrue(warning.is_interior)
+        self.assertIn("segment 0 at 25.0%", warning.location_label)
+        self.assertIsNotNone(blocking)
+        self.assertTrue(blocking.blocking)
+        self.assertAlmostEqual(blocking.segment_fraction, 0.5)
+        self.assertAlmostEqual(blocking.time, 3.0)
+
+    def test_adaptive_reports_keep_endpoint_sample_location(self):
+        joint = next(
+            item for item in self.model.joints.values()
+            if item.limits is not None
+        )
+        address = joint.qpos_address
+        start = self.model.home_qpos.copy()
+        end = self.model.home_qpos.copy()
+        end[address] += 0.1
+        checker = JointWindowCollisionChecker(
+            address,
+            (end[address] - 0.001, end[address] + 0.001),
+            (float("inf"), float("inf")),
+        )
+
+        warning, blocking = adaptive_trajectory_collision_reports(
+            self.model, (start, end), times=(0.0, 0.5), checker=checker
+        )
+
+        self.assertIsNone(blocking)
+        self.assertEqual(warning.sample_index, 1)
+        self.assertEqual(warning.segment_index, 0)
+        self.assertEqual(warning.segment_fraction, 1.0)
+        self.assertEqual(warning.time, 0.5)
+        self.assertFalse(warning.is_interior)
+        self.assertEqual(warning.location_label, "sample 1 at 0.5 s")
 
     def test_audited_body_pair_exclusion_has_a_depth_limit(self):
         policy = CollisionPolicy(
@@ -166,17 +263,20 @@ class CollisionCheckerTests(unittest.TestCase):
         solver.orientation_weight = 0.25
         return solver
 
-    def test_collision_warns_without_clamping_preview_drag(self):
+    def test_blocking_collision_clamps_preview_drag_at_last_safe_substep(self):
         result = self._fake_solver().solve_drag(
             np.zeros(1), np.zeros(3), np.array([1.0, 0.0, 0.0, 0.0]),
             np.array([1.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0, 0.0]),
             object_name="target",
         )
         self.assertTrue(result.success)
-        self.assertEqual(result.accepted_fraction, 1.0)
-        self.assertAlmostEqual(result.qpos[0], 1.0)
-        self.assertIn("Collision warning", result.status)
+        self.assertEqual(result.accepted_fraction, 0.5)
+        self.assertAlmostEqual(result.qpos[0], 0.5)
+        self.assertIn("Safety barrier stopped", result.status)
         self.assertTrue(result.collisions)
+        self.assertTrue(all(
+            collision.blocking for collision in result.collisions
+        ))
 
     def test_failed_ik_preserves_last_valid_qpos(self):
         start = np.array([0.25])
@@ -265,7 +365,7 @@ class CollisionCheckerTests(unittest.TestCase):
         )
         self.assertIn("optional constraints relaxed", result.status)
 
-    def test_ground_collision_warns_without_blocking_free_root_drag(self):
+    def test_ground_barrier_projects_free_root_drag_above_ground(self):
         state = self.model.create_state()
         start_qpos = state.get_qpos()
         start_position, start_quaternion = state.get_body_pose("robot/pelvis", "body")
@@ -290,12 +390,12 @@ class CollisionCheckerTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.accepted_fraction, 1.0)
         self.assertFalse(np.allclose(result.qpos, start_qpos))
-        np.testing.assert_allclose(
-            result.position,
-            start_position + np.array([0.0, 0.0, -0.2]),
+        self.assertGreater(
+            result.position[2],
+            start_position[2] - 0.2,
         )
-        self.assertIn("Collision warning", result.status)
-        self.assertTrue(any(item.kind == "environment" for item in result.collisions))
+        self.assertIn("ground barrier raised", result.status)
+        self.assertFalse(any(item.blocking for item in result.collisions))
 
 
 if __name__ == "__main__":

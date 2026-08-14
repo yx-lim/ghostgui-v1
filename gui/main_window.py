@@ -2116,6 +2116,9 @@ class RobotGuiMainWindow(QMainWindow):
         viewer_3d.target_frame_changed.connect(self.on_3d_target_frame_changed)
         viewer_3d.preview_cancelled.connect(self.on_preview_cancelled)
         viewer_3d.trajectory_csv_loaded.connect(self.on_trajectory_csv_loaded)
+        viewer_3d.safe_motion_accepted.connect(
+            self.on_safe_motion_accepted
+        )
         viewer_3d.generate_requested.connect(self.on_generate_trajectory)
         viewer_3d.clear_trajectory_requested.connect(self.on_clear_trajectory)
         viewer_3d.canvas.geometry_progress.connect(
@@ -2285,16 +2288,18 @@ class RobotGuiMainWindow(QMainWindow):
                 viewer.pause_playback()
                 viewer.canvas.cancel_transform_drag()
                 if snapshot.robot_trajectory:
-                    viewer.set_robot_trajectory(
+                    restored = viewer.set_robot_trajectory(
                         snapshot.robot_trajectory,
                         times=snapshot.robot_trajectory_times,
                         activate_first_frame=False,
+                        quarantine_source="history snapshot",
                     )
                     self.viewer_3d_mujoco.clear_trajectory()
-                    self.viewer_3d_mujoco.set_trajectory_metadata(
-                        mujoco_playback_cache_path(),
-                        snapshot.robot_trajectory_times,
-                    )
+                    if restored:
+                        self.viewer_3d_mujoco.set_trajectory_metadata(
+                            mujoco_playback_cache_path(),
+                            snapshot.robot_trajectory_times,
+                        )
                 else:
                     viewer.clear_robot_trajectory()
                     self.viewer_3d_mujoco.clear_trajectory()
@@ -2904,6 +2909,22 @@ class RobotGuiMainWindow(QMainWindow):
             f"at {import_dt:.2f} s intervals."
         )
         self.record_history_action("Load trajectory")
+
+    def on_safe_motion_accepted(
+        self, _qposes, times, source, _source_path
+    ):
+        """Publish a reviewed repair to the disposable playback cache."""
+        try:
+            playback_path = self.regenerate_mujoco_playback_cache()
+        except (RuntimeError, ValueError, OSError) as error:
+            self.show_status_message(
+                f"Accepted safe {source}, but could not rebuild playback "
+                f"cache: {error}"
+            )
+            return
+        self.viewer_3d_mujoco.set_trajectory_metadata(
+            playback_path, tuple(times)
+        )
 
     def prompt_trajectory_import_dt(self):
         current = self.viewer_3d.trajectory_import_dt.value()
@@ -3599,12 +3620,41 @@ class RobotGuiMainWindow(QMainWindow):
                 export_dt=self.viewer_3d.export_dt(),
                 state_timeline=self.viewer_3d.state_timeline,
             )
+        except trajectory_generation.TrajectorySafetyError as error:
+            candidate_qposes = tuple(getattr(error, "candidate_qposes", ()))
+            candidate_times = tuple(getattr(error, "candidate_times", ()))
+            quarantined = bool(
+                candidate_qposes
+                and len(candidate_qposes) == len(candidate_times)
+            )
+            if quarantined:
+                self.viewer_3d.quarantine_motion(
+                    candidate_qposes,
+                    candidate_times,
+                    report=error.report,
+                    source="generated",
+                    source_path=getattr(error, "source_path", None),
+                )
+            quarantine_note = (
+                " The unsafe candidate was quarantined for inspection."
+                if quarantined else ""
+            )
+            self.show_status_message(
+                f"Could not generate trajectory: {error}{quarantine_note}"
+            )
+            return
         except (RuntimeError, ValueError) as error:
             self.show_status_message(
                 f"Could not generate trajectory: {error}"
             )
             return
-        self.viewer_3d.load_backend_states(result.result_states)
+        if not self.viewer_3d.load_backend_states(result.result_states):
+            self.show_status_message(
+                "Generated trajectory passed the application safety gate but "
+                "was rejected during viewer revalidation; it was not "
+                "published to playback."
+            )
+            return
         self.viewer_3d_mujoco.set_trajectory_csv(result.csv_path)
         collision_status = self.viewer_3d.robot_trajectory_collision_status()
         self.show_status_message(
