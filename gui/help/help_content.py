@@ -48,7 +48,9 @@ move target -> orange preview -> Commit Keyframe -> Generate -> Export
 
 Create/open/save projects, choose the robot model, import or export data, retime Keyframes, switch views, and open help.
 
-Use **Timeline → Insert Time at Current Time** to open a held interval and shift later Keyframes. **Shift Entire Motion** applies one offset to the whole motion. **Move Time Range** relocates an inclusive range when its non-overlapping destination is free. **Scale Time Range** changes actual timeline speed: `2×` halves duration and `0.5×` doubles it. These operations keep logical targets and qpos synchronized, clear generated motion, and can be undone once. They reject conflicts rather than layering or blending overlapping motion.
+Use **Timeline → Insert Time at Current Time** to open a held interval and shift later Keyframes. **Shift Entire Motion** applies one offset to the whole motion. **Move Time Range** relocates an inclusive range when its non-overlapping destination is free. **Scale Time Range** changes actual timeline speed: `2×` halves duration and `0.5×` doubles it.
+
+Use **Copy Motion Range…** to store committed Keyframes and robot poses, including Joint Angles, in a transient, model-specific Motion Clip. At an in-between boundary, GhostGUI samples the committed pose and uses forward kinematics to materialize logical target anchors; exact boundary Keyframes are preserved. It does not copy the Orange preview or generated samples, and copying does not change history or dirty the project. **Paste Motion at Current Time** preserves relative time; a forward append requires a closed seam. **Paste Motion Reversed at Current Time** reverses time order only, producing `A → B → A` without mirroring poses or negating Joint Angles. **Repeat Motion…** adds the requested number of copies in **Forward** or alternating **Ping-pong** order. A destination may touch existing motion only at a boundary: equivalent seams coalesce, different seams and any interior overlap reject the complete edit. A successful Paste or Repeat keeps targets and committed robot poses synchronized, clears generated motion, and is one Undo/Redo action.
 
 ## Target
 

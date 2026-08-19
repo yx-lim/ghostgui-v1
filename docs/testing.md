@@ -85,6 +85,34 @@ structure. It skips outside the explicitly configured visual environment.
 - Confirm preview opacity does not make the application window transparent.
 - Confirm reset affects the active time only.
 
+### Motion Clips
+
+- Commit an `A → B` motion, use **Copy Motion Range…**, and confirm copying
+  does not change project history, dirty state, or generated motion.
+- Leave an uncommitted Orange preview visible while copying and confirm the
+  Motion Clip contains only committed Keyframes and robot poses, including
+  Joint Angles, not the preview or generated samples.
+- At the `B` time, use **Paste Motion Reversed at Current Time** and confirm the
+  result is `A → B → A`. Confirm the shared `B` seam is one Keyframe and
+  no pose values or Joint Angles were mirrored or negated.
+- Close the source seam, use **Paste Motion at Current Time**, and confirm the
+  forward copy preserves relative timing. Confirm an open seam or another
+  conflicting destination rejects the complete paste without changing either
+  targets or committed robot poses.
+- Choose a destination whose interval crosses existing motion without sharing
+  an exact Keyframe time and confirm the interior overlap rejects the complete
+  paste without changing editor, history, playback, or generated state.
+- Copy a range whose boundaries fall between Keyframes and confirm its
+  materialized logical targets match forward kinematics of the sampled
+  committed robot poses.
+- Use **Repeat Motion…** with an additional-copy count in both **Forward** and
+  **Ping-pong** modes. Confirm Forward repeats the original order and Ping-pong
+  alternates direction.
+- Confirm each successful Paste or Repeat clears generated motion, expands the
+  timeline when needed, and is restored by one Undo/Redo action.
+- Switch robot models and confirm the model-specific Motion Clip cannot be
+  pasted into the other model.
+
 ### Model Checks
 
 - **G1:** confirm humanoid hand, foot, torso, and pelvis targets and detailed

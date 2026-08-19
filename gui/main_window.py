@@ -36,7 +36,12 @@ from core.trajectory import (
     quat_to_rpy,
     rpy_to_quat,
 )
-from application import model_sessions, timeslice_service, trajectory_generation
+from application import (
+    model_sessions,
+    motion_clipboard,
+    timeslice_service,
+    trajectory_generation,
+)
 from application import timeline_editing
 from application.editor_commands import (
     AddKeyframe,
@@ -81,8 +86,10 @@ from .help import HelpCenterDialog
 from .project_browser import ProjectBrowserDialog
 from .theme import ensure_application_theme, theme_icon
 from .timeline_edit_dialog import (
+    copy_motion_range_dialog,
     insert_time_dialog,
     move_range_dialog,
+    repeat_motion_dialog,
     scale_range_dialog,
     shift_motion_dialog,
 )
@@ -298,6 +305,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_tabs = self.build_viewer_tabs()
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
         self.help_dialog = None
+        self.motion_clipboard = None
         self.build_menu_bar()
         self.sync_trajectory_export_actions()
         self.app_toolbar = self.build_workflow_toolbar()
@@ -563,6 +571,58 @@ class RobotGuiMainWindow(QMainWindow):
             self.on_scale_time_range_requested
         )
         self.timeline_menu.addAction(self.scale_time_range_action)
+
+        self.timeline_menu.addSeparator()
+        self.copy_motion_range_action = QAction("Copy Motion Range…", self)
+        self.copy_motion_range_action.setObjectName("copyMotionRangeAction")
+        self.copy_motion_range_action.setToolTip(
+            "Copy committed target Keyframes and poses, including Joint "
+            "Angles, from a time range."
+        )
+        self.copy_motion_range_action.triggered.connect(
+            self.on_copy_motion_range_requested
+        )
+        self.timeline_menu.addAction(self.copy_motion_range_action)
+
+        self.paste_motion_action = QAction(
+            "Paste Motion at Current Time", self
+        )
+        self.paste_motion_action.setObjectName("pasteMotionAction")
+        self.paste_motion_action.setToolTip(
+            "Paste the copied motion beginning at the active timeline time."
+        )
+        self.paste_motion_action.setEnabled(False)
+        self.paste_motion_action.triggered.connect(
+            lambda checked=False: self.paste_motion_at_current_time()
+        )
+        self.timeline_menu.addAction(self.paste_motion_action)
+
+        self.paste_motion_reversed_action = QAction(
+            "Paste Motion Reversed at Current Time", self
+        )
+        self.paste_motion_reversed_action.setObjectName(
+            "pasteMotionReversedAction"
+        )
+        self.paste_motion_reversed_action.setToolTip(
+            "Paste the copied poses in reverse time order at the active time."
+        )
+        self.paste_motion_reversed_action.setEnabled(False)
+        self.paste_motion_reversed_action.triggered.connect(
+            lambda checked=False: self.paste_motion_at_current_time(
+                reverse=True
+            )
+        )
+        self.timeline_menu.addAction(self.paste_motion_reversed_action)
+
+        self.repeat_motion_action = QAction("Repeat Motion…", self)
+        self.repeat_motion_action.setObjectName("repeatMotionAction")
+        self.repeat_motion_action.setToolTip(
+            "Append forward or ping-pong copies of a committed motion range."
+        )
+        self.repeat_motion_action.triggered.connect(
+            self.on_repeat_motion_requested
+        )
+        self.timeline_menu.addAction(self.repeat_motion_action)
 
         self.view_menu = menu_bar.addMenu("&View")
         self.view_menu.setObjectName("viewMenu")
@@ -1119,6 +1179,19 @@ class RobotGuiMainWindow(QMainWindow):
         self.playback_action.setIcon(theme_icon("pause" if playing else "play", self))
         self.undo_action.setEnabled(bool(self.undo_stack))
         self.redo_action.setEnabled(bool(self.redo_stack))
+        self.copy_motion_range_action.setEnabled(has_robot)
+        self.repeat_motion_action.setEnabled(has_robot)
+        clipboard_compatible = (
+            self.motion_clipboard is not None
+            and getattr(self.motion_clipboard, "model_key", None)
+            == self.document.model_key
+        )
+        self.paste_motion_action.setEnabled(
+            has_robot and clipboard_compatible
+        )
+        self.paste_motion_reversed_action.setEnabled(
+            has_robot and clipboard_compatible
+        )
 
     # ============================================================
     # Build right status/debug panel
@@ -3002,6 +3075,138 @@ class RobotGuiMainWindow(QMainWindow):
             dialog.speed(),
             snap_interval=dialog.snap_interval(),
         )
+
+    def _motion_range_bounds(self, action_title):
+        bounds = timeline_editing.timeline_content_bounds(self.document)
+        if bounds is not None and bounds[1] > bounds[0] + 1e-9:
+            return bounds
+        QMessageBox.warning(
+            self,
+            f"{action_title} failed",
+            "A motion range requires Keyframes at two distinct times.",
+        )
+        return None
+
+    def on_copy_motion_range_requested(self):
+        bounds = self._motion_range_bounds("Copy Motion Range")
+        if bounds is None:
+            return
+        dialog = copy_motion_range_dialog(
+            self,
+            entire_start=bounds[0],
+            entire_end=bounds[1],
+            export_interval=self.viewer_3d.export_dt(),
+        )
+        if not dialog.exec():
+            return
+        start_time, end_time = dialog.range_values()
+        self.copy_motion_range(start_time, end_time)
+
+    def copy_motion_range(self, start_time, end_time):
+        try:
+            clip = motion_clipboard.capture_motion_clip(
+                self.document, start_time, end_time
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Copy Motion Range failed", str(exc))
+            return False
+
+        self.motion_clipboard = clip
+        self.sync_workflow_toolbar()
+        message = (
+            f"Copied motion from t={start_time:.2f}–{end_time:.2f} s. "
+            "Paste it at the active time or paste it reversed."
+        )
+        self.viewer_3d.status_label.setText(message)
+        self.statusBar().showMessage(message, 3000)
+        return True
+
+    def paste_motion_at_current_time(self, *, reverse=False):
+        clip = self.motion_clipboard
+        compatible = (
+            clip is not None
+            and getattr(clip, "model_key", None) == self.document.model_key
+        )
+        if not compatible:
+            QMessageBox.warning(
+                self,
+                "Paste Motion failed",
+                "Copy a motion range for the active robot before pasting.",
+            )
+            return False
+
+        destination_start = self.viewer_3d.get_current_time()
+        try:
+            plan = motion_clipboard.plan_paste_motion(
+                self.document,
+                clip,
+                destination_start,
+                reverse=reverse,
+                maximum_time=MAX_TIMELINE_DURATION,
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Paste Motion failed", str(exc))
+            return False
+
+        direction = "reversed " if reverse else ""
+        message = (
+            f"Pasted {direction}motion at t={destination_start:.2f}–"
+            f"{plan.current_time:.2f} s."
+        )
+        description = "Paste Motion Reversed" if reverse else "Paste Motion"
+        return self._apply_timeline_edit(plan, description, message)
+
+    def on_repeat_motion_requested(self):
+        bounds = self._motion_range_bounds("Repeat Motion")
+        if bounds is None:
+            return
+        dialog = repeat_motion_dialog(
+            self,
+            entire_start=bounds[0],
+            entire_end=bounds[1],
+            export_interval=self.viewer_3d.export_dt(),
+        )
+        if not dialog.exec():
+            return
+        start_time, end_time = dialog.range_values()
+        self.repeat_motion_range(
+            start_time,
+            end_time,
+            dialog.additional_copies(),
+            ping_pong=dialog.ping_pong(),
+        )
+
+    def repeat_motion_range(
+        self,
+        start_time,
+        end_time,
+        additional_copies,
+        *,
+        ping_pong=False,
+    ):
+        try:
+            clip = motion_clipboard.capture_motion_clip(
+                self.document, start_time, end_time
+            )
+            plan = motion_clipboard.plan_repeat_motion(
+                self.document,
+                clip,
+                end_time,
+                additional_copies,
+                ping_pong=ping_pong,
+                maximum_time=MAX_TIMELINE_DURATION,
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Repeat Motion failed", str(exc))
+            return False
+
+        pattern = "ping-pong" if ping_pong else "forward"
+        message = (
+            f"Repeated the t={start_time:.2f}–{end_time:.2f} s motion with "
+            f"{additional_copies} additional {pattern} "
+            f"{'copy' if additional_copies == 1 else 'copies'}."
+        )
+        return self._apply_timeline_edit(plan, "Repeat Motion", message)
 
     def insert_timeline_time(self, at_time, duration):
         try:

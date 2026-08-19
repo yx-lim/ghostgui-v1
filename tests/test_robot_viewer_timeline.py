@@ -76,6 +76,28 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.config_patch.stop()
         self.config_dir.cleanup()
 
+    def configure_two_keyframe_motion(self):
+        home = self.viewer.robot_model.home_qpos.copy()
+        later = home.copy()
+        later[-1] += 0.05
+
+        self.window.trajectory.clear()
+        start_frame = self.window.controls.current_frame()
+        start_frame.time = 0.0
+        end_frame = self.window.controls.current_frame()
+        end_frame.time = 1.0
+        end_frame.x += 0.05
+        self.window.trajectory.add_frame(start_frame)
+        self.window.trajectory.add_frame(end_frame)
+
+        self.viewer.state_timeline.states.clear()
+        self.viewer.state_timeline.set_state(0.0, home)
+        self.viewer.state_timeline.set_state(1.0, later)
+        self.window.set_project_dirty(False)
+        self.window.refresh_display()
+        self.window._refresh_history_baseline()
+        return home, later
+
     def test_time_control_loads_distinct_editable_state(self):
         at_zero = self.viewer.get_current_keyframe()
         self.window.controls.time_slider.set_value(0.2)
@@ -303,6 +325,236 @@ class RobotViewerTimelineTests(unittest.TestCase):
             [0.0, 1.0, 2.0],
         )
         self.assertEqual(len(self.viewer.robot_trajectory), 3)
+
+    def test_copy_motion_is_nonmutating_and_enables_compatible_paste(self):
+        home, later = self.configure_two_keyframe_motion()
+        self.viewer.set_robot_trajectory(
+            (home, later),
+            times=(0.0, 1.0),
+            activate_first_frame=False,
+        )
+        self.window._refresh_history_baseline()
+        frames_before = [
+            frame.to_dict() for frame in self.window.trajectory.frames
+        ]
+        qpos_times_before = self.viewer.state_timeline.times()
+        playback_before = [
+            qpos.copy() for qpos in self.viewer.robot_trajectory
+        ]
+        undo_count = len(self.window.undo_stack)
+
+        self.assertTrue(self.window.copy_motion_range(0.0, 1.0))
+
+        self.assertIsNotNone(self.window.motion_clipboard)
+        self.assertEqual(
+            [frame.to_dict() for frame in self.window.trajectory.frames],
+            frames_before,
+        )
+        self.assertEqual(
+            self.viewer.state_timeline.times(), qpos_times_before
+        )
+        for actual, expected in zip(
+            self.viewer.robot_trajectory, playback_before
+        ):
+            np.testing.assert_allclose(actual, expected)
+        self.assertEqual(len(self.window.undo_stack), undo_count)
+        self.assertFalse(self.window.project_dirty)
+        self.assertTrue(self.window.paste_motion_action.isEnabled())
+        self.assertTrue(
+            self.window.paste_motion_reversed_action.isEnabled()
+        )
+
+        model_key = self.window.document.model_key
+        self.window.document.model_key = "incompatible-test-model"
+        self.window.sync_workflow_toolbar()
+        self.assertFalse(self.window.paste_motion_action.isEnabled())
+        self.assertFalse(
+            self.window.paste_motion_reversed_action.isEnabled()
+        )
+        self.window.document.model_key = model_key
+        self.window.sync_workflow_toolbar()
+        self.assertTrue(self.window.paste_motion_action.isEnabled())
+
+    def test_rejected_overlapping_paste_preserves_all_editor_state(self):
+        home, later = self.configure_two_keyframe_motion()
+        self.viewer.set_robot_trajectory(
+            (home, later),
+            times=(0.0, 1.0),
+            activate_first_frame=False,
+        )
+        self.window.viewer_3d_mujoco.set_trajectory_metadata(
+            mujoco_playback_cache_path(),
+            (0.0, 1.0),
+        )
+        self.assertTrue(self.window.copy_motion_range(0.0, 1.0))
+        self.window.on_viewer_timeslice_time_changed(1.0)
+        self.window.record_history_action("Existing history")
+        self.viewer.start_playback()
+
+        frames_before = [
+            frame.to_dict() for frame in self.window.trajectory.frames
+        ]
+        qpos_before = {
+            time: self.viewer.state_timeline.get_state(time)
+            for time in self.viewer.state_timeline.times()
+        }
+        generated_before = [
+            qpos.copy() for qpos in self.viewer.robot_trajectory
+        ]
+        generated_times_before = list(self.viewer.robot_trajectory_times)
+        mujoco_times_before = list(
+            self.window.viewer_3d_mujoco.trajectory_times
+        )
+        undo_before = tuple(
+            (entry.description, id(entry.snapshot))
+            for entry in self.window.undo_stack
+        )
+        redo_before = tuple(
+            (entry.description, id(entry.snapshot))
+            for entry in self.window.redo_stack
+        )
+        baseline_before = self.window.history.baseline
+        revision_before = self.window.document.revision
+        dirty_before = self.window.project_dirty
+
+        with (
+            patch("gui.main_window.QMessageBox.warning") as warning,
+            patch.object(self.viewer, "clear_robot_trajectory") as clear_viewer,
+            patch.object(
+                self.window.viewer_3d_mujoco, "clear_trajectory"
+            ) as clear_mujoco,
+            patch.object(
+                self.window.backend_interface, "clear_last_solution"
+            ) as clear_backend,
+        ):
+            self.assertFalse(self.window.paste_motion_at_current_time())
+
+        warning.assert_called_once()
+        self.assertEqual(warning.call_args.args[1], "Paste Motion failed")
+        self.assertIn("conflicts", warning.call_args.args[2])
+        self.assertIn("t=1.00 s", warning.call_args.args[2])
+        clear_viewer.assert_not_called()
+        clear_mujoco.assert_not_called()
+        clear_backend.assert_not_called()
+
+        self.assertEqual(
+            [frame.to_dict() for frame in self.window.trajectory.frames],
+            frames_before,
+        )
+        self.assertEqual(
+            self.viewer.state_timeline.times(), list(qpos_before)
+        )
+        for time, expected in qpos_before.items():
+            np.testing.assert_allclose(
+                self.viewer.state_timeline.get_state(time), expected
+            )
+        self.assertEqual(
+            self.viewer.robot_trajectory_times, generated_times_before
+        )
+        for actual, expected in zip(
+            self.viewer.robot_trajectory, generated_before
+        ):
+            np.testing.assert_allclose(actual, expected)
+        self.assertEqual(
+            self.window.viewer_3d_mujoco.trajectory_times,
+            mujoco_times_before,
+        )
+        self.assertTrue(self.viewer.play_timer.isActive())
+        self.assertEqual(
+            tuple(
+                (entry.description, id(entry.snapshot))
+                for entry in self.window.undo_stack
+            ),
+            undo_before,
+        )
+        self.assertEqual(
+            tuple(
+                (entry.description, id(entry.snapshot))
+                for entry in self.window.redo_stack
+            ),
+            redo_before,
+        )
+        self.assertIs(self.window.history.baseline, baseline_before)
+        self.assertEqual(self.window.document.revision, revision_before)
+        self.assertEqual(self.window.project_dirty, dirty_before)
+
+    def test_reverse_paste_updates_both_timelines_and_is_undoable(self):
+        home, later = self.configure_two_keyframe_motion()
+        self.viewer.set_robot_trajectory(
+            (home, later),
+            times=(0.0, 1.0),
+            activate_first_frame=False,
+        )
+        self.window._refresh_history_baseline()
+        start_x = self.window.trajectory.frames[0].x
+
+        self.assertTrue(self.window.copy_motion_range(0.0, 1.0))
+        self.window.on_viewer_timeslice_time_changed(1.0)
+        self.assertTrue(
+            self.window.paste_motion_at_current_time(reverse=True)
+        )
+
+        self.assertEqual(
+            [frame.time for frame in self.window.trajectory.frames],
+            [0.0, 1.0, 2.0],
+        )
+        self.assertAlmostEqual(
+            self.window.trajectory.frames[-1].x, start_x
+        )
+        self.assertEqual(
+            self.viewer.state_timeline.times(), [0.0, 1.0, 2.0]
+        )
+        np.testing.assert_allclose(
+            self.viewer.state_timeline.get_state(2.0), home
+        )
+        self.assertEqual(self.viewer.robot_trajectory, [])
+        self.assertEqual(
+            self.window.undo_stack[-1].description,
+            "Paste Motion Reversed",
+        )
+
+        self.window.undo_last_action()
+
+        self.assertEqual(
+            [frame.time for frame in self.window.trajectory.frames],
+            [0.0, 1.0],
+        )
+        self.assertEqual(
+            self.viewer.state_timeline.times(), [0.0, 1.0]
+        )
+        self.assertEqual(len(self.viewer.robot_trajectory), 2)
+
+    def test_ping_pong_repeat_is_one_history_action(self):
+        home, later = self.configure_two_keyframe_motion()
+        undo_count = len(self.window.undo_stack)
+
+        self.assertTrue(
+            self.window.repeat_motion_range(
+                0.0,
+                1.0,
+                2,
+                ping_pong=True,
+            )
+        )
+
+        self.assertEqual(
+            [frame.time for frame in self.window.trajectory.frames],
+            [0.0, 1.0, 2.0, 3.0],
+        )
+        self.assertEqual(
+            self.viewer.state_timeline.times(),
+            [0.0, 1.0, 2.0, 3.0],
+        )
+        np.testing.assert_allclose(
+            self.viewer.state_timeline.get_state(2.0), home
+        )
+        np.testing.assert_allclose(
+            self.viewer.state_timeline.get_state(3.0), later
+        )
+        self.assertEqual(len(self.window.undo_stack), undo_count + 1)
+        self.assertEqual(
+            self.window.undo_stack[-1].description, "Repeat Motion"
+        )
 
     def test_pelvis_drag_updates_preview_only_until_accept(self):
         self.viewer.select_target("body", "robot/pelvis", emit=False)
@@ -1497,8 +1749,15 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 "Shift Entire Motion…",
                 "Move Time Range…",
                 "Scale Time Range…",
+                "",
+                "Copy Motion Range…",
+                "Paste Motion at Current Time",
+                "Paste Motion Reversed at Current Time",
+                "Repeat Motion…",
             ],
         )
+        self.assertFalse(self.window.paste_motion_action.isEnabled())
+        self.assertFalse(self.window.paste_motion_reversed_action.isEnabled())
         toolbar = self.window.findChild(QToolBar, "workflowToolbar")
         self.assertIs(toolbar, self.window.app_toolbar)
         self.assertFalse(hasattr(self.window, "workflow_toolbar"))

@@ -20,6 +20,8 @@ in this repository.
   contracts.
 - An RViz-inspired visualization context with lifecycle-managed displays,
   tools, panels, and logical frame-pose services.
+- Model-specific Motion Clips for copying, forward or reversed pasting, and
+  Forward or Ping-pong repetition of committed motion ranges.
 - Transaction recovery, cancellation, shutdown, architecture, packaging, and
   visual regression tests.
 

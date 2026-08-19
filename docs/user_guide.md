@@ -86,16 +86,47 @@ or clear it and enter a range. `2.00×` halves the duration and `0.50×` doubles
 it. Unlike visual Playback speed or DSMS motion speed, this changes the
 authoritative timeline and therefore affects Generate and every export format.
 
-The dialogs snap values to the **Export interval** by default; clear the
-checkbox when exact off-grid timing is intentional. Each successful retiming
-operation updates logical targets and qpos together, clears stale generated
-motion, expands the timeline when needed, and is one Undo/Redo action. Select
-**Generate** again before playback or export.
+**Copy Motion Range…** stores the committed Keyframes in an inclusive source
+range as a transient, model-specific Motion Clip. The clip contains both the
+logical target frames and committed robot poses, including Joint Angles. If a
+range boundary lies between Keyframes, GhostGUI samples the committed robot pose
+and uses forward kinematics to add logical target anchors, making the clip
+self-contained. Exact target Keyframes at a boundary are preserved. The clip
+does not contain the Orange preview or generated trajectory samples. Copying
+does not change the project, mark it dirty, or create an Undo/Redo action.
 
-These tools do not layer or blend simultaneous whole-body motions. Source and
-destination ranges cannot overlap, and conflicting destination Keyframes are
-left unchanged. Slower range scaling is also rejected when it would expand into
-a later Keyframe; move or insert time first to create enough room.
+**Paste Motion at Current Time** preserves the copied ordering and maps each
+source time with `current time + (source time - source start)`. To append a
+forward copy directly to the source, the first and last states must form a
+closed seam. An identical shared seam is coalesced into one Keyframe; a
+different target or committed robot pose at the shared boundary rejects the
+complete paste.
+
+**Paste Motion Reversed at Current Time** maps each source time with `current
+time + (source end - source time)`. This reverses time order only: it does not
+mirror positions, negate Joint Angles, or otherwise transform a pose. Appending
+a reversed copy to an `A → B` motion produces a continuous `A → B → A`
+motion because the shared `B` seam is identical.
+
+**Repeat Motion…** applies a selected number of additional copies in one edit.
+**Forward** keeps the original time order for every added copy and therefore
+requires closed seams. **Ping-pong** alternates reversed and forward copies so
+an `A → B` source continues as `B → A → B`. The count is the number of
+copies added after the original, not the total number of cycles.
+
+The dialogs snap values to the **Export interval** by default; clear the
+checkbox when exact off-grid timing is intentional. Each successful retiming,
+Paste, or Repeat operation updates logical targets and committed robot poses
+together, clears stale generated motion, expands the timeline when needed, and
+is one Undo/Redo action. Select **Generate** again before playback or export.
+
+These tools do not layer or blend simultaneous whole-body motions. A Paste or
+Repeat destination may touch existing motion only at a boundary. Any interior
+overlap with a copied target track or committed robot-pose range rejects the
+complete edit, even when no Keyframe shares the exact time. At an adjacent
+boundary, an equivalent seam coalesces and a different seam is rejected. Slower
+range scaling is also rejected when it would expand into a later Keyframe; move
+or insert time first to create enough room.
 
 ### Target
 

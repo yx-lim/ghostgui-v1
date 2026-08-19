@@ -76,6 +76,18 @@ FIRST_MOTION_TUTORIAL = [
         before_show="show_3d_view",
     ),
     TutorialStep(
+        id="repeat_motion",
+        title="Optionally Repeat The Motion",
+        body=(
+            "For periodic motion, use Timeline > Copy Motion Range…, then "
+            "Paste Motion at Current Time, Paste Motion Reversed at Current "
+            "Time, or Repeat Motion…. A reversed paste changes time order only "
+            "and can extend A → B into A → B → A."
+        ),
+        target="appMenuBar",
+        before_show="expand_setup",
+    ),
+    TutorialStep(
         id="generate",
         title="Generate The Trajectory",
         body=(

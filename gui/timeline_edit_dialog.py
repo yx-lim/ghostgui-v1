@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
     QLabel,
+    QSpinBox,
     QVBoxLayout,
 )
 
@@ -177,6 +179,127 @@ class ScaleTimeRangeDialog(QDialog):
         return None
 
 
+class MotionRangeDialog(QDialog):
+    """Collect an entire-motion or custom Keyframe range."""
+
+    def __init__(
+        self,
+        title,
+        description,
+        *,
+        entire_label,
+        entire_start,
+        entire_end,
+        export_interval,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(420)
+        self._entire_bounds = (float(entire_start), float(entire_end))
+        self._export_interval = float(export_interval)
+
+        self.root_layout = QVBoxLayout(self)
+        message = QLabel(description)
+        message.setWordWrap(True)
+        self.root_layout.addWidget(message)
+
+        self.entire_motion_checkbox = QCheckBox(entire_label)
+        self.entire_motion_checkbox.setChecked(True)
+        self.root_layout.addWidget(self.entire_motion_checkbox)
+
+        self.form = QFormLayout()
+        self.start_input = self._time_input(entire_start)
+        self.end_input = self._time_input(entire_end)
+        self.form.addRow("Range start", self.start_input)
+        self.form.addRow("Range end", self.end_input)
+        self.root_layout.addLayout(self.form)
+
+        self.snap_checkbox = QCheckBox("Snap custom range to Export interval")
+        self.snap_checkbox.setChecked(True)
+        self.snap_checkbox.setToolTip(
+            "Align custom range bounds with the sampling grid used by "
+            "Generate and export. Entire-motion bounds are preserved exactly."
+        )
+        self.root_layout.addWidget(self.snap_checkbox)
+
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        self.root_layout.addWidget(self.buttons)
+
+        self.entire_motion_checkbox.toggled.connect(
+            self._sync_range_enabled
+        )
+        self._sync_range_enabled(True)
+
+    def _time_input(self, value):
+        editor = QDoubleSpinBox()
+        editor.setRange(0.0, 120.0)
+        editor.setDecimals(2)
+        editor.setSingleStep(max(0.01, min(self._export_interval, 10.0)))
+        editor.setSuffix(" s")
+        editor.setValue(float(value))
+        return editor
+
+    def _sync_range_enabled(self, entire_motion):
+        self.start_input.setEnabled(not entire_motion)
+        self.end_input.setEnabled(not entire_motion)
+        self.snap_checkbox.setEnabled(not entire_motion)
+
+    def range_values(self):
+        if self.entire_motion_checkbox.isChecked():
+            return self._entire_bounds
+        start_time = float(self.start_input.value())
+        end_time = float(self.end_input.value())
+        if self.snap_checkbox.isChecked():
+            start_time = snap_time(start_time, self._export_interval)
+            end_time = snap_time(end_time, self._export_interval)
+        return start_time, end_time
+
+
+class RepeatMotionDialog(MotionRangeDialog):
+    """Collect a source range and periodic repetition settings."""
+
+    def __init__(
+        self,
+        *,
+        entire_start,
+        entire_end,
+        export_interval,
+        parent=None,
+    ):
+        super().__init__(
+            "Repeat Motion",
+            "Append copies of a committed Keyframe range. Forward repeats the "
+            "same time order and requires matching start/end poses; Ping-pong "
+            "alternates reversed and forward copies for an A-to-B motion.",
+            entire_label="Repeat entire motion",
+            entire_start=entire_start,
+            entire_end=entire_end,
+            export_interval=export_interval,
+            parent=parent,
+        )
+        self.additional_copies_input = QSpinBox()
+        self.additional_copies_input.setRange(1, 100)
+        self.additional_copies_input.setValue(1)
+        self.pattern_box = QComboBox()
+        self.pattern_box.addItems(("Forward", "Ping-pong"))
+        self.pattern_box.setCurrentText("Ping-pong")
+        self.form.addRow("Additional copies", self.additional_copies_input)
+        self.form.addRow("Pattern", self.pattern_box)
+
+    def additional_copies(self):
+        return int(self.additional_copies_input.value())
+
+    def ping_pong(self):
+        return self.pattern_box.currentText() == "Ping-pong"
+
+
 def insert_time_dialog(parent, *, at_time, default_duration, export_interval):
     default_duration = max(
         float(export_interval),
@@ -257,6 +380,40 @@ def scale_range_dialog(
     return ScaleTimeRangeDialog(
         start_time=start_time,
         end_time=end_time,
+        entire_start=entire_start,
+        entire_end=entire_end,
+        export_interval=export_interval,
+        parent=parent,
+    )
+
+
+def copy_motion_range_dialog(
+    parent,
+    *,
+    entire_start,
+    entire_end,
+    export_interval,
+):
+    return MotionRangeDialog(
+        "Copy Motion Range",
+        "Copy committed logical target Keyframes and poses, including Joint "
+        "Angles. The Orange preview and generated motion are not copied.",
+        entire_label="Copy entire motion",
+        entire_start=entire_start,
+        entire_end=entire_end,
+        export_interval=export_interval,
+        parent=parent,
+    )
+
+
+def repeat_motion_dialog(
+    parent,
+    *,
+    entire_start,
+    entire_end,
+    export_interval,
+):
+    return RepeatMotionDialog(
         entire_start=entire_start,
         entire_end=entire_end,
         export_interval=export_interval,

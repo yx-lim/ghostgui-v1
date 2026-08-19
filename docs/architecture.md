@@ -85,12 +85,26 @@ logical target-frame keyframes used by the backend. A commit updates both
 representations for the same time.
 
 `application.timeline_editing` owns Insert Time, Shift Entire Motion, Move Time
-Range, and Scale Time Range planning. Planning is read-only and preflights
-timestamp bounds, range overlap, scale expansion, snapped-time collapse, and
-per-track/qpos destination conflicts. The resulting command replaces logical
-target frames and qpos states together with rollback on an unexpected apply
-failure. The GUI invalidates generated playback only after the validated
-command succeeds and records the result as one history transition.
+Range, and Scale Time Range planning, plus the shared `TimelineEditPlan` and
+`ApplyTimelineEditPlan` replacement command. `application.motion_clipboard`
+owns Motion Clip capture, paste, and repetition planning and returns that same
+plan contract. A Motion Clip is a detached, model-specific snapshot of
+committed logical target Keyframes and qpos states. It never contains the Orange
+preview or generated samples. Copying is read-only and does not create a
+history transition or dirty the document.
+
+At an in-between range boundary, capture samples the committed qpos state and
+derives logical target anchors through model forward kinematics. An exact
+target Keyframe at the boundary is preserved; target interpolation is the
+fallback when model data is unavailable.
+
+Paste and Repeat planning maps the clip's relative times into the destination
+range and preflights clip timestamps, model/qpos compatibility, interior
+per-track/qpos range overlap, boundary seam equivalence or conflict, and the
+maximum timeline time. The resulting command replaces logical target frames and
+qpos states together with rollback on an unexpected apply failure. The GUI
+invalidates generated playback only after a validated Paste or Repeat succeeds
+and records the complete result as one history transition.
 
 ## Trajectory Generation
 

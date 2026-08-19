@@ -101,6 +101,40 @@ Optional Export-interval snapping applies to every resulting Keyframe and is
 also preflighted for timestamp collapse. Because this changes authoritative
 Keyframe times, it affects Generate and all export formats.
 
+### Motion Clips
+
+**Copy Motion Range…** creates a transient, model-specific Motion Clip from an
+inclusive range. A clip is a detached snapshot of committed logical target
+Keyframes and robot poses, including Joint Angles. When a boundary falls between
+Keyframes, GhostGUI samples the committed robot pose and materializes logical
+target anchors with forward kinematics when model data is available; otherwise
+it uses target interpolation. Exact target Keyframes at the boundary are
+preserved. The Orange preview and generated samples are derived or temporary
+state and are not copied. Copying changes neither the document nor its history
+or dirty state.
+
+**Paste Motion at Current Time** preserves each Keyframe's offset from the
+source start. **Paste Motion Reversed at Current Time** instead maps source time
+with `destination + (source end - source time)`. Reversal changes only temporal
+order; target positions, orientations, and Joint Angles are not mirrored or
+negated.
+
+A Paste or Repeat destination may touch existing motion only at a boundary. Any
+interior overlap with a copied target track or committed robot-pose range
+rejects the complete operation before either source changes, even when no
+Keyframe shares the exact time. At an adjacent boundary, an equivalent seam is
+represented by one Keyframe and a different seam is rejected. Consequently, a
+forward copy can append at the source end only when the source is a closed loop.
+A reversed append is naturally continuous: an `A → B` source becomes
+`A → B → A`.
+
+**Repeat Motion…** takes an additional-copy count. **Forward** repeats the same
+ordering and requires a closed seam between copies. **Ping-pong** alternates
+reversed and forward copies. A successful Paste or Repeat expands the timeline
+when needed, clears generated motion, and is recorded as one Undo/Redo action.
+The Motion Clip remains transient and cannot be pasted into a different robot
+model.
+
 ## Generation And Playback
 
 Generation samples the logical target tracks created by the keyframes and the
