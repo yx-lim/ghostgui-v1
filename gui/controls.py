@@ -137,11 +137,15 @@ class TrajectoryControlPanel(QGroupBox):
             self.import_action_label = QLabel("Import")
             self.import_action_box = NoWheelComboBox()
             self.import_action_box.setObjectName("importActionCombo")
-            self.import_action_box.setToolTip("Import a robot model, qpos pose, or trajectory.")
+            self.import_action_box.setToolTip(
+                "Import a robot model, qpos pose, or trajectory format."
+            )
             self.import_action_box.setPlaceholderText("Select...")
             self.import_action_box.addItem("Model", "model")
             self.import_action_box.addItem("Qpos", "qpos")
-            self.import_action_box.addItem("Trajectory", "trajectory")
+            self.import_action_box.addItem("MuJoCo", "trajectory_mujoco")
+            self.import_action_box.addItem("DSMS", "trajectory_dsms")
+            self.import_action_box.addItem("mjlab", "trajectory_mjlab")
             self.import_action_box.setCurrentIndex(-1)
             self.import_action_box.activated.connect(
                 self._emit_setup_import_action
@@ -507,6 +511,21 @@ class TrajectoryControlPanel(QGroupBox):
         if item is not None:
             item.setEnabled(bool(enabled))
         self.export_action_box.setItemData(
+            index,
+            str(reason or ""),
+            Qt.ItemDataRole.ToolTipRole,
+        )
+
+    def set_import_action_enabled(self, action, enabled, reason=""):
+        if not hasattr(self, "import_action_box"):
+            return
+        index = self.import_action_box.findData(action)
+        if index < 0:
+            return
+        item = self.import_action_box.model().item(index)
+        if item is not None:
+            item.setEnabled(bool(enabled))
+        self.import_action_box.setItemData(
             index,
             str(reason or ""),
             Qt.ItemDataRole.ToolTipRole,

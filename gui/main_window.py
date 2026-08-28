@@ -472,7 +472,6 @@ class RobotGuiMainWindow(QMainWindow):
         for label, action_key in (
             ("Robot Model…", "model"),
             ("Qpos…", "qpos"),
-            ("Trajectory…", "trajectory"),
         ):
             action = QAction(label, self)
             action.setObjectName(f"import{action_key.title()}Action")
@@ -484,6 +483,31 @@ class RobotGuiMainWindow(QMainWindow):
             )
             self.import_menu.addAction(action)
             self.import_actions[action_key] = action
+
+        self.trajectory_import_menu = self.import_menu.addMenu("Trajectory")
+        self.trajectory_import_menu.setObjectName("trajectoryImportMenu")
+        for label, action_key in (
+            ("MuJoCo", "trajectory_mujoco"),
+            ("DSMS", "trajectory_dsms"),
+            ("mjlab", "trajectory_mjlab"),
+        ):
+            action = QAction(label, self)
+            format_key = action_key.removeprefix("trajectory_")
+            action.setObjectName(
+                "importTrajectoryAction"
+                if format_key == "mujoco"
+                else f"importTrajectory{format_key.title()}Action"
+            )
+            action.setData(action_key)
+            action.triggered.connect(
+                lambda checked=False, key=action_key: (
+                    self.on_setup_import_requested(key)
+                )
+            )
+            self.trajectory_import_menu.addAction(action)
+            self.import_actions[action_key] = action
+            if format_key == "mujoco":
+                self.import_actions["trajectory"] = action
 
         self.export_menu = self.file_menu.addMenu("&Export")
         self.export_menu.setObjectName("exportMenu")
@@ -2698,8 +2722,31 @@ class RobotGuiMainWindow(QMainWindow):
             self.on_open_model_file()
         elif action == "qpos":
             self.viewer_3d.choose_qpos_csv()
-        elif action == "trajectory":
+        elif action in ("trajectory", "trajectory_mujoco"):
             self.viewer_3d.choose_trajectory_csv(prompt_import_dt=True)
+        elif action == "trajectory_dsms":
+            self.viewer_3d.choose_dsms_trajectory_dir(prompt_import_dt=True)
+        elif action == "trajectory_mjlab":
+            error = self.viewer_3d.mjlab_export_compatibility_error()
+            if error:
+                self.show_status_message(
+                    f"Could not import mjlab trajectory: {error}"
+                )
+                return
+            sample_interval, accepted = QInputDialog.getDouble(
+                self,
+                "Import mjlab trajectory",
+                "Source sample interval [s]",
+                self.viewer_3d.export_dt(),
+                0.01,
+                10.0,
+                2,
+            )
+            if accepted:
+                self.viewer_3d.choose_mjlab_trajectory_csv(
+                    sample_interval,
+                    prompt_import_dt=True,
+                )
 
     def on_setup_export_requested(self, action):
         if action == "qpos":
@@ -2712,18 +2759,30 @@ class RobotGuiMainWindow(QMainWindow):
             self.viewer_3d.choose_mjlab_trajectory_save_path()
 
     def sync_trajectory_export_actions(self):
-        action = self.export_actions.get("trajectory_mjlab")
-        if action is None:
-            return
         error = self.viewer_3d.mjlab_export_compatibility_error()
         enabled = error is None
-        action.setEnabled(enabled)
-        action.setToolTip(
-            "Export a Unitree G1 29-DoF trajectory for mjlab."
-            if enabled
-            else error
-        )
+        export_action = self.export_actions.get("trajectory_mjlab")
+        if export_action is not None:
+            export_action.setEnabled(enabled)
+            export_action.setToolTip(
+                "Export a Unitree G1 29-DoF trajectory for mjlab."
+                if enabled
+                else error
+            )
         self.controls.set_export_action_enabled(
+            "trajectory_mjlab",
+            enabled,
+            "" if enabled else error,
+        )
+        import_action = self.import_actions.get("trajectory_mjlab")
+        if import_action is not None:
+            import_action.setEnabled(enabled)
+            import_action.setToolTip(
+                "Import a Unitree G1 29-DoF mjlab trajectory."
+                if enabled
+                else error
+            )
+        self.controls.set_import_action_enabled(
             "trajectory_mjlab",
             enabled,
             "" if enabled else error,
@@ -2906,8 +2965,11 @@ class RobotGuiMainWindow(QMainWindow):
         self.restore_pending_project_if_ready()
 
     def on_trajectory_csv_loaded(self, csv_path):
+        playback_path = (
+            self.viewer_3d.loaded_trajectory_playback_path() or csv_path
+        )
         self.viewer_3d_mujoco.set_trajectory_metadata(
-            csv_path,
+            playback_path,
             self.viewer_3d.robot_trajectory_times,
         )
         if self.viewer_3d.consume_trajectory_import_dt_prompt_request():

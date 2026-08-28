@@ -129,6 +129,12 @@ structure. It skips outside the explicitly configured visual environment.
 
 - Load a qpos file with the correct active-model width.
 - Reject a qpos or trajectory with the wrong width or non-finite values.
+- Import a DSMS reference folder and confirm `time.csv` and
+  `qpos_<dof>dof.csv` are paired automatically, timestamps are preserved, and
+  mismatched sample counts or active-model DoF are rejected.
+- Import a G1 29-DoF mjlab CSV at `0.01 s` and another selected source sample
+  interval; confirm `x, y, z, w` is converted to MuJoCo `w, x, y, z`, named
+  joints return to compiled qpos addresses, and incompatible models are blocked.
 - Export a committed pose and confirm an uncommitted orange preview is absent.
 - Export MuJoCo, DSMS, and mjlab trajectories; confirm DSMS creates two files,
   both specialized formats apply Export interval to the current trajectory, and

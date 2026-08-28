@@ -23,6 +23,7 @@ class LoadedTrajectory:
     path: Path
     times: tuple[float, ...]
     qposes: tuple[np.ndarray, ...]
+    source_format: str = "mujoco"
 
 
 @dataclass(frozen=True)

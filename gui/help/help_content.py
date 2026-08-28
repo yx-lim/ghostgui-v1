@@ -155,9 +155,17 @@ Export interval sets the generated time step from 0.01 s to 10.00 s. This is sep
 """.strip(),
     ),
     HelpSection(
-        "Export Format",
+        "Import And Export Formats",
         """
-# Export Format
+# Import And Export Formats
+
+Use **File > Import > Trajectory** to choose the source format.
+
+- **MuJoCo** loads one headerless CSV containing time followed by qpos values.
+- **DSMS** loads a selected reference folder containing both `time.csv` and one `qpos_<dof>dof.csv`; do not select the two files separately.
+- **mjlab** loads a headerless Unitree G1 29-DoF CSV. Because mjlab rows do not contain timestamps, enter the source sample interval when prompted. The default `0.01 s` means 100 Hz.
+
+After loading any trajectory, choose the separate editable Keyframe interval used to derive editable target-frame Keyframes from the imported samples.
 
 Use **File > Export** to choose what to save.
 

@@ -103,6 +103,9 @@ FIRST_MOTION_TUTORIAL = [
         title="Export The Result",
         body=(
             "Use File > Export > Trajectory to choose MuJoCo, DSMS, or mjlab. "
+            "File > Import > Trajectory accepts the same three formats; DSMS "
+            "uses its reference folder, while mjlab asks for its source sample "
+            "interval. "
             "Set DSMS motion speed in Planning when DSMS time.csv should carry "
             "a genuinely slower or faster reference. Unsaved orange previews "
             "are not exported."

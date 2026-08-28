@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 from application.paths import (
     QPOS_CSV_DIR,
     TRAJECTORY_CSV_DIR,
+    mujoco_playback_cache_path,
 )
 from application.background_jobs import SerializedBackgroundJobs
 from application.playback import PlaybackClock
@@ -47,6 +48,10 @@ from application.csv_io import (
     read_trajectory_csv,
     write_qpos_csv,
     write_trajectory_csv,
+)
+from application.trajectory_import_formats import (
+    read_dsms_trajectory,
+    read_mjlab_trajectory,
 )
 from core.models import (
     RobotStateTimeline,
@@ -1713,6 +1718,36 @@ class RobotViewer3D(QWidget):
             ),
         )
 
+    def choose_dsms_trajectory_dir(self, prompt_import_dt=False):
+        self._open_csv_file_dialog(
+            title="Load DSMS trajectory folder",
+            directory=TRAJECTORY_CSV_DIR,
+            selected=lambda path: self._load_selected_dsms_trajectory(
+                path, prompt_import_dt
+            ),
+            directory_mode=True,
+            name_filter="Folders (*)",
+        )
+
+    def choose_mjlab_trajectory_csv(
+        self,
+        sample_interval,
+        prompt_import_dt=False,
+    ):
+        error = self.mjlab_export_compatibility_error()
+        if error:
+            self.status_label.setText(f"Could not import mjlab trajectory: {error}")
+            return
+        self._open_csv_file_dialog(
+            title="Load mjlab trajectory",
+            directory=TRAJECTORY_CSV_DIR,
+            selected=lambda path: self._load_selected_mjlab_trajectory(
+                path,
+                sample_interval,
+                prompt_import_dt,
+            ),
+        )
+
     def choose_qpos_save_path(self):
         self._open_csv_file_dialog(
             title="Save robot qpos",
@@ -1816,6 +1851,51 @@ class RobotViewer3D(QWidget):
                 background_postprocess=True,
             ),
             lambda error: self._trajectory_csv_load_failed(error),
+        )
+
+    def _load_selected_dsms_trajectory(self, path, prompt_import_dt=False):
+        expected = int(self.robot_model.mj_model.nq)
+        expected_dof = len(self.robot_model.actuated_joints)
+        self.status_label.setText(
+            f"Loading DSMS trajectory from {Path(path).name}..."
+        )
+        self._submit_csv_job(
+            "load DSMS trajectory",
+            lambda: read_dsms_trajectory(
+                path,
+                expected,
+                expected_dof=expected_dof,
+            ),
+            lambda loaded: self._apply_loaded_trajectory(
+                loaded,
+                prompt_import_dt=prompt_import_dt,
+                background_postprocess=True,
+            ),
+            lambda error: self._trajectory_csv_load_failed(error, "DSMS"),
+        )
+
+    def _load_selected_mjlab_trajectory(
+        self,
+        path,
+        sample_interval,
+        prompt_import_dt=False,
+    ):
+        self.status_label.setText(
+            f"Loading mjlab trajectory from {Path(path).name}..."
+        )
+        self._submit_csv_job(
+            "load mjlab trajectory",
+            lambda: read_mjlab_trajectory(
+                path,
+                self.robot_model,
+                sample_interval,
+            ),
+            lambda loaded: self._apply_loaded_trajectory(
+                loaded,
+                prompt_import_dt=prompt_import_dt,
+                background_postprocess=True,
+            ),
+            lambda error: self._trajectory_csv_load_failed(error, "mjlab"),
         )
 
     def _save_selected_qpos_csv(self, path):
@@ -2036,14 +2116,33 @@ class RobotViewer3D(QWidget):
             f"Loaded {len(qposes)} timed qpos trajectory states from "
             f"{loaded.path.name} ({duration:.3f} s)"
         )
+        if loaded.source_format == "mujoco":
+            self._loaded_trajectory_playback_path = loaded.path
+        else:
+            playback_export = TrajectoryExport(
+                expected_qpos_count=int(self.robot_model.mj_model.nq),
+                times=tuple(times),
+                qposes=tuple(qposes),
+                source_name=f"imported {loaded.source_format} trajectory",
+                preview_active=False,
+            )
+            self._loaded_trajectory_playback_path = write_trajectory_csv(
+                mujoco_playback_cache_path(),
+                playback_export,
+            )
         self._background_trajectory_postprocess_requested = bool(
             background_postprocess
         )
         self.trajectory_csv_loaded.emit(str(loaded.path))
 
-    def _trajectory_csv_load_failed(self, error):
+    def loaded_trajectory_playback_path(self):
+        return getattr(self, "_loaded_trajectory_playback_path", None)
+
+    def _trajectory_csv_load_failed(self, error, format_name="MuJoCo"):
         self._prompt_trajectory_import_dt_on_load = False
-        self.status_label.setText(f"Could not load trajectory CSV: {error}")
+        self.status_label.setText(
+            f"Could not load {format_name} trajectory: {error}"
+        )
 
     def save_qpos_csv(self, csv_path):
         """Save the committed active keyframe as one headerless qpos row."""

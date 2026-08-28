@@ -112,9 +112,24 @@ Floating-base orientation uses `w, x, y, z` quaternion order.
 Qpos import reads the first non-empty row and rejects a header or incorrect
 width.
 
-Trajectory import accepts headerless MuJoCo time-plus-qpos rows and requires
-nondecreasing times. The standalone MuJoCo viewer also accepts named backend
-CSV output.
+**File → Import → Trajectory** accepts these formats:
+
+- **MuJoCo** reads one headerless time-plus-qpos CSV and requires nondecreasing
+  times.
+- **DSMS** asks for the reference folder, not its files separately. The folder
+  must contain `time.csv` and exactly one `qpos_<dof>dof.csv` matching the active
+  model. The files must have equal sample counts, and each qpos row must have
+  the active model's `nq` width. Existing DSMS timestamps, including motion-speed
+  scaling, are preserved.
+- **mjlab** reads the headerless Unitree G1 29-DoF layout and converts its `x, y,
+  z, w` quaternion and named joint order back to MuJoCo qpos ordering. Because
+  mjlab CSV has no timestamps, the import asks for its source sample interval;
+  `0.01 s` represents 100 Hz. mjlab import is unavailable for incompatible
+  active models.
+
+The editable Keyframe interval prompt is separate from the mjlab source sample
+interval: it controls how densely imported samples become editable Keyframes.
+The standalone MuJoCo viewer also accepts named backend CSV output.
 
 ## Project Folder
 

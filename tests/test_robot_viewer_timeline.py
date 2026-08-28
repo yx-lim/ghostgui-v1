@@ -1809,7 +1809,14 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertEqual(
             [action.text() for action in self.window.import_menu.actions()],
-            ["Robot Model…", "Qpos…", "Trajectory…"],
+            ["Robot Model…", "Qpos…", "Trajectory"],
+        )
+        self.assertEqual(
+            [
+                action.text()
+                for action in self.window.trajectory_import_menu.actions()
+            ],
+            ["MuJoCo", "DSMS", "mjlab"],
         )
         self.assertEqual(
             [action.text() for action in self.window.export_menu.actions()],
@@ -1864,7 +1871,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 self.window.controls.import_action_box.itemText(index)
                 for index in range(self.window.controls.import_action_box.count())
             ],
-            ["Model", "Qpos", "Trajectory"],
+            ["Model", "Qpos", "MuJoCo", "DSMS", "mjlab"],
         )
         self.assertEqual(
             [
@@ -3709,6 +3716,36 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertAlmostEqual(self.viewer.trajectory_import_dt.value(), 0.05)
         editable_times = sorted({frame.time for frame in self.window.trajectory.frames})
         np.testing.assert_allclose(editable_times, [0.0, 0.05, 0.10])
+
+    def test_specialized_import_selection_uses_folder_and_mjlab_interval(self):
+        with patch.object(self.viewer, "_open_csv_file_dialog") as open_dialog:
+            self.viewer.choose_dsms_trajectory_dir(prompt_import_dt=True)
+
+        self.assertTrue(open_dialog.call_args.kwargs["directory_mode"])
+        self.assertEqual(
+            open_dialog.call_args.kwargs["title"],
+            "Load DSMS trajectory folder",
+        )
+
+        with (
+            patch(
+                "gui.main_window.QInputDialog.getDouble",
+                return_value=(0.02, True),
+            ) as prompt,
+            patch.object(
+                self.viewer,
+                "choose_mjlab_trajectory_csv",
+            ) as choose_mjlab,
+        ):
+            self.window.on_setup_import_requested("trajectory_mjlab")
+
+        prompt.assert_called_once()
+        self.assertEqual(prompt.call_args.args[2], "Source sample interval [s]")
+        self.assertAlmostEqual(prompt.call_args.args[3], 0.01)
+        choose_mjlab.assert_called_once_with(
+            0.02,
+            prompt_import_dt=True,
+        )
 
     def test_loaded_trajectory_csv_can_be_cleared_from_keyframe_controls(self):
         first = self.viewer.robot_model.home_qpos.copy()
