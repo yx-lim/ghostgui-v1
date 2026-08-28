@@ -8,7 +8,7 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt
 from PySide6.QtGui import QColor, QCloseEvent, QMouseEvent, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
@@ -3195,6 +3195,77 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertFalse(manager.active)
         self.assertFalse(manager.overlay.isVisible())
         self.assertFalse(manager.card.isVisible())
+
+    def test_help_menu_opens_concise_keyboard_shortcuts(self):
+        self.assertEqual(
+            [action.text() for action in self.window.help_menu.actions()],
+            [
+                "&Help Center…",
+                "Start &Tutorial",
+                "&Keyboard Shortcuts…",
+            ],
+        )
+
+        self.window.keyboard_shortcuts_action.trigger()
+        self.app.processEvents()
+
+        dialog = self.window.keyboard_shortcuts_dialog
+        self.assertIsNotNone(dialog)
+        self.assertTrue(dialog.isVisible())
+        self.assertEqual(dialog.windowTitle(), "Keyboard Shortcuts")
+        label_texts = {
+            label.text() for label in dialog.findChildren(QLabel)
+        }
+        for text in (
+            "T",
+            "R",
+            "E / Esc",
+            "Shift + drag",
+            "Ctrl + drag",
+            "Ctrl+Z",
+            "Ctrl+Shift+Z",
+            "Move/translate gizmo",
+            "Rotate gizmo",
+            "Cancel the active drag",
+            "Fine movement",
+            "Snap movement",
+            "Undo",
+            "Redo",
+        ):
+            self.assertIn(text, label_texts)
+
+    def test_tutorial_target_step_mentions_double_click_and_highlights_gizmo_tools(self):
+        self.window.resize(1700, 800)
+        self.window.show()
+        self.app.processEvents()
+
+        manager = self.window.tutorial_manager
+        manager.start_first_motion()
+        manager.current_index = 2
+        manager.show_current_step()
+        self.app.processEvents()
+        self.assertIn(
+            "double-click the robot to choose the target to edit",
+            manager.card.body_label.text(),
+        )
+
+        manager.current_index = 3
+        manager.show_current_step()
+        self.app.processEvents()
+        expected = QRect()
+        for object_name in (
+            "moveToolButton",
+            "rotateToolButton",
+            "gizmoVisibilityButton",
+        ):
+            widget = self.window.findChild(QWidget, object_name)
+            self.assertIsNotNone(widget)
+            top_left = widget.mapTo(self.window, QPoint(0, 0))
+            rect = QRect(top_left, widget.size())
+            expected = rect if expected.isNull() else expected.united(rect)
+
+        self.assertEqual(manager.overlay.target_rect, expected)
+        manager.stop()
 
     def test_model_colors_toggle_defaults_on_without_mutating_materials(self):
         before = self.window.robot_model_3d.mj_model.mat_rgba.copy()

@@ -8,7 +8,7 @@ class TutorialStep:
     id: str
     title: str
     body: str
-    target: str | None = None
+    target: str | tuple[str, ...] | None = None
     before_show: str | None = None
 
 
@@ -39,7 +39,8 @@ FIRST_MOTION_TUTORIAL = [
         body=(
             "Choose the body, site, or logical frame you want to edit. For a "
             "first motion, a hand target such as left_hand is usually easiest "
-            "to see."
+            "to see. You can also double-click the robot to choose the target "
+            "to edit."
         ),
         target="targetFrameCombo",
         before_show="expand_target_pose",
@@ -52,7 +53,11 @@ FIRST_MOTION_TUTORIAL = [
             "orange robot shows the temporary IK preview before it is saved. "
             "Press T for translate, R for rotate, or E/Esc to cancel a drag."
         ),
-        target="workflowToolbar",
+        target=(
+            "moveToolButton",
+            "rotateToolButton",
+            "gizmoVisibilityButton",
+        ),
         before_show="expand_end_effector_editor",
     ),
     TutorialStep(

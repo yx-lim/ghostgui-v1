@@ -98,14 +98,27 @@ class TutorialManager(QObject):
             self.card.next_requested.connect(self.next_step)
             self.card.skip_requested.connect(self.stop)
 
-    def _target_rect(self, object_name):
-        if not object_name:
+    def _target_rect(self, target_spec):
+        if not target_spec:
             return QRect()
-        target = self.main_window.findChild(QWidget, object_name)
-        if target is None or not target.isVisible():
-            return QRect()
-        top_left = target.mapTo(self.main_window, QPoint(0, 0))
-        return QRect(top_left, target.size())
+        object_names = (
+            (target_spec,)
+            if isinstance(target_spec, str)
+            else tuple(target_spec)
+        )
+        target_rect = QRect()
+        for object_name in object_names:
+            target = self.main_window.findChild(QWidget, object_name)
+            if target is None or not target.isVisible():
+                continue
+            top_left = target.mapTo(self.main_window, QPoint(0, 0))
+            widget_rect = QRect(top_left, target.size())
+            target_rect = (
+                widget_rect
+                if target_rect.isNull()
+                else target_rect.united(widget_rect)
+            )
+        return target_rect
 
     def _position_card(self, target_rect):
         self.card.adjustSize()

@@ -41,7 +41,8 @@ For the complete state model, see [Preview And Keyframe Concepts](concepts.md).
 ## First Motion Workflow
 
 1. Choose a robot from the **Robot** menu.
-2. Select a **Target robot frame**, such as `left_hand`.
+2. Select a **Target robot frame**, such as `left_hand`, or double-click the
+   robot to choose the target to edit.
 3. Move the target with the 3D transform gizmo or the pose controls.
 4. Inspect the orange preview and the **Status** panel.
 5. Optionally select **Preview Path** to validate the transition.
@@ -196,6 +197,9 @@ The right sidebar contains a compact **Status** summary and the
 operation diagnostics.
 
 ## Keyboard And Mouse
+
+Open **Help → Keyboard Shortcuts…** for a concise reference to the essential
+editing shortcuts.
 
 ### Transform Editing
 

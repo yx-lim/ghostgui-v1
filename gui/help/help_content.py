@@ -23,7 +23,7 @@ HELP_SECTIONS = [
 Use this workflow to create one editable robot motion.
 
 1. Choose the robot model in the app toolbar.
-2. Select a **Target robot frame**, such as `left_hand`.
+2. Select a **Target robot frame**, such as `left_hand`, or double-click the robot to choose the target to edit.
 3. Move the target with the 3D gizmo or the position/orientation sliders.
 4. The orange robot is the temporary preview. It is not saved yet.
 5. Click **Preview Path** when you want to validate the path from the committed pose to the orange preview. Collision samples remain visible as red ghosts.
@@ -46,7 +46,7 @@ move target -> orange preview -> Commit Keyframe -> Generate -> Export
 
 ## Menu Bar
 
-Create/open/save projects, choose the robot model, import or export data, retime Keyframes, switch views, and open help.
+Create/open/save projects, choose the robot model, import or export data, retime Keyframes, switch views, and open help. Use **Help → Keyboard Shortcuts…** for the concise editing shortcut reference.
 
 Use **Timeline → Insert Time at Current Time** to open a held interval and shift later Keyframes. **Shift Entire Motion** applies one offset to the whole motion. **Move Time Range** relocates an inclusive range when its non-overlapping destination is free. **Scale Time Range** changes actual timeline speed: `2×` halves duration and `0.5×` doubles it.
 

@@ -82,7 +82,7 @@ from gui.viewers.mujoco_player import Mujoco3DViewerPanel
 from application.backend_interface import BackendInterface
 from core.models import MujocoReferenceFrames
 from .app_sidebars import AppLeftSidebar, AppRightSidebar, SidebarSplitter
-from .help import HelpCenterDialog
+from .help import HelpCenterDialog, KeyboardShortcutsDialog
 from .project_browser import ProjectBrowserDialog
 from .theme import ensure_application_theme, theme_icon
 from .timeline_edit_dialog import (
@@ -305,6 +305,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.viewer_tabs = self.build_viewer_tabs()
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
         self.help_dialog = None
+        self.keyboard_shortcuts_dialog = None
         self.motion_clipboard = None
         self.build_menu_bar()
         self.sync_trajectory_export_actions()
@@ -738,13 +739,23 @@ class RobotGuiMainWindow(QMainWindow):
         self.help_center_action.triggered.connect(self.show_help_center)
         self.help_menu.addAction(self.help_center_action)
         self.start_tutorial_action = QAction(
-            "Start First Motion &Tutorial", self
+            "Start &Tutorial", self
         )
         self.start_tutorial_action.setObjectName("startTutorialAction")
         self.start_tutorial_action.triggered.connect(
             self.start_first_motion_tutorial
         )
         self.help_menu.addAction(self.start_tutorial_action)
+        self.keyboard_shortcuts_action = QAction(
+            "&Keyboard Shortcuts…", self
+        )
+        self.keyboard_shortcuts_action.setObjectName(
+            "keyboardShortcutsAction"
+        )
+        self.keyboard_shortcuts_action.triggered.connect(
+            self.show_keyboard_shortcuts
+        )
+        self.help_menu.addAction(self.keyboard_shortcuts_action)
 
     def _toolbar_action(self, toolbar, text, icon_name, object_name, tooltip):
         action = QAction(theme_icon(icon_name, self), text, self)
@@ -2014,6 +2025,13 @@ class RobotGuiMainWindow(QMainWindow):
         if self.help_dialog is not None:
             self.help_dialog.hide()
         self.tutorial_manager.start_first_motion()
+
+    def show_keyboard_shortcuts(self):
+        if self.keyboard_shortcuts_dialog is None:
+            self.keyboard_shortcuts_dialog = KeyboardShortcutsDialog(self)
+        self.keyboard_shortcuts_dialog.show()
+        self.keyboard_shortcuts_dialog.raise_()
+        self.keyboard_shortcuts_dialog.activateWindow()
 
     def prepare_pending_initial_render_progress(self):
         if (
