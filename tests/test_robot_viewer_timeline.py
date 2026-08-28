@@ -3253,6 +3253,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         manager.show_current_step()
         self.app.processEvents()
         expected = QRect()
+        expected_toolbar = QRect()
         for object_name in (
             "moveToolButton",
             "rotateToolButton",
@@ -3263,8 +3264,77 @@ class RobotViewerTimelineTests(unittest.TestCase):
             top_left = widget.mapTo(self.window, QPoint(0, 0))
             rect = QRect(top_left, widget.size())
             expected = rect if expected.isNull() else expected.united(rect)
+            toolbar_top_left = widget.mapTo(
+                self.window.app_toolbar,
+                QPoint(0, 0),
+            )
+            toolbar_rect = QRect(toolbar_top_left, widget.size())
+            expected_toolbar = (
+                toolbar_rect
+                if expected_toolbar.isNull()
+                else expected_toolbar.united(toolbar_rect)
+            )
 
         self.assertEqual(manager.overlay.target_rect, expected)
+        self.assertEqual(
+            manager.toolbar_overlay.target_rect,
+            expected_toolbar,
+        )
+        self.assertTrue(manager.menu_overlay.target_rect.isNull())
+        manager.stop()
+
+    def test_tutorial_menu_steps_highlight_only_the_named_menu_label(self):
+        self.window.resize(1700, 800)
+        self.window.show()
+        self.app.processEvents()
+
+        manager = self.window.tutorial_manager
+        manager.start_first_motion()
+        menu_bar = self.window.menuBar()
+        for step_index, menu in (
+            (1, self.window.robot_menu),
+            (6, self.window.timeline_menu),
+            (8, self.window.file_menu),
+        ):
+            with self.subTest(step=manager.steps[step_index].id):
+                manager.current_index = step_index
+                manager.show_current_step()
+                self.app.processEvents()
+
+                action_rect = menu_bar.actionGeometry(menu.menuAction())
+                expected_top_left = menu_bar.mapTo(
+                    self.window,
+                    action_rect.topLeft(),
+                )
+                expected = QRect(expected_top_left, action_rect.size())
+                self.assertEqual(manager.overlay.target_rect, expected)
+                self.assertEqual(
+                    manager.menu_overlay.target_rect,
+                    action_rect,
+                )
+                self.assertTrue(manager.toolbar_overlay.target_rect.isNull())
+
+                margin = 14
+                expected_x = max(
+                    margin,
+                    min(
+                        expected.left(),
+                        self.window.width() - manager.card.width() - margin,
+                    ),
+                )
+                toolbar_bottom = self.window.app_toolbar.mapTo(
+                    self.window,
+                    QPoint(0, self.window.app_toolbar.height()),
+                ).y()
+                expected_y = max(
+                    margin,
+                    min(
+                        toolbar_bottom + margin,
+                        self.window.height() - manager.card.height() - margin,
+                    ),
+                )
+                self.assertEqual(manager.card.pos(), QPoint(expected_x, expected_y))
+
         manager.stop()
 
     def test_model_colors_toggle_defaults_on_without_mutating_materials(self):

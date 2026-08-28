@@ -440,6 +440,7 @@ class RobotGuiMainWindow(QMainWindow):
         menu_bar.setNativeMenuBar(False)
 
         self.file_menu = menu_bar.addMenu("&File")
+        self.file_menu.setObjectName("fileMenu")
         self.new_project_action = QAction("&New Project…", self)
         self.new_project_action.setObjectName("newProjectAction")
         self.new_project_action.setShortcut(QKeySequence.StandardKey.New)

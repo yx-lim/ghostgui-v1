@@ -10,6 +10,8 @@ class TutorialStep:
     body: str
     target: str | tuple[str, ...] | None = None
     before_show: str | None = None
+    position_card_near_target: bool = True
+    card_placement: str = "auto"
 
 
 FIRST_MOTION_TUTORIAL = [
@@ -30,8 +32,9 @@ FIRST_MOTION_TUTORIAL = [
             "The robot model controls the available joints, frames, geometry, "
             "and home pose. Open the Robot menu to choose the active model."
         ),
-        target="appMenuBar",
+        target="robotMenu",
         before_show="expand_setup",
+        card_placement="below",
     ),
     TutorialStep(
         id="select_frame",
@@ -89,8 +92,9 @@ FIRST_MOTION_TUTORIAL = [
             "Time, or Repeat Motion…. A reversed paste changes time order only "
             "and can extend A → B into A → B → A."
         ),
-        target="appMenuBar",
+        target="timelineMenu",
         before_show="expand_setup",
+        card_placement="below",
     ),
     TutorialStep(
         id="generate",
@@ -115,7 +119,8 @@ FIRST_MOTION_TUTORIAL = [
             "a genuinely slower or faster reference. Unsaved orange previews "
             "are not exported."
         ),
-        target="appMenuBar",
+        target="fileMenu",
         before_show="expand_setup",
+        card_placement="below",
     ),
 ]
