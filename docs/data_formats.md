@@ -3,6 +3,21 @@
 GhostGUI uses model-dependent MuJoCo `qpos` arrays for pose and trajectory
 interchange. The active model determines the required array width and ordering.
 
+## Qpos vs. Trajectory
+
+A `qpos` is one complete MuJoCo robot configuration. It contains Joint Angles
+and, for a floating-base robot, base translation and orientation. A qpos pose is
+one robot state without time; a trajectory is a sequence of qpos states that
+describes motion.
+
+| Format | Contents | Timing | Compatibility | Typical use |
+| --- | --- | --- | --- | --- |
+| Qpos Pose | One qpos row | None | Active model | Save or load one pose |
+| MuJoCo trajectory | Time plus qpos per row | In each row | Active model | GhostGUI and MuJoCo interchange |
+| DSMS | Qpos rows and `time.csv` | Separate file | Model-dependent | DSMS reference motion |
+| mjlab | Floating base and 29 named joints | Not included | G1 29-DoF only | mjlab input |
+| Named backend CSV | Named semantic columns | In each row | Active backend | Simulation and inspection tools |
+
 ## Qpos Pose CSV
 
 A qpos pose file contains one headerless numeric row:
@@ -25,9 +40,9 @@ width or column order.
 **File → Export → Qpos** writes the current committed pose. An orange preview is
 not included.
 
-## Headerless Trajectory CSV
+## MuJoCo Trajectory CSV
 
-The application trajectory format contains one row per sample:
+The headerless MuJoCo trajectory format contains one row per sample:
 
 ```text
 time,qpos_0,qpos_1,...,qpos_n
