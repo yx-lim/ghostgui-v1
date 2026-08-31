@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from application.paths import atomic_text_writer, prepare_csv_save_path
+from core.robotics import QposContract, validate_trajectory_arrays
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class LoadedTrajectory:
     path: Path
     times: tuple[float, ...]
     qposes: tuple[np.ndarray, ...]
+    source_format: str = "mujoco"
 
 
 @dataclass(frozen=True)
@@ -53,12 +55,14 @@ def read_qpos_csv(csv_path, expected_qpos_count):
             "expected a headerless row containing only qpos numbers"
         ) from exc
     expected = int(expected_qpos_count)
-    if qpos.shape != (expected,):
-        raise ValueError(
-            f"expected {expected} qpos values for this model, found {qpos.size}"
-        )
-    if not np.all(np.isfinite(qpos)):
-        raise ValueError("qpos contains a non-finite value")
+    try:
+        qpos = QposContract(expected).validate(qpos)
+    except ValueError as exc:
+        if qpos.shape != (expected,):
+            raise ValueError(
+                f"expected {expected} qpos values for this model, found {qpos.size}"
+            ) from exc
+        raise
     return LoadedQpos(path=path, qpos=qpos)
 
 
@@ -94,8 +98,7 @@ def read_trajectory_csv(csv_path, expected_qpos_count):
         times.append(values[0])
         qposes.append(np.asarray(values[1:], dtype=float))
 
-    if any(earlier > later for earlier, later in zip(times, times[1:])):
-        raise ValueError("trajectory times must be nondecreasing")
+    times, qposes = validate_trajectory_arrays(times, qposes, expected)
 
     return LoadedTrajectory(
         path=path,
@@ -106,7 +109,10 @@ def read_trajectory_csv(csv_path, expected_qpos_count):
 
 def write_qpos_csv(csv_path, qpos):
     path = prepare_csv_save_path(csv_path)
-    values = np.asarray(qpos, dtype=float)
+    raw = np.asarray(qpos, dtype=float)
+    if raw.ndim != 1:
+        raise ValueError("qpos export must be a one-dimensional array")
+    values = QposContract(raw.size).validate(raw)
     with atomic_text_writer(path, newline="") as handle:
         csv.writer(handle).writerow(f"{value:.18e}" for value in values)
     return path
@@ -115,14 +121,14 @@ def write_qpos_csv(csv_path, qpos):
 def write_trajectory_csv(csv_path, export):
     path = prepare_csv_save_path(csv_path)
     expected = int(export.expected_qpos_count)
+    times, qposes = validate_trajectory_arrays(
+        export.times,
+        export.qposes,
+        expected,
+    )
     with atomic_text_writer(path, newline="") as handle:
         writer = csv.writer(handle)
-        for time_value, qpos in zip(export.times, export.qposes):
-            if qpos is None or len(qpos) != expected:
-                raise ValueError(
-                    f"trajectory state at t={time_value:.6f} does not "
-                    f"contain {expected} qpos values"
-                )
+        for time_value, qpos in zip(times, qposes):
             writer.writerow(
                 [f"{time_value:.6f}"]
                 + [f"{value:.18e}" for value in qpos]

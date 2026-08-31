@@ -95,6 +95,7 @@ class SynchronousFileSelectionStage(QObject):
         # This process owns only a picker. Kill it immediately during app
         # shutdown so a stuck desktop portal cannot outlive or delay GhostGUI.
         process.kill()
+        process.waitForFinished(1000)
         self.active_changed.emit(False)
 
     def _on_finished(self, process, exit_code, _exit_status):

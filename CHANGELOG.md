@@ -11,10 +11,19 @@ in this repository.
 ### Added
 
 - Focused guides for concepts, data formats, models, model import, advanced IK,
-  architecture, testing, and troubleshooting.
+  architecture, migration, operations, reliability, testing, and
+  troubleshooting.
 - A documentation index, contribution guide, citation metadata, and repository
   documentation checks.
 - An MIT license for the project.
+- Document, session, controller, command, and typed-event application
+  contracts.
+- An RViz-inspired visualization context with lifecycle-managed displays,
+  tools, panels, and logical frame-pose services.
+- Model-specific Motion Clips for copying, forward or reversed pasting, and
+  Forward or Ping-pong repetition of committed motion ranges.
+- Transaction recovery, cancellation, shutdown, architecture, packaging, and
+  visual regression tests.
 
 ### Changed
 
@@ -22,6 +31,15 @@ in this repository.
 - Standardized the public workflow around **Preview Path**,
   **Commit Keyframe**, and **Keyframe interval**.
 - Removed stale implementation investigations from the publishable repository.
+- Made project saves and autosaves transactional with schema migration and
+  project-contained path validation.
+- Consolidated quaternion, coordinate, qpos, trajectory, collision, and IK
+  contracts and made backend approximation explicit.
+- Split history, playback, status, camera, loading, render progress, and IK
+  panel ownership out of the large GUI facades.
+- Added cancellable background work, deterministic session/process teardown,
+  render coalescing, and context-bound OpenGL cleanup.
+- Packaged model, mesh, theme, and help resources for installed wheels.
 
 ### Fixed
 
@@ -29,3 +47,5 @@ in this repository.
   CSV output.
 - Clarified where imported model sources and generated runtime caches are
   stored.
+- Corrected playback timing, logical-target edit restoration, and Go2 support
+  contact acceptance defects from the documented baseline.

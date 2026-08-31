@@ -6,9 +6,43 @@ from pathlib import Path
 import sys
 import tempfile
 
+from core.resources import (
+    SOURCE_ROOT,
+    bundled_resource_root,
+    is_source_checkout,
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CSV_DIR = PROJECT_ROOT / "csv"
+
+# Compatibility constant for scripts and tests that need the Python source
+# root. Read-only application assets use BUNDLED_DATA_ROOT instead.
+PROJECT_ROOT = SOURCE_ROOT
+BUNDLED_DATA_ROOT = bundled_resource_root()
+
+
+def ghostgui_user_data_dir():
+    override = os.environ.get("GHOSTGUI_USER_DATA_DIR")
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "GhostGUI"
+    if sys.platform.startswith("win"):
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data) / "GhostGUI"
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        return Path(xdg_data_home).expanduser() / "ghostgui"
+    return Path.home() / ".local" / "share" / "ghostgui"
+
+
+def writable_data_root():
+    if os.environ.get("GHOSTGUI_USER_DATA_DIR"):
+        return ghostgui_user_data_dir()
+    # Preserve checkout-local examples and projects for source development.
+    return PROJECT_ROOT if is_source_checkout(PROJECT_ROOT) else ghostgui_user_data_dir()
+
+
+CSV_DIR = writable_data_root() / "csv"
 QPOS_CSV_DIR = CSV_DIR / "qpos"
 TRAJECTORY_CSV_DIR = CSV_DIR / "trajectory"
 

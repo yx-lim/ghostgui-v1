@@ -24,6 +24,17 @@ Windows PowerShell:
 If `.venv` does not exist, rerun the platform installer from the repository
 root.
 
+### Installation succeeds but dependencies are broken
+
+From the activated environment, run:
+
+```bash
+python -m pip check
+```
+
+If it reports missing or conflicting packages, rerun the platform installer.
+This is especially useful when the installer reused an existing `.venv`.
+
 ### Qt fails to initialize on Linux
 
 Confirm that the packages in `scripts/install_linux.sh` were installed.
@@ -33,9 +44,11 @@ as `libxcb-cursor0`, `libxcb-xinerama0`, `libxcb-xinput0`, or
 
 ### MuJoCo cannot create an OpenGL context
 
-Confirm that the machine has working GPU drivers or a software OpenGL stack.
-Remote desktops, containers, WSL, and headless sessions may need separate
-display and OpenGL configuration.
+GhostGUI requests desktop OpenGL 2.1 compatibility rendering with a 24-bit
+depth buffer. Use the rendering error in **Status** to compare that request
+with the context supplied by Qt. Confirm that the machine has working GPU
+drivers or a software OpenGL stack. Remote desktops, containers, WSL, and
+headless sessions may need separate display and OpenGL configuration.
 
 ### The passive viewer fails on macOS
 
@@ -63,13 +76,22 @@ the directory containing the referenced `meshes`, `dae`, or `assets` files.
 
 The runtime cache is content-addressed, so source, mesh, MuJoCo, and cache-format
 changes normally create a new entry. To force regeneration, close GhostGUI and
-remove only the relevant entry below:
+remove only the affected prepared-model entry under:
 
 ```text
 ~/.cache/ghostgui/models/
 ```
 
-If `GHOSTGUI_CACHE_DIR` is set, inspect that directory instead.
+If `GHOSTGUI_CACHE_DIR` is set, inspect its `models` directory instead. Do not
+remove imported model sources or project data; they are not disposable caches.
+
+## Projects
+
+### A project cannot open after an interrupted save
+
+Do not delete `.ghostgui-transactions` or edit individual project files. Close
+all GhostGUI processes using the project, preserve a copy of the complete
+`.ghostgui` folder, and follow [Interrupted Save Recovery](operations.md#interrupted-save-recovery).
 
 ## Editing And IK
 
@@ -115,6 +137,13 @@ Confirm the file matches the active model. A qpos file requires exactly
 that many qpos values on every row, with nondecreasing times.
 
 See [Data Formats](data_formats.md) for the full contracts.
+
+### A DSMS or mjlab import is rejected
+
+For DSMS, select the folder containing `time.csv` and exactly one matching
+`qpos_<dof>dof.csv`. mjlab import supports only G1 29-DoF and requires the
+source sample interval. See [Import Behavior](data_formats.md#import-behavior)
+for the complete requirements.
 
 ## Reporting A Problem
 

@@ -54,3 +54,28 @@ include = [
 exclude = [
     "tests*",
 ]
+
+[tool.setuptools.data-files]
+"share/ghostgui/models" = [
+    "models/*.urdf",
+    "models/*.xml",
+]
+"share/ghostgui/models/assets-g1" = [
+    "models/assets-g1/*.STL",
+    "models/assets-g1/*.stl",
+]
+"share/ghostgui/models/assets-go2" = [
+    "models/assets-go2/*.dae",
+]
+"share/ghostgui/models/assets-h2" = [
+    "models/assets-h2/*.stl",
+]
+"share/ghostgui/models/assets-z1" = [
+    "models/assets-z1/*.dae",
+]
+"share/ghostgui/gui/assets/theme" = [
+    "gui/assets/theme/*.svg",
+]
+"share/ghostgui/docs" = [
+    "docs/*.md",
+]

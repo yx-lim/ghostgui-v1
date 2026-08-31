@@ -4,7 +4,13 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtGui import QColor, QFont, QPalette
-from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QDoubleSpinBox,
+    QSizePolicy,
+    QWidget,
+)
 
 from gui.app_sidebars import AppSidebar
 from gui.theme import (
@@ -16,7 +22,7 @@ from gui.theme import (
     section_stylesheet,
     tutorial_card_stylesheet,
 )
-from gui.widgets.compact import compact_spinbox
+from gui.widgets.compact import compact_combo, compact_spinbox
 
 
 class ThemeTests(unittest.TestCase):
@@ -89,6 +95,8 @@ class ThemeTests(unittest.TestCase):
         self.assertIn("QWidget#ikEditorTabContent", style)
         self.assertIn("QSpinBox::up-arrow", style)
         self.assertIn("QSpinBox::down-arrow", style)
+        self.assertIn("QComboBox::drop-down", style)
+        self.assertIn("QComboBox::down-arrow", style)
         self.assertIn("padding-right: 14px;", style)
         self.assertIn("width: 14px;", style)
         self.assertIn("QTabBar QToolButton::left-arrow", style)
@@ -107,6 +115,18 @@ class ThemeTests(unittest.TestCase):
             self.assertGreaterEqual(spinbox.maximumWidth(), 78)
         finally:
             spinbox.close()
+
+    def test_compact_combo_cannot_collapse_to_zero_width(self):
+        combo = QComboBox()
+        try:
+            compact_combo(combo)
+            self.assertGreaterEqual(combo.minimumWidth(), 96)
+            self.assertEqual(
+                combo.sizePolicy().horizontalPolicy(),
+                QSizePolicy.Policy.MinimumExpanding,
+            )
+        finally:
+            combo.close()
 
     def test_sidebar_shell_widgets_are_theme_selectable(self):
         sidebar = AppSidebar()

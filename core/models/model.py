@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
+
+from core.resources import bundled_resource_root
+from core.robotics import QposContract, validate_trajectory_arrays
 
 try:
     import mujoco
@@ -14,7 +18,7 @@ except ImportError:  # The rest of GhostGUI remains usable without MuJoCo.
     np = None
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = bundled_resource_root()
 DEFAULT_MODEL_PATH = PROJECT_ROOT / "models" / "g1_29dof.xml"
 
 
@@ -64,6 +68,7 @@ class RobotModel3D:
         self.free_joints_by_body: dict[int, FreeJointInfo] = {}
         self.body_names = self._names(mujoco.mjtObj.mjOBJ_BODY, self.mj_model.nbody)
         self.site_names = self._names(mujoco.mjtObj.mjOBJ_SITE, self.mj_model.nsite)
+        self._geom_names = self._build_geom_names()
         self._discover_joints()
         self.home_qpos = self._load_home_qpos()
 
@@ -78,6 +83,130 @@ class RobotModel3D:
     @staticmethod
     def plain_name(name: str) -> str:
         return name[len("robot/"):] if name.startswith("robot/") else name
+
+    @staticmethod
+    def humanize_name(name: str) -> str:
+        """Turn common robot-link identifiers into concise UI labels."""
+        value = RobotModel3D.plain_name(str(name or ""))
+        value = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+        value = re.sub(r"[/_.:-]+", " ", value).strip()
+        words = []
+        side_names = {
+            "fl": ("Front", "Left"),
+            "fr": ("Front", "Right"),
+            "rl": ("Rear", "Left"),
+            "rr": ("Rear", "Right"),
+        }
+        for token in value.split():
+            lower = token.lower()
+            if lower in side_names:
+                words.extend(side_names[lower])
+                continue
+            link_number = re.fullmatch(r"link0*(\d+)", lower)
+            if link_number:
+                words.extend(("Link", str(int(link_number.group(1)))))
+                continue
+            if token.isdigit():
+                words.append(str(int(token)))
+            elif token.isupper() and len(token) <= 4:
+                words.append(token)
+            else:
+                words.append(lower.capitalize())
+        return " ".join(words) or "Unnamed body"
+
+    def get_body_name(self, body_id: int) -> str:
+        body_id = int(body_id)
+        return (
+            mujoco.mj_id2name(
+                self.mj_model, mujoco.mjtObj.mjOBJ_BODY, body_id
+            )
+            or f"body_{body_id}"
+        )
+
+    def get_body_display_name(self, body_id: int) -> str:
+        """Return a semantic UI label, with generic naming as the fallback."""
+        body_id = int(body_id)
+        raw_name = self.get_body_name(body_id)
+        plain_name = self.plain_name(raw_name)
+
+        body_labels = getattr(getattr(self, "info", None), "body_labels", {})
+        for candidate in (raw_name, plain_name):
+            if candidate in body_labels:
+                return str(body_labels[candidate])
+
+        for logical_name, (kind, object_name) in getattr(
+            self, "logical_frame_bindings", {}
+        ).items():
+            if kind == "body":
+                owner_id = mujoco.mj_name2id(
+                    self.mj_model, mujoco.mjtObj.mjOBJ_BODY, object_name
+                )
+            else:
+                site_id = mujoco.mj_name2id(
+                    self.mj_model, mujoco.mjtObj.mjOBJ_SITE, object_name
+                )
+                owner_id = (
+                    int(self.mj_model.site_bodyid[site_id])
+                    if site_id >= 0 else -1
+                )
+            if owner_id == body_id:
+                return self.humanize_name(logical_name)
+        return self.humanize_name(plain_name)
+
+    def get_geom_role(self, geom_id: int) -> str:
+        """Classify a compiled geom for deterministic fallback naming."""
+        geom_id = int(geom_id)
+        if (
+            int(self.mj_model.geom_contype[geom_id]) != 0
+            or int(self.mj_model.geom_conaffinity[geom_id]) != 0
+        ):
+            return "contact"
+        return "visual"
+
+    def get_geom_name(self, geom_id: int) -> str:
+        """Return the source name or a stable body/role-based identity."""
+        return self._geom_names[int(geom_id)]
+
+    def _build_geom_names(self) -> list[str]:
+        used_names = {
+            name
+            for geom_id in range(self.mj_model.ngeom)
+            if (name := mujoco.mj_id2name(
+                self.mj_model, mujoco.mjtObj.mjOBJ_GEOM, geom_id
+            ))
+        }
+        names = []
+        ordinals = {}
+        for geom_id in range(self.mj_model.ngeom):
+            source_name = mujoco.mj_id2name(
+                self.mj_model, mujoco.mjtObj.mjOBJ_GEOM, geom_id
+            )
+            body_id = int(self.mj_model.geom_bodyid[geom_id])
+            role = self.get_geom_role(geom_id)
+            ordinal_key = (body_id, role)
+            ordinal = ordinals.get(ordinal_key, 0) + 1
+            ordinals[ordinal_key] = ordinal
+            if source_name:
+                names.append(source_name)
+                continue
+
+            body_name = self.plain_name(self.get_body_name(body_id))
+            safe_body = re.sub(
+                r"[^A-Za-z0-9]+", "_", body_name
+            ).strip("_") or f"body_{body_id}"
+            candidate = f"{safe_body}__{role}_{ordinal}"
+            while candidate in used_names:
+                ordinal += 1
+                candidate = f"{safe_body}__{role}_{ordinal}"
+            ordinals[ordinal_key] = ordinal
+            used_names.add(candidate)
+            names.append(candidate)
+        return names
+
+    def get_geom_display_name(self, geom_id: int) -> str:
+        body_id = int(self.mj_model.geom_bodyid[int(geom_id)])
+        role = self.get_geom_role(geom_id)
+        return f"{self.get_body_display_name(body_id)} {role} geometry"
 
     def _discover_joints(self) -> None:
         supported = {
@@ -99,6 +228,17 @@ class RobotModel3D:
                     dof_address=int(self.mj_model.jnt_dofadr[joint_id]),
                 )
                 continue
+            if joint_type == int(mujoco.mjtJoint.mjJNT_BALL):
+                raw_name = mujoco.mj_id2name(
+                    self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, joint_id
+                ) or f"ball_joint_{joint_id}"
+                raise ValueError(
+                    f"Unsupported MuJoCo ball joint {raw_name!r}: GhostGUI "
+                    "currently supports scalar hinge/slide Joint Angles and "
+                    "zero or one free root. Convert this joint to an explicit "
+                    "scalar representation or add ball-joint support before "
+                    "editing the model."
+                )
             if joint_type not in supported:
                 continue
             raw_name = mujoco.mj_id2name(
@@ -123,7 +263,12 @@ class RobotModel3D:
     def _load_home_qpos(self):
         data = mujoco.MjData(self.mj_model)
         if self.mj_model.nkey:
-            mujoco.mj_resetDataKeyframe(self.mj_model, data, 0)
+            home_key = mujoco.mj_name2id(
+                self.mj_model, mujoco.mjtObj.mjOBJ_KEY, "home"
+            )
+            mujoco.mj_resetDataKeyframe(
+                self.mj_model, data, home_key if home_key >= 0 else 0
+            )
         else:
             mujoco.mj_resetData(self.mj_model, data)
         qpos = data.qpos.copy()
@@ -242,9 +387,7 @@ class RobotState3D:
             self.forward_kinematics()
 
     def set_qpos(self, qpos: Iterable[float]) -> None:
-        qpos = np.asarray(qpos, dtype=float)
-        if qpos.shape != (self.mj_model.nq,):
-            raise ValueError(f"Expected qpos shape ({self.mj_model.nq},), got {qpos.shape}.")
+        qpos = QposContract(self.mj_model.nq).validate(qpos)
         self.mj_data.qpos[:] = qpos
         self._clamp_joints()
         self.forward_kinematics()
@@ -530,6 +673,205 @@ class RobotState3D:
             condition_number,
         )
 
+    def solve_hierarchical_tasks(
+        self,
+        primary_tasks,
+        secondary_tasks=(),
+        *,
+        joint_weights: Optional[Mapping[str, float]] = None,
+        max_iterations: int = 80,
+        damping: float = 0.04,
+        step_size: float = 0.7,
+        max_step: float = 0.08,
+    ) -> IKResult:
+        """Solve primary tasks while optimizing secondary tasks in their null space."""
+        joints = list(self.robot_model.joints.values())
+        dofs = [joint.dof_address for joint in joints]
+        qpos_addresses = [joint.qpos_address for joint in joints]
+        influence = np.asarray([
+            max(0.0, float((joint_weights or {}).get(joint.name, 1.0)))
+            for joint in joints
+        ], dtype=float)
+        primary = [
+            task for task in primary_tasks
+            if task.enabled and task.weight > 0.0
+        ]
+        secondary = [
+            task for task in secondary_tasks
+            if task.enabled and task.weight > 0.0
+        ]
+        if not primary:
+            return self.solve_weighted_tasks(
+                secondary,
+                joint_weights=joint_weights,
+                max_iterations=max_iterations,
+                damping=damping,
+                step_size=step_size,
+                max_step=max_step,
+            )
+        if not np.any(influence > 1e-12):
+            return IKResult(False, float("inf"), 0, "All IK joints are locked")
+
+        def damped_pseudoinverse(matrix):
+            if matrix.size == 0 or matrix.shape[0] == 0:
+                return np.zeros((matrix.shape[1], matrix.shape[0]), dtype=float)
+            lhs = (
+                matrix @ matrix.T
+                + float(damping) ** 2 * np.eye(matrix.shape[0])
+            )
+            try:
+                solved = np.linalg.solve(lhs, np.eye(matrix.shape[0]))
+            except np.linalg.LinAlgError:
+                solved = np.linalg.pinv(lhs)
+            return matrix.T @ solved
+
+        final_error = float("inf")
+        near_singularity = False
+        min_singular_value = float("inf")
+        condition_number = 0.0
+        active_count = len(primary) + len(secondary)
+        iteration_count = max(1, int(max_iterations))
+        for iteration in range(iteration_count):
+            self.forward_kinematics()
+            primary_linearizations = [
+                task.linearize(self.mj_model, self.mj_data, dofs, qpos_addresses)
+                for task in primary
+            ]
+            primary_jacobian = np.vstack([
+                item.jacobian for item in primary_linearizations
+            ])
+            primary_error = np.concatenate([
+                item.error for item in primary_linearizations
+            ])
+            transformed_primary = (
+                primary_jacobian * influence[np.newaxis, :]
+            )
+            (
+                current_near_singularity,
+                current_min_singular_value,
+                current_condition_number,
+            ) = self._singularity_metrics(transformed_primary)
+            near_singularity = near_singularity or current_near_singularity
+            min_singular_value = min(
+                min_singular_value, current_min_singular_value
+            )
+            condition_number = max(
+                condition_number, current_condition_number
+            )
+
+            required = [
+                item for item in primary_linearizations if item.required
+            ]
+            convergence_set = required or primary_linearizations
+            final_error = max(
+                (item.error_norm for item in convergence_set), default=0.0
+            )
+            primary_converged = all(
+                item.error_norm <= item.tolerance for item in convergence_set
+            )
+
+            primary_delta = (
+                damped_pseudoinverse(transformed_primary) @ primary_error
+            )
+            _u, singular_values, vh = np.linalg.svd(
+                transformed_primary, full_matrices=True
+            )
+            if singular_values.size:
+                rank_tolerance = max(
+                    transformed_primary.shape
+                ) * np.finfo(float).eps * float(singular_values[0])
+                rank = int(np.sum(singular_values > rank_tolerance))
+            else:
+                rank = 0
+            null_basis = vh[rank:].T
+            null_projector = (
+                null_basis @ null_basis.T
+                if null_basis.size
+                else np.zeros(
+                    (transformed_primary.shape[1], transformed_primary.shape[1]),
+                    dtype=float,
+                )
+            )
+
+            secondary_delta = np.zeros_like(primary_delta)
+            if secondary and null_basis.size:
+                secondary_linearizations = [
+                    task.linearize(
+                        self.mj_model, self.mj_data, dofs, qpos_addresses
+                    )
+                    for task in secondary
+                ]
+                secondary_jacobian = np.vstack([
+                    item.jacobian for item in secondary_linearizations
+                ])
+                secondary_error = np.concatenate([
+                    item.error for item in secondary_linearizations
+                ])
+                transformed_secondary = (
+                    secondary_jacobian * influence[np.newaxis, :]
+                )
+                projected_secondary = transformed_secondary @ null_projector
+                secondary_residual = (
+                    secondary_error
+                    - transformed_secondary @ primary_delta
+                )
+                secondary_delta = null_projector @ (
+                    damped_pseudoinverse(projected_secondary)
+                    @ secondary_residual
+                )
+
+            actual_secondary_step = influence * secondary_delta
+            if primary_converged and (
+                not secondary
+                or np.max(np.abs(actual_secondary_step), initial=0.0)
+                <= max(1e-5, float(max_step) * 0.01)
+            ):
+                return IKResult(
+                    True,
+                    final_error,
+                    iteration,
+                    f"Hierarchical IK converged ({active_count} active tasks)",
+                    near_singularity,
+                    min_singular_value,
+                    condition_number,
+                )
+
+            delta = influence * (primary_delta + secondary_delta)
+            delta = np.clip(delta, -float(max_step), float(max_step))
+            for joint, amount in zip(joints, delta):
+                self.mj_data.qpos[joint.qpos_address] += (
+                    float(step_size) * amount
+                )
+            self._clamp_joints()
+
+        self.forward_kinematics()
+        final_linearizations = [
+            task.linearize(self.mj_model, self.mj_data, dofs, qpos_addresses)
+            for task in primary
+        ]
+        required = [item for item in final_linearizations if item.required]
+        convergence_set = required or final_linearizations
+        final_error = max(
+            (item.error_norm for item in convergence_set), default=0.0
+        )
+        success = all(
+            item.error_norm <= item.tolerance * 2.0
+            for item in convergence_set
+        )
+        return IKResult(
+            success,
+            final_error,
+            iteration_count,
+            (
+                f"Hierarchical IK reached tolerance ({active_count} active tasks)"
+                if success else
+                f"Hierarchical IK did not converge ({active_count} active tasks)"
+            ),
+            near_singularity,
+            min_singular_value,
+            condition_number,
+        )
+
 
 class RobotStateTimeline:
     """Time-keyed qpos source of truth for interactive 3D editing."""
@@ -547,11 +889,11 @@ class RobotStateTimeline:
         return round(float(time), 6)
 
     def set_state(self, time, qpos):
-        qpos = np.asarray(qpos, dtype=float)
-        expected = (self.robot_model.mj_model.nq,)
-        if qpos.shape != expected:
-            raise ValueError(f"Expected qpos shape {expected}, got {qpos.shape}")
-        self.states[self.time_key(time)] = qpos.copy()
+        key = self.time_key(time)
+        if not np.isfinite(key) or key < 0.0:
+            raise ValueError("timeline time must be finite and nonnegative")
+        qpos = QposContract(self.robot_model.mj_model.nq).validate(qpos)
+        self.states[key] = qpos
 
     def get_state(self, time):
         state = self.states.get(self.time_key(time))
@@ -634,6 +976,11 @@ class RobotStateTimeline:
         """Load exact time-keyed qpos states from a GhostGUI project."""
         path = Path(path).expanduser()
         with np.load(path, allow_pickle=False) as data:
+            schema_version = int(np.asarray(data["schema_version"]).flat[0])
+            if schema_version != 1:
+                raise ValueError(
+                    f"Unsupported qpos timeline schema: {schema_version}"
+                )
             times = np.asarray(data["times"], dtype=float)
             qpos = np.asarray(data["qpos"], dtype=float)
 
@@ -646,14 +993,25 @@ class RobotStateTimeline:
             )
         if qpos.shape[0] != times.shape[0]:
             raise ValueError("timeline times and qpos rows must have equal length")
-        if len(times) and np.any(np.diff(times) < 0):
-            raise ValueError("timeline times must be nondecreasing")
+        normalized_times, normalized_qpos = validate_trajectory_arrays(
+            times,
+            qpos,
+            expected_width,
+        )
+        if len(normalized_times) and any(
+            earlier == later
+            for earlier, later in zip(
+                normalized_times,
+                normalized_times[1:],
+            )
+        ):
+            raise ValueError("timeline times must be strictly increasing")
 
         self.states.clear()
-        if not len(times):
+        if not len(normalized_times):
             self.reset()
             return
-        for time, state in zip(times, qpos):
+        for time, state in zip(normalized_times, normalized_qpos):
             self.set_state(float(time), state)
 
 
@@ -665,16 +1023,32 @@ class TrajectoryGhostRenderer:
         self._scratch = robot_model.create_state()
         self._signature = None
         self.transforms: list[tuple[object, object]] = []
+        self.collision_flags: list[bool] = []
 
-    def update(self, trajectory, stride: int = 5) -> bool:
+    def update(self, trajectory, stride: int = 5, collision_flags=None) -> bool:
         stride = max(1, int(stride))
         qposes = [np.asarray(q, dtype=float) for q in trajectory]
-        signature = (stride, tuple(q.tobytes() for q in qposes))
+        flags = (
+            [False] * len(qposes)
+            if collision_flags is None
+            else [bool(value) for value in collision_flags]
+        )
+        if len(flags) != len(qposes):
+            raise ValueError(
+                "trajectory collision flags must match trajectory length"
+            )
+        signature = (stride, tuple(q.tobytes() for q in qposes), tuple(flags))
         if signature == self._signature:
             return False
         self._signature = signature
         self.transforms = []
-        for qpos in qposes[::stride]:
+        self.collision_flags = []
+        sample_indices = sorted(
+            set(range(0, len(qposes), stride))
+            | {index for index, colliding in enumerate(flags) if colliding}
+        )
+        for index in sample_indices:
+            qpos = qposes[index]
             self._scratch.set_qpos(qpos)
             self.transforms.append(
                 (
@@ -682,11 +1056,13 @@ class TrajectoryGhostRenderer:
                     self._scratch.mj_data.geom_xmat.copy(),
                 )
             )
+            self.collision_flags.append(flags[index])
         return True
 
     def clear(self) -> None:
         self._signature = None
         self.transforms = []
+        self.collision_flags = []
 
 
 def interpolate_qpos(start, target, frames: int = 60):

@@ -8,7 +8,7 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt
 from PySide6.QtGui import QColor, QCloseEvent, QMouseEvent, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
@@ -75,6 +75,28 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.window.close()
         self.config_patch.stop()
         self.config_dir.cleanup()
+
+    def configure_two_keyframe_motion(self):
+        home = self.viewer.robot_model.home_qpos.copy()
+        later = home.copy()
+        later[-1] += 0.05
+
+        self.window.trajectory.clear()
+        start_frame = self.window.controls.current_frame()
+        start_frame.time = 0.0
+        end_frame = self.window.controls.current_frame()
+        end_frame.time = 1.0
+        end_frame.x += 0.05
+        self.window.trajectory.add_frame(start_frame)
+        self.window.trajectory.add_frame(end_frame)
+
+        self.viewer.state_timeline.states.clear()
+        self.viewer.state_timeline.set_state(0.0, home)
+        self.viewer.state_timeline.set_state(1.0, later)
+        self.window.set_project_dirty(False)
+        self.window.refresh_display()
+        self.window._refresh_history_baseline()
+        return home, later
 
     def test_time_control_loads_distinct_editable_state(self):
         at_zero = self.viewer.get_current_keyframe()
@@ -209,6 +231,329 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertEqual(
             self.window.statusBar().currentMessage(),
             "Redid Reset 3D pose.",
+        )
+
+    def test_insert_time_is_atomic_invalidates_generation_and_is_undoable(self):
+        home = self.viewer.robot_model.home_qpos.copy()
+        later = home.copy()
+        later[-1] += 0.05
+        self.window.trajectory.clear()
+        self.window.trajectory.add_frame(
+            self.window.controls.current_frame()
+        )
+        later_target = self.window.controls.current_frame()
+        later_target.time = 2.0
+        later_target.x += 0.05
+        self.window.trajectory.add_frame(later_target)
+        self.viewer.state_timeline.states.clear()
+        self.viewer.state_timeline.set_state(0.0, home)
+        self.viewer.state_timeline.set_state(2.0, later)
+        self.viewer.set_robot_trajectory(
+            (home, later),
+            times=(0.0, 2.0),
+            activate_first_frame=False,
+        )
+        self.window._refresh_history_baseline()
+
+        self.assertTrue(self.window.insert_timeline_time(0.0, 1.0))
+
+        self.assertEqual(
+            [frame.time for frame in self.window.trajectory.frames],
+            [0.0, 1.0, 3.0],
+        )
+        self.assertEqual(
+            self.viewer.state_timeline.times(),
+            [0.0, 1.0, 3.0],
+        )
+        self.assertEqual(self.viewer.robot_trajectory, [])
+        self.assertEqual(self.window.active_index, -1)
+
+        self.window.undo_last_action()
+
+        self.assertEqual(
+            [frame.time for frame in self.window.trajectory.frames],
+            [0.0, 2.0],
+        )
+        self.assertEqual(self.viewer.state_timeline.times(), [0.0, 2.0])
+        self.assertEqual(len(self.viewer.robot_trajectory), 2)
+
+    def test_scale_time_range_changes_timeline_speed_and_is_undoable(self):
+        home = self.viewer.robot_model.home_qpos.copy()
+        middle = home.copy()
+        later = home.copy()
+        middle[-1] += 0.025
+        later[-1] += 0.05
+        self.window.trajectory.clear()
+        for time, x_offset in ((0.0, 0.0), (1.0, 0.025), (2.0, 0.05)):
+            frame = self.window.controls.current_frame()
+            frame.time = time
+            frame.x += x_offset
+            self.window.trajectory.add_frame(frame)
+        self.viewer.state_timeline.states.clear()
+        self.viewer.state_timeline.set_state(0.0, home)
+        self.viewer.state_timeline.set_state(1.0, middle)
+        self.viewer.state_timeline.set_state(2.0, later)
+        self.viewer.set_robot_trajectory(
+            (home, middle, later),
+            times=(0.0, 1.0, 2.0),
+            activate_first_frame=False,
+        )
+        self.window._refresh_history_baseline()
+
+        self.assertTrue(
+            self.window.scale_timeline_range(0.0, 2.0, 2.0)
+        )
+
+        self.assertEqual(
+            [frame.time for frame in self.window.trajectory.frames],
+            [0.0, 0.5, 1.0],
+        )
+        self.assertEqual(
+            self.viewer.state_timeline.times(),
+            [0.0, 0.5, 1.0],
+        )
+        self.assertEqual(self.viewer.robot_trajectory, [])
+
+        self.window.undo_last_action()
+
+        self.assertEqual(
+            [frame.time for frame in self.window.trajectory.frames],
+            [0.0, 1.0, 2.0],
+        )
+        self.assertEqual(
+            self.viewer.state_timeline.times(),
+            [0.0, 1.0, 2.0],
+        )
+        self.assertEqual(len(self.viewer.robot_trajectory), 3)
+
+    def test_copy_motion_is_nonmutating_and_enables_compatible_paste(self):
+        home, later = self.configure_two_keyframe_motion()
+        self.viewer.set_robot_trajectory(
+            (home, later),
+            times=(0.0, 1.0),
+            activate_first_frame=False,
+        )
+        self.window._refresh_history_baseline()
+        frames_before = [
+            frame.to_dict() for frame in self.window.trajectory.frames
+        ]
+        qpos_times_before = self.viewer.state_timeline.times()
+        playback_before = [
+            qpos.copy() for qpos in self.viewer.robot_trajectory
+        ]
+        undo_count = len(self.window.undo_stack)
+
+        self.assertTrue(self.window.copy_motion_range(0.0, 1.0))
+
+        self.assertIsNotNone(self.window.motion_clipboard)
+        self.assertEqual(
+            [frame.to_dict() for frame in self.window.trajectory.frames],
+            frames_before,
+        )
+        self.assertEqual(
+            self.viewer.state_timeline.times(), qpos_times_before
+        )
+        for actual, expected in zip(
+            self.viewer.robot_trajectory, playback_before
+        ):
+            np.testing.assert_allclose(actual, expected)
+        self.assertEqual(len(self.window.undo_stack), undo_count)
+        self.assertFalse(self.window.project_dirty)
+        self.assertTrue(self.window.paste_motion_action.isEnabled())
+        self.assertTrue(
+            self.window.paste_motion_reversed_action.isEnabled()
+        )
+
+        model_key = self.window.document.model_key
+        self.window.document.model_key = "incompatible-test-model"
+        self.window.sync_workflow_toolbar()
+        self.assertFalse(self.window.paste_motion_action.isEnabled())
+        self.assertFalse(
+            self.window.paste_motion_reversed_action.isEnabled()
+        )
+        self.window.document.model_key = model_key
+        self.window.sync_workflow_toolbar()
+        self.assertTrue(self.window.paste_motion_action.isEnabled())
+
+    def test_rejected_overlapping_paste_preserves_all_editor_state(self):
+        home, later = self.configure_two_keyframe_motion()
+        self.viewer.set_robot_trajectory(
+            (home, later),
+            times=(0.0, 1.0),
+            activate_first_frame=False,
+        )
+        self.window.viewer_3d_mujoco.set_trajectory_metadata(
+            mujoco_playback_cache_path(),
+            (0.0, 1.0),
+        )
+        self.assertTrue(self.window.copy_motion_range(0.0, 1.0))
+        self.window.on_viewer_timeslice_time_changed(1.0)
+        self.window.record_history_action("Existing history")
+        self.viewer.start_playback()
+
+        frames_before = [
+            frame.to_dict() for frame in self.window.trajectory.frames
+        ]
+        qpos_before = {
+            time: self.viewer.state_timeline.get_state(time)
+            for time in self.viewer.state_timeline.times()
+        }
+        generated_before = [
+            qpos.copy() for qpos in self.viewer.robot_trajectory
+        ]
+        generated_times_before = list(self.viewer.robot_trajectory_times)
+        mujoco_times_before = list(
+            self.window.viewer_3d_mujoco.trajectory_times
+        )
+        undo_before = tuple(
+            (entry.description, id(entry.snapshot))
+            for entry in self.window.undo_stack
+        )
+        redo_before = tuple(
+            (entry.description, id(entry.snapshot))
+            for entry in self.window.redo_stack
+        )
+        baseline_before = self.window.history.baseline
+        revision_before = self.window.document.revision
+        dirty_before = self.window.project_dirty
+
+        with (
+            patch("gui.main_window.QMessageBox.warning") as warning,
+            patch.object(self.viewer, "clear_robot_trajectory") as clear_viewer,
+            patch.object(
+                self.window.viewer_3d_mujoco, "clear_trajectory"
+            ) as clear_mujoco,
+            patch.object(
+                self.window.backend_interface, "clear_last_solution"
+            ) as clear_backend,
+        ):
+            self.assertFalse(self.window.paste_motion_at_current_time())
+
+        warning.assert_called_once()
+        self.assertEqual(warning.call_args.args[1], "Paste Motion failed")
+        self.assertIn("conflicts", warning.call_args.args[2])
+        self.assertIn("t=1.00 s", warning.call_args.args[2])
+        clear_viewer.assert_not_called()
+        clear_mujoco.assert_not_called()
+        clear_backend.assert_not_called()
+
+        self.assertEqual(
+            [frame.to_dict() for frame in self.window.trajectory.frames],
+            frames_before,
+        )
+        self.assertEqual(
+            self.viewer.state_timeline.times(), list(qpos_before)
+        )
+        for time, expected in qpos_before.items():
+            np.testing.assert_allclose(
+                self.viewer.state_timeline.get_state(time), expected
+            )
+        self.assertEqual(
+            self.viewer.robot_trajectory_times, generated_times_before
+        )
+        for actual, expected in zip(
+            self.viewer.robot_trajectory, generated_before
+        ):
+            np.testing.assert_allclose(actual, expected)
+        self.assertEqual(
+            self.window.viewer_3d_mujoco.trajectory_times,
+            mujoco_times_before,
+        )
+        self.assertTrue(self.viewer.play_timer.isActive())
+        self.assertEqual(
+            tuple(
+                (entry.description, id(entry.snapshot))
+                for entry in self.window.undo_stack
+            ),
+            undo_before,
+        )
+        self.assertEqual(
+            tuple(
+                (entry.description, id(entry.snapshot))
+                for entry in self.window.redo_stack
+            ),
+            redo_before,
+        )
+        self.assertIs(self.window.history.baseline, baseline_before)
+        self.assertEqual(self.window.document.revision, revision_before)
+        self.assertEqual(self.window.project_dirty, dirty_before)
+
+    def test_reverse_paste_updates_both_timelines_and_is_undoable(self):
+        home, later = self.configure_two_keyframe_motion()
+        self.viewer.set_robot_trajectory(
+            (home, later),
+            times=(0.0, 1.0),
+            activate_first_frame=False,
+        )
+        self.window._refresh_history_baseline()
+        start_x = self.window.trajectory.frames[0].x
+
+        self.assertTrue(self.window.copy_motion_range(0.0, 1.0))
+        self.window.on_viewer_timeslice_time_changed(1.0)
+        self.assertTrue(
+            self.window.paste_motion_at_current_time(reverse=True)
+        )
+
+        self.assertEqual(
+            [frame.time for frame in self.window.trajectory.frames],
+            [0.0, 1.0, 2.0],
+        )
+        self.assertAlmostEqual(
+            self.window.trajectory.frames[-1].x, start_x
+        )
+        self.assertEqual(
+            self.viewer.state_timeline.times(), [0.0, 1.0, 2.0]
+        )
+        np.testing.assert_allclose(
+            self.viewer.state_timeline.get_state(2.0), home
+        )
+        self.assertEqual(self.viewer.robot_trajectory, [])
+        self.assertEqual(
+            self.window.undo_stack[-1].description,
+            "Paste Motion Reversed",
+        )
+
+        self.window.undo_last_action()
+
+        self.assertEqual(
+            [frame.time for frame in self.window.trajectory.frames],
+            [0.0, 1.0],
+        )
+        self.assertEqual(
+            self.viewer.state_timeline.times(), [0.0, 1.0]
+        )
+        self.assertEqual(len(self.viewer.robot_trajectory), 2)
+
+    def test_ping_pong_repeat_is_one_history_action(self):
+        home, later = self.configure_two_keyframe_motion()
+        undo_count = len(self.window.undo_stack)
+
+        self.assertTrue(
+            self.window.repeat_motion_range(
+                0.0,
+                1.0,
+                2,
+                ping_pong=True,
+            )
+        )
+
+        self.assertEqual(
+            [frame.time for frame in self.window.trajectory.frames],
+            [0.0, 1.0, 2.0, 3.0],
+        )
+        self.assertEqual(
+            self.viewer.state_timeline.times(),
+            [0.0, 1.0, 2.0, 3.0],
+        )
+        np.testing.assert_allclose(
+            self.viewer.state_timeline.get_state(2.0), home
+        )
+        np.testing.assert_allclose(
+            self.viewer.state_timeline.get_state(3.0), later
+        )
+        self.assertEqual(len(self.window.undo_stack), undo_count + 1)
+        self.assertEqual(
+            self.window.undo_stack[-1].description, "Repeat Motion"
         )
 
     def test_pelvis_drag_updates_preview_only_until_accept(self):
@@ -374,7 +719,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertIsNone(self.viewer.ghost_source)
         self.assertFalse(self.viewer.canvas.show_ghosts)
 
-    def test_plan_preview_rejects_midpoint_collision_without_publishing(self):
+    def test_plan_preview_marks_midpoint_collision_and_publishes_red_ghosts(self):
         class MidpointCollisionChecker:
             def __init__(self, address, lower, upper):
                 self.address = address
@@ -410,9 +755,15 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.viewer.plan_preview()
 
         self.assertEqual(self.viewer.robot_trajectory, [])
-        self.assertEqual(self.viewer.ghost_trajectory, [])
-        self.assertIn("Cannot preview path", self.viewer.status_label.text())
-        self.assertIn("collision at path sample", self.viewer.status_label.text())
+        self.assertEqual(len(self.viewer.ghost_trajectory), 40)
+        self.assertEqual(self.viewer.ghost_source, "preview_path")
+        self.assertTrue(any(self.viewer.ghost_collision_flags))
+        self.assertTrue(any(self.viewer.ghost_renderer.collision_flags))
+        self.assertIn(
+            "Preview Path contains collision warnings",
+            self.viewer.status_label.text(),
+        )
+        self.assertIn("Red poses mark the contacts", self.viewer.status_label.text())
 
     def test_plan_preview_rejects_raw_joint_limit_violation_before_clamp(self):
         joint = next(
@@ -508,6 +859,31 @@ class RobotViewerTimelineTests(unittest.TestCase):
 
         self.viewer.cancel_preview()
         self.assertEqual(self.viewer.canvas.preview_collision_geom_ids, set())
+
+    def test_advisory_collision_warns_but_allows_commit(self):
+        collision = Collision(
+            "geom_a",
+            "geom_b",
+            "body_a",
+            "body_b",
+            -0.0005,
+            "self",
+            blocking=False,
+        )
+
+        class AdvisoryCollisionChecker:
+            def get_collisions(self, _state):
+                return [collision]
+
+        self.viewer.collision_checker = AdvisoryCollisionChecker()
+        name = self.viewer.preview_state.get_joint_names()[0]
+        value = self.viewer.preview_state.get_joint_value(name) + 0.01
+        self.viewer._joint_changed(name, value)
+
+        self.assertTrue(self.viewer.accept_preview())
+        self.assertFalse(self.viewer.preview_active)
+        self.assertIn("Committed keyframe", self.viewer.status_label.text())
+        self.assertIn("Collision warning", self.viewer.status_label.text())
         self.assertEqual(self.viewer.canvas.preview_collision_body_ids, set())
 
     def test_timeline_change_discards_unaccepted_preview(self):
@@ -1364,8 +1740,24 @@ class RobotViewerTimelineTests(unittest.TestCase):
             )
         self.assertEqual(
             [action.text().replace("&", "") for action in self.window.menuBar().actions()],
-            ["File", "Robot", "View", "Help"],
+            ["File", "Robot", "Timeline", "View", "Help"],
         )
+        self.assertEqual(
+            [action.text() for action in self.window.timeline_menu.actions()],
+            [
+                "Insert Time at Current Time…",
+                "Shift Entire Motion…",
+                "Move Time Range…",
+                "Scale Time Range…",
+                "",
+                "Copy Motion Range…",
+                "Paste Motion at Current Time",
+                "Paste Motion Reversed at Current Time",
+                "Repeat Motion…",
+            ],
+        )
+        self.assertFalse(self.window.paste_motion_action.isEnabled())
+        self.assertFalse(self.window.paste_motion_reversed_action.isEnabled())
         toolbar = self.window.findChild(QToolBar, "workflowToolbar")
         self.assertIs(toolbar, self.window.app_toolbar)
         self.assertFalse(hasattr(self.window, "workflow_toolbar"))
@@ -1417,11 +1809,25 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertEqual(
             [action.text() for action in self.window.import_menu.actions()],
-            ["Robot Model…", "Qpos…", "Trajectory…"],
+            ["Robot Model…", "Qpos…", "Trajectory"],
+        )
+        self.assertEqual(
+            [
+                action.text()
+                for action in self.window.trajectory_import_menu.actions()
+            ],
+            ["MuJoCo", "DSMS", "mjlab"],
         )
         self.assertEqual(
             [action.text() for action in self.window.export_menu.actions()],
-            ["Qpos…", "Trajectory…"],
+            ["Qpos…", "Trajectory"],
+        )
+        self.assertEqual(
+            [
+                action.text()
+                for action in self.window.trajectory_export_menu.actions()
+            ],
+            ["MuJoCo", "DSMS", "mjlab"],
         )
         self.assertEqual(self.window.viewer_tabs.tabText(0), "3D Pose")
         self.assertIs(
@@ -1465,14 +1871,14 @@ class RobotViewerTimelineTests(unittest.TestCase):
                 self.window.controls.import_action_box.itemText(index)
                 for index in range(self.window.controls.import_action_box.count())
             ],
-            ["Model", "Qpos", "Trajectory"],
+            ["Model", "Qpos", "MuJoCo", "DSMS", "mjlab"],
         )
         self.assertEqual(
             [
                 self.window.controls.export_action_box.itemText(index)
                 for index in range(self.window.controls.export_action_box.count())
             ],
-            ["Qpos", "Trajectory"],
+            ["Qpos", "MuJoCo", "DSMS", "mjlab"],
         )
         self.window.controls.import_action_box.setCurrentIndex(1)
         event = QWheelEvent(
@@ -1502,6 +1908,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.timeslice_step_input,
             self.viewer.timeslice_duration_label,
             self.viewer.timeslice_duration_input,
+            self.viewer.export_dt_label,
+            self.viewer.export_dt_input,
+            self.viewer.dsms_motion_speed_label,
+            self.viewer.dsms_motion_speed_input,
             self.viewer.collision_substeps_label,
             self.viewer.collision_substeps,
             self.viewer.playback_speed_label,
@@ -1638,6 +2048,27 @@ class RobotViewerTimelineTests(unittest.TestCase):
             ),
             self.viewer.timeslice_duration_label,
         )
+        self.assertIs(
+            self.viewer.timeslice_context_layout.labelForField(
+                self.viewer.export_dt_input
+            ),
+            self.viewer.export_dt_label,
+        )
+        max_time_row, _ = (
+            self.viewer.timeslice_context_layout.getWidgetPosition(
+                self.viewer.timeslice_duration_input
+            )
+        )
+        export_interval_row, _ = (
+            self.viewer.timeslice_context_layout.getWidgetPosition(
+                self.viewer.export_dt_input
+            )
+        )
+        self.assertEqual(export_interval_row, max_time_row + 1)
+        self.assertEqual(
+            self.viewer.export_dt_input.maximumWidth(),
+            self.viewer.timeslice_duration_input.maximumWidth(),
+        )
         self.assertEqual(self.viewer.ghost_stride_label.text(), "Playback spacing")
         self.assertEqual(self.viewer.ghost_alpha_label.text(), "Playback opacity")
         self.assertIs(
@@ -1744,15 +2175,28 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.window.status_details_button.setChecked(True)
         self.app.processEvents()
         self.assertTrue(self.window.status_details_panel.isVisible())
-        self.assertEqual(
-            self.viewer.target_context_panel.layout()
-            .labelForField(self.viewer.target_box)
-            .text(),
-            "Advanced target",
-        )
+        self.assertEqual(self.viewer.advanced_target_label.text(), "Advanced target")
         self.assertIs(
             self.viewer.target_context_panel.parent(),
             self.window.controls.target_context_stack,
+        )
+        target_section = next(
+            section for section in self.window.left_sidebar_content.sections
+            if section.title == "Target"
+        )
+        target_section.set_expanded(True)
+        self.app.processEvents()
+        self.assertTrue(self.window.controls.target_context_stack.isVisible())
+        self.assertTrue(self.viewer.target_box.isVisible())
+        self.assertGreaterEqual(self.viewer.target_box.width(), 96)
+        self.assertGreater(self.viewer.target_box.height(), 0)
+        self.assertGreater(
+            self.window.controls.target_context_stack.minimumHeight(),
+            0,
+        )
+        self.assertEqual(
+            self.viewer.target_box.sizePolicy().horizontalPolicy(),
+            QSizePolicy.Policy.MinimumExpanding,
         )
         preview_section = next(
             section for section in self.window.right_sidebar_content.sections
@@ -2015,6 +2459,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
             canvas.camera_center = np.asarray([0.4, -0.2, 1.1], dtype=float)
             self.window.controls.show_lines_box.setChecked(False)
             self.window.controls.corner_smoothing_slider.set_value(0.35)
+            self.viewer.set_export_dt(0.02)
+            self.viewer.set_dsms_motion_speed(0.5)
 
             project = self.window.create_project_at(project_root, "reach_test")
             self.assertTrue((project.root_dir / "ghostgui_project.json").exists())
@@ -2025,6 +2471,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.controls.frame_box.setCurrentText("pelvis")
             self.window.controls.show_lines_box.setChecked(True)
             self.window.controls.corner_smoothing_slider.set_value(0.0)
+            self.viewer.set_export_dt(0.01)
+            self.viewer.set_dsms_motion_speed(1.0)
             self.window.viewer_tabs.setCurrentIndex(0)
             self.viewer.clear_editable_timeline(
                 keep_current_pose=False,
@@ -2064,6 +2512,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.assertEqual(self.window.viewer_tabs.currentIndex(), 1)
             self.assertFalse(self.window.controls.show_lines_box.isChecked())
             self.assertAlmostEqual(self.window.controls.corner_smoothing(), 0.35)
+            self.assertAlmostEqual(self.viewer.export_dt(), 0.02)
+            self.assertAlmostEqual(self.viewer.dsms_motion_speed(), 0.5)
             self.assertAlmostEqual(self.viewer.canvas.camera_yaw, 12.5)
             self.assertAlmostEqual(self.viewer.canvas.camera_pitch, 31.0)
             self.assertAlmostEqual(self.viewer.canvas.camera_distance, 6.25)
@@ -2129,6 +2579,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.window.on_add_keyframe()
             self.viewer.canvas.camera_yaw = 91.0
             self.viewer.canvas.camera_pitch = 12.0
+            self.viewer.set_dsms_motion_speed(0.5)
             self.assertTrue(self.window.project_dirty)
 
             with patch.object(
@@ -2160,6 +2611,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.assertAlmostEqual(self.viewer.canvas.camera_yaw, 38.0)
             self.assertAlmostEqual(self.viewer.canvas.camera_pitch, 24.0)
             self.assertAlmostEqual(self.viewer.canvas.camera_distance, 5.0)
+            self.assertAlmostEqual(self.viewer.dsms_motion_speed(), 1.0)
             np.testing.assert_allclose(
                 self.viewer.canvas.camera_center,
                 np.asarray([0.0, 0.0, 0.75], dtype=float),
@@ -2744,6 +3196,147 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertFalse(manager.overlay.isVisible())
         self.assertFalse(manager.card.isVisible())
 
+    def test_help_menu_opens_concise_keyboard_shortcuts(self):
+        self.assertEqual(
+            [action.text() for action in self.window.help_menu.actions()],
+            [
+                "&Help Center…",
+                "Start &Tutorial",
+                "&Keyboard Shortcuts…",
+            ],
+        )
+
+        self.window.keyboard_shortcuts_action.trigger()
+        self.app.processEvents()
+
+        dialog = self.window.keyboard_shortcuts_dialog
+        self.assertIsNotNone(dialog)
+        self.assertTrue(dialog.isVisible())
+        self.assertEqual(dialog.windowTitle(), "Keyboard Shortcuts")
+        label_texts = {
+            label.text() for label in dialog.findChildren(QLabel)
+        }
+        for text in (
+            "T",
+            "R",
+            "E / Esc",
+            "Shift + drag",
+            "Ctrl + drag",
+            "Ctrl+Z",
+            "Ctrl+Shift+Z",
+            "Move/translate gizmo",
+            "Rotate gizmo",
+            "Cancel the active drag",
+            "Fine movement",
+            "Snap movement",
+            "Undo",
+            "Redo",
+        ):
+            self.assertIn(text, label_texts)
+
+    def test_tutorial_target_step_mentions_double_click_and_highlights_gizmo_tools(self):
+        self.window.resize(1700, 800)
+        self.window.show()
+        self.app.processEvents()
+
+        manager = self.window.tutorial_manager
+        manager.start_first_motion()
+        manager.current_index = 2
+        manager.show_current_step()
+        self.app.processEvents()
+        self.assertIn(
+            "double-click the robot to choose the target to edit",
+            manager.card.body_label.text(),
+        )
+
+        manager.current_index = 3
+        manager.show_current_step()
+        self.app.processEvents()
+        expected = QRect()
+        expected_toolbar = QRect()
+        for object_name in (
+            "moveToolButton",
+            "rotateToolButton",
+            "gizmoVisibilityButton",
+        ):
+            widget = self.window.findChild(QWidget, object_name)
+            self.assertIsNotNone(widget)
+            top_left = widget.mapTo(self.window, QPoint(0, 0))
+            rect = QRect(top_left, widget.size())
+            expected = rect if expected.isNull() else expected.united(rect)
+            toolbar_top_left = widget.mapTo(
+                self.window.app_toolbar,
+                QPoint(0, 0),
+            )
+            toolbar_rect = QRect(toolbar_top_left, widget.size())
+            expected_toolbar = (
+                toolbar_rect
+                if expected_toolbar.isNull()
+                else expected_toolbar.united(toolbar_rect)
+            )
+
+        self.assertEqual(manager.overlay.target_rect, expected)
+        self.assertEqual(
+            manager.toolbar_overlay.target_rect,
+            expected_toolbar,
+        )
+        self.assertTrue(manager.menu_overlay.target_rect.isNull())
+        manager.stop()
+
+    def test_tutorial_menu_steps_highlight_only_the_named_menu_label(self):
+        self.window.resize(1700, 800)
+        self.window.show()
+        self.app.processEvents()
+
+        manager = self.window.tutorial_manager
+        manager.start_first_motion()
+        menu_bar = self.window.menuBar()
+        for step_index, menu in (
+            (1, self.window.robot_menu),
+            (6, self.window.timeline_menu),
+            (8, self.window.file_menu),
+        ):
+            with self.subTest(step=manager.steps[step_index].id):
+                manager.current_index = step_index
+                manager.show_current_step()
+                self.app.processEvents()
+
+                action_rect = menu_bar.actionGeometry(menu.menuAction())
+                expected_top_left = menu_bar.mapTo(
+                    self.window,
+                    action_rect.topLeft(),
+                )
+                expected = QRect(expected_top_left, action_rect.size())
+                self.assertEqual(manager.overlay.target_rect, expected)
+                self.assertEqual(
+                    manager.menu_overlay.target_rect,
+                    action_rect,
+                )
+                self.assertTrue(manager.toolbar_overlay.target_rect.isNull())
+
+                margin = 14
+                expected_x = max(
+                    margin,
+                    min(
+                        expected.left(),
+                        self.window.width() - manager.card.width() - margin,
+                    ),
+                )
+                toolbar_bottom = self.window.app_toolbar.mapTo(
+                    self.window,
+                    QPoint(0, self.window.app_toolbar.height()),
+                ).y()
+                expected_y = max(
+                    margin,
+                    min(
+                        toolbar_bottom + margin,
+                        self.window.height() - manager.card.height() - margin,
+                    ),
+                )
+                self.assertEqual(manager.card.pos(), QPoint(expected_x, expected_y))
+
+        manager.stop()
+
     def test_model_colors_toggle_defaults_on_without_mutating_materials(self):
         before = self.window.robot_model_3d.mj_model.mat_rgba.copy()
         self.window.viewer_tabs.setCurrentWidget(self.window.viewer_3d_stack)
@@ -2829,6 +3422,136 @@ class RobotViewerTimelineTests(unittest.TestCase):
         controls.corner_smoothing_slider.set_value(0.5)
 
         self.assertAlmostEqual(controls.corner_smoothing(), 0.5)
+
+    def test_export_interval_uses_seconds_spinbox(self):
+        control = self.viewer.export_dt_input
+
+        self.assertEqual(self.viewer.export_dt_label.text(), "Export interval")
+        self.assertEqual(control.minimum(), 0.01)
+        self.assertEqual(control.maximum(), 10.0)
+        self.assertEqual(control.singleStep(), 0.01)
+        self.assertEqual(control.decimals(), 2)
+        self.assertEqual(control.suffix(), " s")
+        self.assertAlmostEqual(self.viewer.export_dt(), 0.01)
+
+        self.viewer.set_export_dt(10.0)
+
+        self.assertAlmostEqual(self.viewer.export_dt(), 10.0)
+
+        planning_section = self.window.left_sidebar_content.sections[2]
+        planning_section.set_expanded(True)
+        self.window.resize(1200, 800)
+        self.window.show()
+        self.app.processEvents()
+
+        label_geometry = self.viewer.export_dt_label.geometry()
+        field_geometry = control.geometry()
+        self.assertGreater(field_geometry.left(), label_geometry.right())
+        self.assertLessEqual(
+            abs(field_geometry.center().y() - label_geometry.center().y()),
+            1,
+        )
+
+    def test_specialized_export_resamples_editable_timeline_at_export_interval(self):
+        initial = self.viewer.robot_model.home_qpos.copy()
+        self.viewer.clear_robot_trajectory()
+        self.viewer.state_timeline.reset(0.0, initial)
+        for time in (0.02, 0.04, 1.0, 2.0, 3.0, 4.0):
+            qpos = initial.copy()
+            qpos[-1] += time * 0.01
+            self.viewer.state_timeline.set_state(time, qpos)
+        self.viewer.set_export_dt(1.0)
+
+        with patch(
+            "gui.robot_viewer_3d.trajectory_collision_reports",
+            return_value=(None, None),
+        ):
+            export = self.viewer._trajectory_export_snapshot(
+                sample_dt=self.viewer.export_dt()
+            )
+
+        np.testing.assert_allclose(export.times, (0.0, 1.0, 2.0, 3.0, 4.0))
+        np.testing.assert_allclose(np.diff(export.times), 1.0)
+
+    def test_dsms_motion_speed_is_separate_from_visual_playback(self):
+        control = self.viewer.dsms_motion_speed_input
+
+        self.assertEqual(
+            self.viewer.dsms_motion_speed_label.text(), "DSMS motion speed"
+        )
+        self.assertEqual(control.minimum(), 0.10)
+        self.assertEqual(control.maximum(), 4.00)
+        self.assertEqual(control.singleStep(), 0.25)
+        self.assertEqual(control.decimals(), 2)
+        self.assertEqual(control.suffix(), "×")
+        self.assertAlmostEqual(self.viewer.dsms_motion_speed(), 1.0)
+
+        self.viewer.set_dsms_motion_speed(0.5)
+
+        self.assertAlmostEqual(self.viewer.dsms_motion_speed(), 0.5)
+        self.assertAlmostEqual(self.viewer.playback_speed.value(), 1.0)
+
+    def test_dsms_export_forwards_motion_speed_after_resampling(self):
+        export = object()
+        self.viewer.set_dsms_motion_speed(0.5)
+        with (
+            patch.object(
+                self.viewer, "_trajectory_export_snapshot", return_value=export
+            ) as snapshot,
+            patch("gui.robot_viewer_3d.export_dsms_trajectory") as export_dsms,
+            patch.object(self.viewer, "_submit_csv_job") as submit,
+        ):
+            self.viewer._save_selected_dsms_trajectory("/tmp/dsms-motion")
+            work = submit.call_args.args[1]
+            work()
+
+        snapshot.assert_called_once_with(sample_dt=self.viewer.export_dt())
+        self.assertIs(export_dsms.call_args.args[1], export)
+        self.assertEqual(export_dsms.call_args.kwargs["motion_speed"], 0.5)
+
+    def test_trajectory_export_selections_dispatch_by_format(self):
+        cases = (
+            ("trajectory_mujoco", "choose_trajectory_save_path"),
+            ("trajectory_dsms", "choose_dsms_trajectory_output_dir"),
+            ("trajectory_mjlab", "choose_mjlab_trajectory_save_path"),
+        )
+
+        for action, method_name in cases:
+            with self.subTest(action=action), patch.object(
+                self.viewer,
+                method_name,
+            ) as selected:
+                self.window.on_setup_export_requested(action)
+
+            selected.assert_called_once_with()
+
+    def test_generate_trajectory_uses_selected_export_interval(self):
+        self.window.trajectory.add_frame(self.window.controls.current_frame())
+        self.viewer.set_export_dt(0.02)
+        self.window.controls.corner_smoothing_slider.set_value(0.25)
+
+        with patch(
+            "gui.main_window.trajectory_generation.generate_trajectory_status"
+        ) as generate, patch.object(
+            self.viewer, "load_backend_states"
+        ), patch.object(
+            self.window.viewer_3d_mujoco, "set_trajectory_csv"
+        ), patch.object(
+            self.viewer, "robot_trajectory_collision_status", return_value=""
+        ):
+            generate.return_value.csv_path = "/tmp/generated.csv"
+            generate.return_value.result_states = []
+            generate.return_value.status_text = "Generated"
+
+            self.window.on_generate_trajectory()
+
+        generate.assert_called_once_with(
+            self.window.trajectory,
+            self.window.backend_interface,
+            smoothing=0.25,
+            export_dt=0.02,
+            state_timeline=self.viewer.state_timeline,
+        )
 
     def test_refresh_display_passes_trajectory_display_options_to_3d_view(self):
         captured = {}
@@ -2966,6 +3689,55 @@ class RobotViewerTimelineTests(unittest.TestCase):
         np.testing.assert_allclose(rows[0][RAW_QPOS_KEY], at_zero)
         np.testing.assert_allclose(rows[1][RAW_QPOS_KEY], changed)
 
+    def test_trajectory_export_blocks_severe_collision(self):
+        collision = Collision(
+            "geom_a", "geom_b", "body_a", "body_b", -0.01, "self"
+        )
+
+        class BlockingCollisionChecker:
+            def get_collisions(self, _state):
+                return [collision]
+
+        self.viewer.collision_checker = BlockingCollisionChecker()
+        self.viewer.set_robot_trajectory(
+            [self.viewer.committed_state.get_qpos()],
+            times=[0.0],
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "blocked.csv"
+            with self.assertRaisesRegex(ValueError, "blocking collision"):
+                self.viewer.save_trajectory_csv(output)
+            self.assertFalse(output.exists())
+
+    def test_trajectory_export_allows_advisory_collision_with_warning(self):
+        collision = Collision(
+            "geom_a",
+            "geom_b",
+            "body_a",
+            "body_b",
+            -0.0005,
+            "self",
+            blocking=False,
+        )
+
+        class AdvisoryCollisionChecker:
+            def get_collisions(self, _state):
+                return [collision]
+
+        self.viewer.collision_checker = AdvisoryCollisionChecker()
+        self.viewer.set_robot_trajectory(
+            [self.viewer.committed_state.get_qpos()],
+            times=[0.0],
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = self.viewer.save_trajectory_csv(
+                Path(directory) / "advisory.csv"
+            )
+            self.assertTrue(output.exists())
+            self.assertIn("Collision warning", self.viewer.status_label.text())
+
     def test_save_generated_trajectory_uses_backend_times(self):
         first = self.viewer.robot_model.home_qpos.copy()
         second = first.copy()
@@ -3085,6 +3857,36 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertAlmostEqual(self.viewer.trajectory_import_dt.value(), 0.05)
         editable_times = sorted({frame.time for frame in self.window.trajectory.frames})
         np.testing.assert_allclose(editable_times, [0.0, 0.05, 0.10])
+
+    def test_specialized_import_selection_uses_folder_and_mjlab_interval(self):
+        with patch.object(self.viewer, "_open_csv_file_dialog") as open_dialog:
+            self.viewer.choose_dsms_trajectory_dir(prompt_import_dt=True)
+
+        self.assertTrue(open_dialog.call_args.kwargs["directory_mode"])
+        self.assertEqual(
+            open_dialog.call_args.kwargs["title"],
+            "Load DSMS trajectory folder",
+        )
+
+        with (
+            patch(
+                "gui.main_window.QInputDialog.getDouble",
+                return_value=(0.02, True),
+            ) as prompt,
+            patch.object(
+                self.viewer,
+                "choose_mjlab_trajectory_csv",
+            ) as choose_mjlab,
+        ):
+            self.window.on_setup_import_requested("trajectory_mjlab")
+
+        prompt.assert_called_once()
+        self.assertEqual(prompt.call_args.args[2], "Source sample interval [s]")
+        self.assertAlmostEqual(prompt.call_args.args[3], 0.01)
+        choose_mjlab.assert_called_once_with(
+            0.02,
+            prompt_import_dt=True,
+        )
 
     def test_loaded_trajectory_csv_can_be_cleared_from_keyframe_controls(self):
         first = self.viewer.robot_model.home_qpos.copy()

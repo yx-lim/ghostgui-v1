@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -16,8 +17,24 @@ from .registry import RobotModelInfo, get_model_info
 from .assets import prepare_urdf_visual_meshes, resolve_mesh_path
 
 
-MODEL_CACHE_VERSION = 3
+MODEL_CACHE_VERSION = 5
 HOME_GROUND_CLEARANCE = 0.002
+HOME_REPAIR_SAMPLE_COUNT = 512
+
+
+class HomePoseCollisionError(ValueError):
+    """Raised when a model cannot provide a collision-free editor home pose."""
+
+
+class _StaticCollisionState:
+    """Minimal collision-check state for valid MJCF models with no joints."""
+
+    def __init__(self, model):
+        self.mj_model = model
+        self.mj_data = mujoco.MjData(model)
+
+    def forward_kinematics(self):
+        mujoco.mj_forward(self.mj_model, self.mj_data)
 
 
 class MuJoCoRobotAdapter(RobotModel3D):
@@ -43,36 +60,64 @@ class MuJoCoRobotAdapter(RobotModel3D):
         self.asset_root = self.model_path.parent
         self.package_map = dict(self.info.package_map)
         self.load_warning = None
+        self.home_pose_was_repaired = False
         self.runtime_model_path = self._prepare_model_path(self.model_path)
         super().__init__(self.runtime_model_path)
         # Public paths describe the selected source, not an implementation cache.
         self.model_path = Path(model_path or self.info.model_path).resolve()
         self._apply_registered_home()
         self._ground_home_qpos()
+        self.joint_names = self.get_joint_names()
+        self.actuated_joints = list(self.joint_names)
+        self.passive_joints = tuple(
+            name for name in self.info.passive_joints if name in self.joints
+        )
+        passive = set(self.passive_joints)
+        self.ik_joint_names = [
+            name for name in self.joint_names if name not in passive
+        ]
+        self.joint_groups = {
+            group: tuple(name for name in names if name in self.joints)
+            for group, names in self.info.joint_groups.items()
+        }
+        self.joint_limits = {
+            name: self.get_joint_limits(name) for name in self.actuated_joints
+        }
+        self.root_body = (
+            self._first_body(self.info.root_body_candidates)
+            or self._infer_root_body()
+        )
+        self.root_joint = self._first_joint(self.info.root_joint_candidates)
+        self.logical_frame_bindings = self._build_logical_frames()
+        configured_end_effectors = set(self.info.end_effector_frames)
+        self.end_effectors = {
+            key: value for key, value in self.logical_frame_bindings.items()
+            if (
+                key in configured_end_effectors
+                or (
+                    not configured_end_effectors
+                    and any(token in key.lower() for token in (
+                        "foot", "hand", "tool", "gripper", "tcp",
+                        "end_effector", "end-effector",
+                    ))
+                )
+            )
+        }
+        self.trajectory_frames = list(self.logical_frame_bindings)
+        self.kinematic_tree = self._build_kinematic_tree()
+        self._ensure_collision_free_home()
         self.default_qpos = self.home_qpos.copy()
         self.mj_data = mujoco.MjData(self.mj_model)
         self.mj_data.qpos[:] = self.home_qpos
         mujoco.mj_forward(self.mj_model, self.mj_data)
-        self.joint_names = self.get_joint_names()
-        self.actuated_joints = list(self.joint_names)
-        self.joint_limits = {
-            name: self.get_joint_limits(name) for name in self.actuated_joints
-        }
-        self.root_body = self._first_body(self.info.root_body_candidates)
-        self.root_joint = self._first_joint(self.info.root_joint_candidates)
-        self.logical_frame_bindings = self._build_logical_frames()
-        self.end_effectors = {
-            key: value for key, value in self.logical_frame_bindings.items()
-            if key.lower().endswith(("foot", "hand"))
-        }
-        self.trajectory_frames = list(self.logical_frame_bindings)
-        self.kinematic_tree = self._build_kinematic_tree()
 
     @classmethod
     def load_model(cls, model_path, model=None):
         return cls(model=model, model_path=model_path)
 
     def _prepare_model_path(self, path: Path) -> Path:
+        if path.suffix.lower() == ".xml":
+            return self._prepare_mjcf_path(path)
         if path.suffix.lower() != ".urdf":
             return path
         try:
@@ -117,7 +162,7 @@ class MuJoCoRobotAdapter(RobotModel3D):
         # parent so root editing has the same well-defined semantics as MJCF.
         root_link = self._urdf_root_link(root)
         root_link = self._collapse_virtual_world_root(root, root_link)
-        if root_link:
+        if root_link and self.info.floating_base is not False:
             world_link = ET.Element("link", {"name": "ghostgui_world"})
             floating = ET.Element("joint", {
                 "name": "floating_base", "type": "floating"
@@ -148,6 +193,64 @@ class MuJoCoRobotAdapter(RobotModel3D):
             "mujoco_version": getattr(mujoco, "__version__", "unknown"),
             "warning": self.load_warning,
         }, indent=2), encoding="utf-8")
+        return runtime_path
+
+    def _prepare_mjcf_path(self, path: Path) -> Path:
+        """Resolve the imported-library adjacent mesh convention without edits."""
+        try:
+            tree = ET.parse(path)
+        except ET.ParseError:
+            return path
+        root = tree.getroot()
+        if root.tag != "mujoco":
+            return path
+        compiler = root.find("compiler")
+        meshdir = compiler.get("meshdir") if compiler is not None else None
+        if not meshdir or Path(meshdir).is_absolute():
+            return path
+        declared = (path.parent / meshdir).resolve()
+        if declared.is_dir():
+            return path
+
+        adjacent = (path.parent / f"assets-{path.stem}").resolve()
+        if not adjacent.is_dir():
+            return path
+        referenced = [
+            mesh.get("file") for mesh in root.findall(".//asset/mesh")
+            if mesh.get("file")
+        ]
+        missing = [
+            name for name in referenced
+            if not Path(name).is_absolute() and not (adjacent / name).is_file()
+        ]
+        if missing:
+            preview = ", ".join(missing[:5])
+            more = f" and {len(missing) - 5} more" if len(missing) > 5 else ""
+            raise RuntimeError(
+                f"MJCF mesh directory {declared} does not exist. Found adjacent "
+                f"assets at {adjacent}, but required meshes are missing: "
+                f"{preview}{more}. Import the complete model asset folder."
+            )
+
+        cache_key = hashlib.sha256()
+        cache_key.update(path.read_bytes())
+        cache_key.update(str(adjacent).encode("utf-8"))
+        cache_root = Path(os.environ.get(
+            "GHOSTGUI_CACHE_DIR",
+            Path.home() / ".cache" / "ghostgui",
+        ))
+        cache_dir = cache_root / "models" / f"mjcf-{cache_key.hexdigest()[:24]}"
+        runtime_path = cache_dir / "model.xml"
+        if not runtime_path.exists():
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            if compiler is None:
+                compiler = ET.Element("compiler")
+                root.insert(0, compiler)
+            compiler.set("meshdir", str(adjacent))
+            tree.write(runtime_path, encoding="unicode")
+        self.load_warning = (
+            f"{path.name}: resolved meshes from adjacent {adjacent.name} folder."
+        )
         return runtime_path
 
     def _urdf_root_link(self, root):
@@ -194,6 +297,7 @@ class MuJoCoRobotAdapter(RobotModel3D):
         digest = hashlib.sha256()
         digest.update(f"ghostgui-model-cache-v{MODEL_CACHE_VERSION}".encode())
         digest.update(getattr(mujoco, "__version__", "unknown").encode())
+        digest.update(f"floating-base={self.info.floating_base!r}".encode())
         digest.update(path.read_bytes())
         for mesh in root.findall(".//mesh"):
             filename = mesh.attrib.get("filename", "")
@@ -251,6 +355,7 @@ class MuJoCoRobotAdapter(RobotModel3D):
         body_by_name = {
             body.attrib.get("name"): body for body in worldbody.iter("body")
         }
+        self._name_anonymous_mjcf_geoms(worldbody)
         for leg in ("FL", "FR", "RL", "RR"):
             calf = body_by_name.get(f"{leg}_calf")
             if calf is not None:
@@ -303,6 +408,48 @@ class MuJoCoRobotAdapter(RobotModel3D):
         mujoco.MjModel.from_xml_path(str(mjcf_path))
         return mjcf_path
 
+    @staticmethod
+    def _name_anonymous_mjcf_geoms(worldbody):
+        """Give URDF-generated geoms deterministic, user-debuggable names."""
+        used_names = {
+            geom.get("name")
+            for geom in worldbody.iter("geom")
+            if geom.get("name")
+        }
+
+        def role_for(geom):
+            if geom.get("group") == "1" or (
+                geom.get("contype") == "0"
+                and geom.get("conaffinity") == "0"
+            ):
+                return "visual"
+            return "contact"
+
+        def name_geoms(owner_name, geoms):
+            safe_owner = RobotModel3D.plain_name(owner_name or "world")
+            safe_owner = "_".join(
+                part for part in re.split(r"[^A-Za-z0-9]+", safe_owner)
+                if part
+            ) or "world"
+            ordinals = {"visual": 0, "contact": 0}
+            for geom in geoms:
+                role = role_for(geom)
+                ordinals[role] += 1
+                if geom.get("name"):
+                    continue
+                ordinal = ordinals[role]
+                candidate = f"{safe_owner}__{role}_{ordinal}"
+                while candidate in used_names:
+                    ordinal += 1
+                    candidate = f"{safe_owner}__{role}_{ordinal}"
+                ordinals[role] = ordinal
+                geom.set("name", candidate)
+                used_names.add(candidate)
+
+        name_geoms("world", worldbody.findall("geom"))
+        for body in worldbody.iter("body"):
+            name_geoms(body.get("name"), body.findall("geom"))
+
     def _apply_registered_home(self):
         if self.model_type == "quadruped":
             for free_joint in self.free_joints_by_body.values():
@@ -311,6 +458,195 @@ class MuJoCoRobotAdapter(RobotModel3D):
             joint = self.joints.get(name)
             if joint is not None:
                 self.home_qpos[joint.qpos_address] = value
+
+    def _ensure_collision_free_home(self):
+        """Validate every resolved home and repair generic imported models."""
+        # Imported here to keep the model adapter usable without creating a
+        # module-level models -> IK -> models import cycle.
+        from core.ik.collision import CollisionChecker
+
+        checker = CollisionChecker(self)
+        state = (
+            self.create_state()
+            if self.mj_model.nq else _StaticCollisionState(self.mj_model)
+        )
+        collisions = checker.get_collisions(state)
+        if not collisions:
+            return
+
+        if self.model_type != "generic":
+            raise HomePoseCollisionError(
+                f"{self.model_name} home pose is colliding "
+                f"({self._collision_summary(collisions)}). Define a "
+                "collision-free registered home pose."
+            )
+
+        repaired = self._find_collision_free_home(checker)
+        if repaired is None:
+            raise HomePoseCollisionError(
+                f"Imported model {self.model_name} starts in collision "
+                f"({self._collision_summary(collisions)}) and no "
+                f"collision-free home pose was found after "
+                f"{HOME_REPAIR_SAMPLE_COUNT} deterministic samples. "
+                "Provide a collision-free source home/keyframe or correct "
+                "the model's collision geometry."
+            )
+
+        self.home_qpos = repaired
+        self._ground_home_qpos()
+        remaining = checker.get_collisions(self.create_state())
+        if remaining:
+            raise HomePoseCollisionError(
+                f"Imported model {self.model_name} could not retain a "
+                "collision-free home pose after grounding "
+                f"({self._collision_summary(remaining)})."
+            )
+        self.home_pose_was_repaired = True
+        repair_warning = (
+            f"{self.model_name}: generated a collision-free home pose from "
+            "the imported model's joint limits."
+        )
+        self.load_warning = (
+            f"{self.load_warning} {repair_warning}"
+            if self.load_warning else repair_warning
+        )
+
+    def _find_collision_free_home(self, checker):
+        movable = []
+        nominal_values = []
+        lower_values = []
+        upper_values = []
+        for joint in self.joints.values():
+            nominal = float(self.home_qpos[joint.qpos_address])
+            if joint.limits is None:
+                if joint.joint_type == int(mujoco.mjtJoint.mjJNT_HINGE):
+                    lower, upper = nominal - np.pi, nominal + np.pi
+                else:
+                    lower, upper = nominal - 1.0, nominal + 1.0
+            else:
+                lower, upper = map(float, joint.limits)
+            if (
+                not np.isfinite((nominal, lower, upper)).all()
+                or upper - lower <= 1e-9
+            ):
+                continue
+            movable.append(joint)
+            nominal_values.append(float(np.clip(nominal, lower, upper)))
+            lower_values.append(lower)
+            upper_values.append(upper)
+
+        if not movable:
+            return None
+
+        nominal_values = np.asarray(nominal_values, dtype=float)
+        lower_values = np.asarray(lower_values, dtype=float)
+        upper_values = np.asarray(upper_values, dtype=float)
+        spans = upper_values - lower_values
+        candidate_state = self.create_state()
+
+        def candidate_qpos(values):
+            qpos = self.home_qpos.copy()
+            for joint, value in zip(movable, values):
+                qpos[joint.qpos_address] = float(value)
+            candidate_state.set_qpos(qpos)
+            if checker.get_collisions(candidate_state):
+                return None
+            return candidate_state.get_qpos()
+
+        candidates = [lower_values + 0.5 * spans]
+        for joint_index in range(len(movable)):
+            for fraction in (0.25, 0.5, 0.75):
+                values = nominal_values.copy()
+                values[joint_index] = (
+                    lower_values[joint_index] + fraction * spans[joint_index]
+                )
+                candidates.append(values)
+
+        primes = self._first_primes(len(movable))
+        for sample_index in range(1, HOME_REPAIR_SAMPLE_COUNT + 1):
+            fractions = np.asarray([
+                self._van_der_corput(sample_index, prime)
+                for prime in primes
+            ])
+            candidates.append(lower_values + fractions * spans)
+
+        best_qpos = None
+        best_values = None
+        best_score = float("inf")
+        for values in candidates:
+            qpos = candidate_qpos(values)
+            if qpos is None:
+                continue
+            score = float(np.sum(((values - nominal_values) / spans) ** 2))
+            if score < best_score:
+                best_qpos = qpos
+                best_values = np.asarray(values, dtype=float).copy()
+                best_score = score
+
+        if best_qpos is None:
+            return None
+
+        # Pull the selected global candidate back toward the declared home.
+        # ``high`` always remains collision-free, so the returned pose is safe
+        # even when collision status is not perfectly monotonic on the segment.
+        low, high = 0.0, 1.0
+        for _ in range(24):
+            alpha = 0.5 * (low + high)
+            values = nominal_values + alpha * (best_values - nominal_values)
+            qpos = candidate_qpos(values)
+            if qpos is None:
+                low = alpha
+            else:
+                high = alpha
+                best_qpos = qpos
+        return best_qpos
+
+    def home_joint_values(self):
+        return {
+            name: float(self.home_qpos[joint.qpos_address])
+            for name, joint in self.joints.items()
+        }
+
+    @staticmethod
+    def _van_der_corput(index, base):
+        result = 0.0
+        denominator = 1.0
+        while index:
+            index, remainder = divmod(index, base)
+            denominator *= base
+            result += remainder / denominator
+        return result
+
+    @staticmethod
+    def _first_primes(count):
+        primes = []
+        candidate = 2
+        while len(primes) < count:
+            is_prime = all(
+                candidate % prime
+                for prime in primes
+                if prime * prime <= candidate
+            )
+            if is_prime:
+                primes.append(candidate)
+            candidate += 1
+        return primes
+
+    @staticmethod
+    def _collision_summary(collisions, limit=3):
+        descriptions = []
+        seen = set()
+        for collision in collisions:
+            key = frozenset((collision.geom1_id, collision.geom2_id))
+            if key in seen:
+                continue
+            seen.add(key)
+            descriptions.append(
+                f"{collision.pair_label} [{collision.diagnostic_label}]"
+            )
+            if len(descriptions) >= int(limit):
+                break
+        return ", ".join(descriptions) or "unknown contact"
 
     def _ground_home_qpos(self, clearance=HOME_GROUND_CLEARANCE):
         if not self.free_joints_by_body:
@@ -400,6 +736,89 @@ class MuJoCoRobotAdapter(RobotModel3D):
 
     def _first_joint(self, candidates):
         return self._find_name(candidates, self.joints)
+
+    def _infer_root_body(self):
+        """Return the compiled kinematic root when vendor naming is unknown."""
+        for body_id in range(1, self.mj_model.nbody):
+            if int(self.mj_model.body_parentid[body_id]) != 0:
+                continue
+            name = mujoco.mj_id2name(
+                self.mj_model, mujoco.mjtObj.mjOBJ_BODY, body_id
+            )
+            if name:
+                return name
+        return None
+
+    def default_ik_joint_weights(self):
+        passive = set(self.passive_joints)
+        return {
+            name: 0.0 if name in passive else 1.0
+            for name in self.joint_names
+        }
+
+    def joint_chain_for_frame(self, frame_name):
+        """Return scalar joints on the compiled root-to-frame body chain."""
+        binding = self.resolve_logical_frame(frame_name)
+        if binding is None:
+            return ()
+        kind, object_name = binding
+        if kind == "site":
+            site_id = mujoco.mj_name2id(
+                self.mj_model, mujoco.mjtObj.mjOBJ_SITE, object_name
+            )
+            if site_id < 0:
+                return ()
+            body_id = int(self.mj_model.site_bodyid[site_id])
+        else:
+            body_id = mujoco.mj_name2id(
+                self.mj_model, mujoco.mjtObj.mjOBJ_BODY, object_name
+            )
+            if body_id < 0:
+                return ()
+
+        body_ids = []
+        while body_id > 0:
+            body_ids.append(body_id)
+            body_id = int(self.mj_model.body_parentid[body_id])
+        body_ids.reverse()
+        body_set = set(body_ids)
+        return tuple(
+            joint.name
+            for joint in sorted(
+                self.joints.values(), key=lambda item: item.joint_id
+            )
+            if int(self.mj_model.jnt_bodyid[joint.joint_id]) in body_set
+        )
+
+    def limb_joint_chain_for_frame(self, frame_name):
+        """Return the branch-local part of an End Effector's joint chain.
+
+        A whole root-to-frame chain can include shared torso joints.  When a
+        second End Effector follows the same prefix and then diverges, that
+        common prefix belongs to the shared body rather than the selected
+        limb.  Nested or identical End Effector chains are not treated as a
+        branch so serial tools keep their complete controllable chain.
+        """
+        chain = self.joint_chain_for_frame(frame_name)
+        branch_start = 0
+        for other_frame in self.end_effectors:
+            if other_frame == frame_name:
+                continue
+            other_chain = self.joint_chain_for_frame(other_frame)
+            common_count = 0
+            for selected_joint, other_joint in zip(chain, other_chain):
+                if selected_joint != other_joint:
+                    break
+                common_count += 1
+            if (
+                0 < common_count < len(chain)
+                and common_count < len(other_chain)
+            ):
+                branch_start = max(branch_start, common_count)
+        return chain[branch_start:]
+
+    def joint_group(self, name):
+        return tuple(self.joint_groups.get(str(name), ()))
 
     def _build_logical_frames(self):
         bindings = {}

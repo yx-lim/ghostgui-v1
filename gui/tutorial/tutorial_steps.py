@@ -8,8 +8,10 @@ class TutorialStep:
     id: str
     title: str
     body: str
-    target: str | None = None
+    target: str | tuple[str, ...] | None = None
     before_show: str | None = None
+    position_card_near_target: bool = True
+    card_placement: str = "auto"
 
 
 FIRST_MOTION_TUTORIAL = [
@@ -30,8 +32,9 @@ FIRST_MOTION_TUTORIAL = [
             "The robot model controls the available joints, frames, geometry, "
             "and home pose. Open the Robot menu to choose the active model."
         ),
-        target="appMenuBar",
+        target="robotMenu",
         before_show="expand_setup",
+        card_placement="below",
     ),
     TutorialStep(
         id="select_frame",
@@ -39,7 +42,8 @@ FIRST_MOTION_TUTORIAL = [
         body=(
             "Choose the body, site, or logical frame you want to edit. For a "
             "first motion, a hand target such as left_hand is usually easiest "
-            "to see."
+            "to see. You can also double-click the robot to choose the target "
+            "to edit."
         ),
         target="targetFrameCombo",
         before_show="expand_target_pose",
@@ -52,7 +56,11 @@ FIRST_MOTION_TUTORIAL = [
             "orange robot shows the temporary IK preview before it is saved. "
             "Press T for translate, R for rotate, or E/Esc to cancel a drag."
         ),
-        target="workflowToolbar",
+        target=(
+            "moveToolButton",
+            "rotateToolButton",
+            "gizmoVisibilityButton",
+        ),
         before_show="expand_end_effector_editor",
     ),
     TutorialStep(
@@ -76,11 +84,25 @@ FIRST_MOTION_TUTORIAL = [
         before_show="show_3d_view",
     ),
     TutorialStep(
+        id="repeat_motion",
+        title="Optionally Repeat The Motion",
+        body=(
+            "For periodic motion, use Timeline > Copy Motion Range…, then "
+            "Paste Motion at Current Time, Paste Motion Reversed at Current "
+            "Time, or Repeat Motion…. A reversed paste changes time order only "
+            "and can extend A → B into A → B → A."
+        ),
+        target="timelineMenu",
+        before_show="expand_setup",
+        card_placement="below",
+    ),
+    TutorialStep(
         id="generate",
         title="Generate The Trajectory",
         body=(
             "After you have saved one or more keyframes, Generate samples the "
-            "timeline into a robot trajectory for playback and export."
+            "timeline into a robot trajectory for playback and export. Choose "
+            "Export interval in Planning to set its time step."
         ),
         target="quickGenerateButton",
         before_show="show_3d_view",
@@ -89,10 +111,16 @@ FIRST_MOTION_TUTORIAL = [
         id="export",
         title="Export The Result",
         body=(
-            "Use File > Export to save the current committed qpos or timed "
-            "trajectory rows. Unsaved orange previews are not exported."
+            "Use File > Export > Trajectory to choose MuJoCo, DSMS, or mjlab. "
+            "File > Import > Trajectory accepts the same three formats; DSMS "
+            "uses its reference folder, while mjlab asks for its source sample "
+            "interval. "
+            "Set DSMS motion speed in Planning when DSMS time.csv should carry "
+            "a genuinely slower or faster reference. Unsaved orange previews "
+            "are not exported."
         ),
-        target="appMenuBar",
+        target="fileMenu",
         before_show="expand_setup",
+        card_placement="below",
     ),
 ]

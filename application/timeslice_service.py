@@ -20,18 +20,62 @@ class LoadedTrajectoryTargets:
     imported_times: tuple[float, ...]
 
 
-def editable_logical_frame_names(robot_model, controls, viewer_3d):
+def editable_logical_frame_names(
+    robot_model,
+    control_frame_names,
+    frame_bindings,
+):
+    """Merge logical frame names without depending on GUI widget types."""
     frame_names = []
     for name in getattr(robot_model, "trajectory_frames", []):
         if name not in frame_names:
             frame_names.append(name)
-    for name in controls.frame_names:
+    for name in control_frame_names:
         if name not in frame_names:
             frame_names.append(name)
-    for name in viewer_3d.frame_bindings:
+    for name in frame_bindings:
         if name not in frame_names:
             frame_names.append(name)
     return frame_names
+
+
+def capture_timeslice_from_committed_pose(
+    state,
+    *,
+    time,
+    phase,
+    frame_names,
+    frame_bindings,
+):
+    if state is None:
+        return ()
+
+    frames = []
+
+    for frame_name in frame_names:
+        binding = frame_bindings.get(frame_name)
+        if binding is None:
+            continue
+        kind, object_name = binding
+        try:
+            position, quaternion = state.get_body_pose(object_name, kind)
+        except KeyError:
+            continue
+        roll, pitch, yaw = quat_to_rpy(quaternion)
+        frames.append(
+            TargetFrame(
+                time=time,
+                phase=phase,
+                frame_name=frame_name,
+                x=float(position[0]),
+                y=float(position[1]),
+                z=float(position[2]),
+                roll=roll,
+                pitch=pitch,
+                yaw=yaw,
+            )
+        )
+    return tuple(frames)
 
 
 def define_timeslice_from_committed_pose(
@@ -44,43 +88,25 @@ def define_timeslice_from_committed_pose(
     frame_names,
     frame_bindings,
 ):
-    if state is None:
-        return TimesliceSnapshotResult(0, -1, None)
-
+    """Compatibility facade that captures and applies one logical timeslice."""
+    frames = capture_timeslice_from_committed_pose(
+        state,
+        time=time,
+        phase=phase,
+        frame_names=frame_names,
+        frame_bindings=frame_bindings,
+    )
     selected_frame = None
     selected_index = -1
     last_index = -1
-    count = 0
-
-    for frame_name in frame_names:
-        binding = frame_bindings.get(frame_name)
-        if binding is None:
-            continue
-        kind, object_name = binding
-        try:
-            position, quaternion = state.get_body_pose(object_name, kind)
-        except KeyError:
-            continue
-        roll, pitch, yaw = quat_to_rpy(quaternion)
-        frame = TargetFrame(
-            time=time,
-            phase=phase,
-            frame_name=frame_name,
-            x=float(position[0]),
-            y=float(position[1]),
-            z=float(position[2]),
-            roll=roll,
-            pitch=pitch,
-            yaw=yaw,
-        )
+    for frame in frames:
         last_index = trajectory.upsert_frame(frame)
-        if frame_name == selected_frame_name:
+        if frame.frame_name == selected_frame_name:
             selected_frame = frame
             selected_index = last_index
-        count += 1
 
     active_index = selected_index if selected_index >= 0 else last_index
-    return TimesliceSnapshotResult(count, active_index, selected_frame)
+    return TimesliceSnapshotResult(len(frames), active_index, selected_frame)
 
 
 def selected_loaded_trajectory_import_samples(times, qposes, interval):

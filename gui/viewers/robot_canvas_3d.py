@@ -16,14 +16,23 @@ import numpy as np
 from OpenGL import GL
 from OpenGL import GLU
 from PySide6.QtCore import QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QMatrix4x4, QSurfaceFormat, QVector3D
+from PySide6.QtGui import QMatrix4x4, QVector3D
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
+from PySide6.QtWidgets import QLabel
 
+from gui.render_scheduler import RenderRequestCoalescer
+from .camera import OrbitCamera
+from .opengl_compat import (
+    compatibility_context_failure,
+    desktop_compatibility_format,
+)
 from .trajectory_colors import gl_color_for_frame
 from core.trajectory import rpy_to_quat
 from .transform_gizmo import GizmoInteractionState, TransformGizmo
 
 TRAJECTORY_LINE_DT = 0.02
+MAX_DEVICE_PIXEL_RATIO = 8.0
+DEFAULT_MAX_VIEWPORT_DIMENSION = 32768
 
 
 class RobotCanvas3D(QOpenGLWidget):
@@ -36,13 +45,46 @@ class RobotCanvas3D(QOpenGLWidget):
     geometry_progress = Signal(int, int)
     body_double_clicked = Signal(str)
     camera_changed = Signal()
+    rendering_failed = Signal(str)
+
+    @property
+    def camera_distance(self):
+        return self.camera_controller.distance
+
+    @camera_distance.setter
+    def camera_distance(self, value):
+        self.camera_controller.distance = float(value)
+
+    @property
+    def camera_yaw(self):
+        return self.camera_controller.yaw
+
+    @camera_yaw.setter
+    def camera_yaw(self, value):
+        self.camera_controller.yaw = float(value)
+
+    @property
+    def camera_pitch(self):
+        return self.camera_controller.pitch
+
+    @camera_pitch.setter
+    def camera_pitch(self, value):
+        self.camera_controller.pitch = float(value)
+
+    @property
+    def camera_center(self):
+        return self.camera_controller.center
+
+    @camera_center.setter
+    def camera_center(self, value):
+        self.camera_controller.center = np.asarray(value, dtype=float)
 
     def __init__(self):
         super().__init__()
 
         # This widget is an opaque scene. Request no composited alpha channel
         # and tell Qt not to expose the desktop through transparent GL pixels.
-        surface_format = QSurfaceFormat(self.format())
+        surface_format = desktop_compatibility_format(self.format())
         surface_format.setAlphaBufferSize(0)
         self.setFormat(surface_format)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
@@ -61,10 +103,8 @@ class RobotCanvas3D(QOpenGLWidget):
         self.target_z = 0.9
         self.target_yaw = 0.0
 
-        self.camera_distance = 5.0
-        self.camera_yaw = 38.0
-        self.camera_pitch = 24.0
-        self.camera_center = np.array([0.0, 0.0, 0.75], dtype=float)
+        self.camera_controller = OrbitCamera()
+        self.render_requests = RenderRequestCoalescer(self.update, self)
 
         self.dragging_target = False
         self.rotating_camera = False
@@ -102,6 +142,28 @@ class RobotCanvas3D(QOpenGLWidget):
         self._geometry_timer = QTimer(self)
         self._geometry_timer.setInterval(0)
         self._geometry_timer.timeout.connect(self._compile_next_geometry)
+        self._shutdown = False
+        self._resource_context = None
+        self._rendering_failure = None
+        self._line_width_range = (1.0, 1.0)
+        self._point_size_range = (1.0, 64.0)
+        self._max_viewport_dimensions = (
+            DEFAULT_MAX_VIEWPORT_DIMENSION,
+            DEFAULT_MAX_VIEWPORT_DIMENSION,
+        )
+        self._viewport_scales = (1.0, 1.0)
+        self._rendering_failure_label = QLabel(self)
+        self._rendering_failure_label.setObjectName("renderingFailureMessage")
+        self._rendering_failure_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._rendering_failure_label.setWordWrap(True)
+        self._rendering_failure_label.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            True,
+        )
+        self._rendering_failure_label.setStyleSheet(
+            "QLabel { background: #202326; color: #ffb4ab; padding: 24px; }"
+        )
+        self._rendering_failure_label.hide()
 
     def set_robot_state(self, robot_state, ghost_renderer=None):
         self.set_robot_states(robot_state, None, ghost_renderer)
@@ -221,27 +283,36 @@ class RobotCanvas3D(QOpenGLWidget):
                 ),
             )
 
-        self.update()
+        self.request_render()
+
+    def request_render(self):
+        """Schedule one repaint for any number of same-turn invalidations."""
+        return self.render_requests.request()
 
     # ============================================================
     # OpenGL lifecycle
     # ============================================================
 
     def initializeGL(self):
-        GL.glClearColor(0.08, 0.09, 0.10, 1.0)
-        GL.glEnable(GL.GL_DEPTH_TEST)
-        GL.glEnable(GL.GL_POINT_SMOOTH)
-        GL.glPointSize(8.0)
-        GL.glEnable(GL.GL_NORMALIZE)
-        GL.glDisable(GL.GL_BLEND)
-        GL.glEnable(GL.GL_COLOR_MATERIAL)
-        GL.glColorMaterial(GL.GL_FRONT_AND_BACK, GL.GL_AMBIENT_AND_DIFFUSE)
-        GL.glShadeModel(GL.GL_SMOOTH)
-        GL.glLightfv(GL.GL_LIGHT0, GL.GL_AMBIENT, (0.28, 0.28, 0.28, 1.0))
-        GL.glLightfv(GL.GL_LIGHT0, GL.GL_DIFFUSE, (0.78, 0.78, 0.78, 1.0))
-        GL.glLightfv(GL.GL_LIGHT0, GL.GL_SPECULAR, (0.5, 0.5, 0.5, 1.0))
-        self._quadric = GLU.gluNewQuadric()
-        GLU.gluQuadricNormals(self._quadric, GLU.GLU_SMOOTH)
+        self._shutdown = False
+        self._connect_context_lifecycle()
+        self._clear_rendering_failure()
+        failure = compatibility_context_failure(self.context())
+        if failure is not None:
+            self._report_rendering_failure(failure)
+            return
+        try:
+            if not GL.glGetString(GL.GL_VERSION):
+                raise RuntimeError("the active context did not report a GL version")
+            self._query_context_limits()
+            self._reset_fixed_function_state()
+            self._quadric = GLU.gluNewQuadric()
+            if self._quadric is None:
+                raise RuntimeError("GLU could not allocate drawing resources")
+            GLU.gluQuadricNormals(self._quadric, GLU.GLU_SMOOTH)
+        except Exception as error:
+            self._report_rendering_failure(error)
+            return
         # Display lists belong to this OpenGL context. A restored/cached widget
         # keeps them; a genuinely new context rebuilds them incrementally.
         self._geom_lists = []
@@ -249,40 +320,275 @@ class RobotCanvas3D(QOpenGLWidget):
         self._geometry_queue = []
         self._build_robot_geometry()
 
-    def resizeGL(self, width, height):
-        GL.glViewport(0, 0, width, height)
+    def _connect_context_lifecycle(self):
+        context = self.context()
+        if context is None or context is self._resource_context:
+            return
+        self._resource_context = context
+        context.aboutToBeDestroyed.connect(
+            self._on_context_about_to_be_destroyed,
+            Qt.ConnectionType.DirectConnection,
+        )
 
-    def paintGL(self):
-        # Reassert an opaque framebuffer on every frame. Transparent robot
-        # passes preserve destination alpha rather than changing window alpha.
+    def _on_context_about_to_be_destroyed(self):
+        self.cleanup_gl_resources()
+
+    def _clear_rendering_failure(self):
+        self._rendering_failure = None
+        self._rendering_failure_label.hide()
+
+    def _report_rendering_failure(self, reason):
+        detail = str(reason).strip() or "the OpenGL renderer failed to initialize"
+        message = (
+            f"3D rendering is unavailable: {detail}. GhostGUI requires desktop "
+            "OpenGL 2.1 compatibility support. Update the graphics driver or "
+            "run GhostGUI in a desktop OpenGL compatibility environment."
+        )
+        if message == self._rendering_failure:
+            return
+        self._rendering_failure = message
+        self._geometry_timer.stop()
+        self._geometry_queue = []
+        self._rendering_failure_label.setText(message)
+        self._rendering_failure_label.setToolTip(message)
+        self._rendering_failure_label.setGeometry(self.rect())
+        self._rendering_failure_label.show()
+        self._rendering_failure_label.raise_()
+        self.rendering_failed.emit(message)
+
+    @staticmethod
+    def _float_range(parameter, fallback):
+        try:
+            values = np.asarray(
+                GL.glGetFloatv(parameter),
+                dtype=float,
+            ).reshape(-1)
+            if values.size < 2 or not np.all(np.isfinite(values[:2])):
+                return fallback
+            minimum, maximum = sorted((float(values[0]), float(values[1])))
+            if maximum <= 0.0:
+                return fallback
+            return max(0.01, minimum), min(1024.0, maximum)
+        except Exception:
+            return fallback
+
+    def _query_context_limits(self):
+        self._line_width_range = self._float_range(
+            GL.GL_ALIASED_LINE_WIDTH_RANGE,
+            (1.0, 1.0),
+        )
+        self._point_size_range = self._float_range(
+            GL.GL_ALIASED_POINT_SIZE_RANGE,
+            (1.0, 64.0),
+        )
+        try:
+            dimensions = np.asarray(
+                GL.glGetIntegerv(GL.GL_MAX_VIEWPORT_DIMS),
+                dtype=np.int64,
+            ).reshape(-1)
+            if dimensions.size >= 2 and np.all(dimensions[:2] > 0):
+                self._max_viewport_dimensions = tuple(
+                    max(1, min(DEFAULT_MAX_VIEWPORT_DIMENSION, int(value)))
+                    for value in dimensions[:2]
+                )
+        except Exception:
+            self._max_viewport_dimensions = (
+                DEFAULT_MAX_VIEWPORT_DIMENSION,
+                DEFAULT_MAX_VIEWPORT_DIMENSION,
+            )
+
+    def _device_pixel_ratio(self):
+        try:
+            ratio = float(self.devicePixelRatioF())
+        except (TypeError, ValueError):
+            return 1.0
+        if not math.isfinite(ratio) or ratio <= 0.0:
+            return 1.0
+        return min(MAX_DEVICE_PIXEL_RATIO, ratio)
+
+    def _physical_viewport_size(self, width=None, height=None):
+        logical_width = self.width() if width is None else width
+        logical_height = self.height() if height is None else height
+        try:
+            logical_width = float(logical_width)
+        except (TypeError, ValueError):
+            logical_width = 1.0
+        try:
+            logical_height = float(logical_height)
+        except (TypeError, ValueError):
+            logical_height = 1.0
+        if not math.isfinite(logical_width):
+            logical_width = 1.0
+        if not math.isfinite(logical_height):
+            logical_height = 1.0
+        ratio = self._device_pixel_ratio()
+        maximum_width, maximum_height = self._max_viewport_dimensions
+        return (
+            max(1, min(maximum_width, int(round(max(1.0, logical_width) * ratio)))),
+            max(1, min(maximum_height, int(round(max(1.0, logical_height) * ratio)))),
+        )
+
+    @staticmethod
+    def _clamp_presentation_size(size, limits):
+        minimum, maximum = limits
+        try:
+            size = float(size)
+        except (TypeError, ValueError):
+            size = minimum
+        if not math.isfinite(size):
+            size = minimum
+        return max(minimum, min(maximum, size))
+
+    def _set_line_width(self, logical_width):
+        GL.glLineWidth(
+            self._clamp_presentation_size(
+                float(logical_width) * self._device_pixel_ratio(),
+                self._line_width_range,
+            )
+        )
+
+    def _set_point_size(self, logical_size):
+        GL.glPointSize(
+            self._clamp_presentation_size(
+                float(logical_size) * self._device_pixel_ratio(),
+                self._point_size_range,
+            )
+        )
+
+    def _reset_fixed_function_state(self):
+        """Restore every fixed-function assumption used by one scene frame."""
         GL.glClearColor(0.08, 0.09, 0.10, 1.0)
         GL.glColorMask(GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE, GL.GL_TRUE)
         GL.glDepthMask(GL.GL_TRUE)
+        GL.glDepthFunc(GL.GL_LEQUAL)
+        GL.glEnable(GL.GL_DEPTH_TEST)
+        GL.glEnable(GL.GL_NORMALIZE)
+        GL.glEnable(GL.GL_POINT_SMOOTH)
         GL.glDisable(GL.GL_BLEND)
-        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-
-        self.configure_camera()
-
-        GL.glMatrixMode(GL.GL_PROJECTION)
-        GL.glLoadMatrixf(self.matrix_values(self._projection))
-
-        GL.glMatrixMode(GL.GL_MODELVIEW)
-        GL.glLoadMatrixf(self.matrix_values(self._model_view))
-
-        self.draw_ground_grid()
-        self.draw_world_axes()
-        GL.glEnable(GL.GL_LIGHT0)
-        GL.glEnable(GL.GL_LIGHTING)
-        GL.glLightfv(GL.GL_LIGHT0, GL.GL_POSITION, (2.0, -3.0, 5.0, 1.0))
-        self.draw_robot()
-        self.draw_trajectory_ghosts()
-        self.draw_preview_robot()
+        GL.glDisable(GL.GL_CULL_FACE)
+        GL.glDisable(GL.GL_SCISSOR_TEST)
+        GL.glDisable(GL.GL_STENCIL_TEST)
+        GL.glDisable(GL.GL_TEXTURE_2D)
+        GL.glEnable(GL.GL_COLOR_MATERIAL)
+        GL.glColorMaterial(GL.GL_FRONT_AND_BACK, GL.GL_AMBIENT_AND_DIFFUSE)
+        GL.glShadeModel(GL.GL_SMOOTH)
+        GL.glPolygonMode(GL.GL_FRONT_AND_BACK, GL.GL_FILL)
+        self._set_line_width(1.0)
+        self._set_point_size(8.0)
         GL.glDisable(GL.GL_LIGHTING)
         GL.glDisable(GL.GL_LIGHT0)
-        self.draw_trajectory()
-        self.draw_selected_target_marker()
-        if self.transform_gizmo_visible:
-            self.draw_transform_gizmo()
+        GL.glLightfv(GL.GL_LIGHT0, GL.GL_AMBIENT, (0.28, 0.28, 0.28, 1.0))
+        GL.glLightfv(GL.GL_LIGHT0, GL.GL_DIFFUSE, (0.78, 0.78, 0.78, 1.0))
+        GL.glLightfv(GL.GL_LIGHT0, GL.GL_SPECULAR, (0.5, 0.5, 0.5, 1.0))
+
+    def cleanup_gl_resources(self, *, context_current=False):
+        """Release display lists and GLU objects exactly once per context."""
+        self._geometry_timer.stop()
+        self._geometry_queue = []
+        list_ids = {
+            int(list_id)
+            for list_id in (
+                *self._geom_lists,
+                *self._mesh_display_lists.values(),
+            )
+            if list_id
+        }
+        quadric = self._quadric
+        if not list_ids and quadric is None:
+            self._geom_lists = []
+            self._mesh_display_lists = {}
+            return
+
+        made_current = False
+        can_delete = bool(context_current)
+        if not can_delete and self.isValid():
+            try:
+                self.makeCurrent()
+                made_current = True
+                can_delete = True
+            except RuntimeError:
+                can_delete = False
+        try:
+            if can_delete:
+                for list_id in list_ids:
+                    try:
+                        GL.glDeleteLists(list_id, 1)
+                    except Exception:
+                        # Context loss must not interrupt application teardown.
+                        pass
+                if quadric is not None:
+                    try:
+                        GLU.gluDeleteQuadric(quadric)
+                    except Exception:
+                        pass
+        finally:
+            self._geom_lists = []
+            self._mesh_display_lists = {}
+            self._quadric = None
+            if made_current:
+                try:
+                    self.doneCurrent()
+                except RuntimeError:
+                    pass
+
+    def shutdown(self):
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self.render_requests.shutdown()
+        self._geometry_timer.stop()
+        self.cancel_transform_drag()
+        self.cleanup_gl_resources()
+
+    def closeEvent(self, event):
+        self.shutdown()
+        super().closeEvent(event)
+
+    def resizeEvent(self, event):
+        self._rendering_failure_label.setGeometry(self.rect())
+        super().resizeEvent(event)
+
+    def resizeGL(self, width, height):
+        if self._rendering_failure is not None:
+            return
+        pixel_width, pixel_height = self._physical_viewport_size(width, height)
+        GL.glViewport(0, 0, pixel_width, pixel_height)
+
+    def paintGL(self):
+        if self._rendering_failure is not None:
+            return
+        try:
+            # Transparent robot passes preserve destination alpha rather than
+            # changing QOpenGLWidget's composited window alpha.
+            self._reset_fixed_function_state()
+            pixel_width, pixel_height = self._physical_viewport_size()
+            GL.glViewport(0, 0, pixel_width, pixel_height)
+            GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+
+            self.configure_camera()
+
+            GL.glMatrixMode(GL.GL_PROJECTION)
+            GL.glLoadMatrixf(self.matrix_values(self._projection))
+
+            GL.glMatrixMode(GL.GL_MODELVIEW)
+            GL.glLoadMatrixf(self.matrix_values(self._model_view))
+
+            self.draw_ground_grid()
+            self.draw_world_axes()
+            GL.glEnable(GL.GL_LIGHT0)
+            GL.glEnable(GL.GL_LIGHTING)
+            GL.glLightfv(GL.GL_LIGHT0, GL.GL_POSITION, (2.0, -3.0, 5.0, 1.0))
+            self.draw_robot()
+            self.draw_trajectory_ghosts()
+            self.draw_preview_robot()
+            GL.glDisable(GL.GL_LIGHTING)
+            GL.glDisable(GL.GL_LIGHT0)
+            self.draw_trajectory()
+            self.draw_selected_target_marker()
+            if self.transform_gizmo_visible:
+                self.draw_transform_gizmo()
+        except Exception as error:
+            self._report_rendering_failure(error)
 
     def _build_robot_geometry(self):
         """Queue local geometry so Qt can repaint between expensive meshes."""
@@ -303,7 +609,7 @@ class RobotCanvas3D(QOpenGLWidget):
         if not self._geometry_queue:
             self._geometry_timer.stop()
             return
-        if not self.isValid() or self.robot_state is None:
+        if self._shutdown or not self.isValid() or self.robot_state is None:
             return
         geom_id = self._geometry_queue.pop(0)
         model = self.robot_state.mj_model
@@ -317,17 +623,28 @@ class RobotCanvas3D(QOpenGLWidget):
             self._geom_lists[geom_id] = self._mesh_display_lists[mesh_id]
             self._finish_geometry_item()
             return
-        self.makeCurrent()
+        made_current = False
         try:
+            self.makeCurrent()
+            made_current = True
             list_id = GL.glGenLists(1)
             GL.glNewList(list_id, GL.GL_COMPILE)
-            self._draw_local_geom(model, geom_id)
-            GL.glEndList()
+            try:
+                self._draw_local_geom(model, geom_id)
+            finally:
+                GL.glEndList()
             self._geom_lists[geom_id] = list_id
             if mesh_id is not None:
                 self._mesh_display_lists[mesh_id] = list_id
+        except Exception as error:
+            self._report_rendering_failure(error)
+            return
         finally:
-            self.doneCurrent()
+            if made_current:
+                try:
+                    self.doneCurrent()
+                except RuntimeError:
+                    pass
         self._finish_geometry_item()
 
     def _finish_geometry_item(self):
@@ -586,7 +903,10 @@ class RobotCanvas3D(QOpenGLWidget):
             return
         self._begin_transparent_pass()
         try:
-            for positions, rotations in self.ghost_renderer.transforms:
+            flags = self.ghost_renderer.collision_flags
+            for index, (positions, rotations) in enumerate(
+                self.ghost_renderer.transforms
+            ):
                 # The animated main pose may exactly equal one cached waypoint.
                 # Skipping that duplicate avoids coincident transparent surfaces.
                 if self.robot_state is not None and np.allclose(
@@ -596,7 +916,14 @@ class RobotCanvas3D(QOpenGLWidget):
                     rtol=0.0,
                 ):
                     continue
-                self._draw_robot_transforms(positions, rotations, self.ghost_alpha)
+                colliding = index < len(flags) and flags[index]
+                self._draw_robot_transforms(
+                    positions,
+                    rotations,
+                    self.ghost_alpha,
+                    color_override=(0.95, 0.08, 0.08, 1.0)
+                    if colliding else None,
+                )
         finally:
             self._end_transparent_pass()
 
@@ -622,9 +949,13 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glDisable(GL.GL_BLEND)
 
     def configure_camera(self):
-        width = max(1, self.width())
-        height = max(1, self.height())
-        aspect = width / height
+        logical_width = max(1, self.width())
+        logical_height = max(1, self.height())
+        pixel_width, pixel_height = self._physical_viewport_size(
+            logical_width,
+            logical_height,
+        )
+        aspect = pixel_width / pixel_height
 
         eye_array = self._camera_eye()
         eye = QVector3D(*map(float, eye_array))
@@ -637,7 +968,11 @@ class RobotCanvas3D(QOpenGLWidget):
         self._model_view = QMatrix4x4()
         self._model_view.lookAt(eye, center, up)
 
-        self._viewport = QRect(0, 0, width, height)
+        self._viewport = QRect(0, 0, pixel_width, pixel_height)
+        self._viewport_scales = (
+            pixel_width / logical_width,
+            pixel_height / logical_height,
+        )
 
     def matrix_values(self, matrix):
         data = matrix.data()
@@ -648,7 +983,7 @@ class RobotCanvas3D(QOpenGLWidget):
     # ============================================================
 
     def draw_ground_grid(self):
-        GL.glLineWidth(1.0)
+        self._set_line_width(1.0)
         GL.glColor3f(0.30, 0.33, 0.35)
 
         GL.glBegin(GL.GL_LINES)
@@ -660,7 +995,7 @@ class RobotCanvas3D(QOpenGLWidget):
             GL.glVertex3f(v, 2.5, 0.0)
         GL.glEnd()
 
-        GL.glLineWidth(2.0)
+        self._set_line_width(2.0)
         GL.glColor3f(0.55, 0.58, 0.60)
         GL.glBegin(GL.GL_LINES)
         GL.glVertex3f(-2.5, 0.0, 0.0)
@@ -670,7 +1005,7 @@ class RobotCanvas3D(QOpenGLWidget):
         GL.glEnd()
 
     def draw_world_axes(self):
-        GL.glLineWidth(3.0)
+        self._set_line_width(3.0)
         GL.glBegin(GL.GL_LINES)
 
         GL.glColor3f(0.90, 0.15, 0.12)
@@ -701,7 +1036,7 @@ class RobotCanvas3D(QOpenGLWidget):
                 for frame_name, target in sample["targets"].items():
                     frames_by_name.setdefault(frame_name, []).append(target)
 
-            GL.glLineWidth(2.0)
+            self._set_line_width(2.0)
 
             for frame_name, targets in frames_by_name.items():
                 if len(targets) < 2:
@@ -714,7 +1049,7 @@ class RobotCanvas3D(QOpenGLWidget):
                 GL.glEnd()
 
         if self.show_keyframes:
-            GL.glPointSize(7.0)
+            self._set_point_size(7.0)
             GL.glBegin(GL.GL_POINTS)
             for frame in self.trajectory.frames:
                 GL.glColor3f(*gl_color_for_frame(frame.frame_name))
@@ -726,7 +1061,7 @@ class RobotCanvas3D(QOpenGLWidget):
         y = self.target_y
         z = self.target_z
 
-        GL.glPointSize(12.0)
+        self._set_point_size(12.0)
         GL.glColor3f(1.0, 0.12, 0.08)
         GL.glBegin(GL.GL_POINTS)
         GL.glVertex3f(x, y, z)
@@ -745,7 +1080,7 @@ class RobotCanvas3D(QOpenGLWidget):
         )
 
         GL.glDisable(GL.GL_DEPTH_TEST)
-        GL.glLineWidth(4.0)
+        self._set_line_width(4.0)
         GL.glBegin(GL.GL_LINES)
         for color, axis in colors:
             endpoint = origin + np.asarray(axis, dtype=float) * length
@@ -753,7 +1088,7 @@ class RobotCanvas3D(QOpenGLWidget):
             GL.glVertex3fv(origin)
             GL.glVertex3fv(endpoint)
         GL.glEnd()
-        GL.glPointSize(7.0)
+        self._set_point_size(7.0)
         GL.glColor3f(1.0, 0.92, 0.18)
         GL.glBegin(GL.GL_POINTS)
         GL.glVertex3fv(origin)
@@ -825,7 +1160,7 @@ class RobotCanvas3D(QOpenGLWidget):
             )
 
         self._begin_transparent_pass()
-        GL.glLineWidth(4.0 if self.gizmo.is_dragging else 3.2)
+        self._set_line_width(4.0 if self.gizmo.is_dragging else 3.2)
         for axis in rotation_axes:
             self._draw_gizmo_ring(
                 axis,
@@ -906,7 +1241,7 @@ class RobotCanvas3D(QOpenGLWidget):
         try:
             color = colors[axis]
             GL.glColor4f(float(color[0]), float(color[1]), float(color[2]), 0.28)
-            GL.glLineWidth(2.0)
+            self._set_line_width(2.0)
             if "TRANSLATE" in state.name:
                 vector = {
                     "x": np.array([1.0, 0.0, 0.0]),
@@ -919,7 +1254,7 @@ class RobotCanvas3D(QOpenGLWidget):
                 GL.glVertex3fv(origin + vector * 2.0)
                 GL.glEnd()
             elif "ROTATE" in state.name:
-                GL.glLineWidth(6.0)
+                self._set_line_width(6.0)
                 self._draw_gizmo_ring(axis, color)
         finally:
             self._end_transparent_pass()
@@ -932,51 +1267,26 @@ class RobotCanvas3D(QOpenGLWidget):
             GL.glRotatef(-90.0, 1.0, 0.0, 0.0)
 
     def _camera_eye(self):
-        return self.camera_center + self._camera_offset()
+        return self.camera_controller.eye()
 
     def _camera_offset(self):
-        yaw = math.radians(self.camera_yaw)
-        pitch = math.radians(self.camera_pitch)
-        return np.array([
-            self.camera_distance * math.cos(pitch) * math.sin(yaw),
-            -self.camera_distance * math.cos(pitch) * math.cos(yaw),
-            self.camera_distance * math.sin(pitch),
-        ], dtype=float)
+        return self.camera_controller.offset()
 
     def _camera_basis(self):
-        forward = self.camera_center - self._camera_eye()
-        forward /= max(1e-12, float(np.linalg.norm(forward)))
-        world_up = np.array([0.0, 0.0, 1.0], dtype=float)
-        right = np.cross(forward, world_up)
-        if float(np.linalg.norm(right)) < 1e-8:
-            right = np.array([1.0, 0.0, 0.0], dtype=float)
-        else:
-            right /= float(np.linalg.norm(right))
-        up = np.cross(right, forward)
-        up /= max(1e-12, float(np.linalg.norm(up)))
-        return right, up, forward
+        return self.camera_controller.basis()
 
     def _orbit_camera(self, dx, dy):
-        self.camera_yaw -= float(dx) * 0.4
-        self.camera_pitch = max(
-            -85.0,
-            min(85.0, self.camera_pitch + float(dy) * 0.3),
-        )
+        self.camera_controller.orbit(dx, dy)
 
     def _pan_camera(self, dx, dy):
-        right, up, _ = self._camera_basis()
-        view_height = 2.0 * self.camera_distance * math.tan(math.radians(45.0) * 0.5)
-        units_per_pixel = view_height / max(1, self.height())
-        self.camera_center += (
-            -right * float(dx) * units_per_pixel
-            + up * float(dy) * units_per_pixel
+        self.camera_controller.pan(
+            dx,
+            dy,
+            viewport_height=self.height(),
         )
 
     def _zoom_camera(self, amount):
-        self.camera_distance = max(
-            0.5,
-            min(10.0, self.camera_distance + float(amount)),
-        )
+        self.camera_controller.zoom(amount)
 
     # ============================================================
     # Mouse editing
@@ -1164,14 +1474,21 @@ class RobotCanvas3D(QOpenGLWidget):
         self.configure_camera()
         point = QVector3D(x, y, z)
         screen = point.project(self._model_view, self._projection, self._viewport)
-        return screen.x(), self.height() - screen.y()
+        scale_x, scale_y = self._viewport_scales
+        return (
+            screen.x() / scale_x,
+            (self._viewport.height() - screen.y()) / scale_y,
+        )
 
     def screen_ray(self, sx, sy):
         self.configure_camera()
-        near = QVector3D(sx, self.height() - sy, 0.0).unproject(
+        scale_x, scale_y = self._viewport_scales
+        pixel_x = float(sx) * scale_x
+        pixel_y = self._viewport.height() - float(sy) * scale_y
+        near = QVector3D(pixel_x, pixel_y, 0.0).unproject(
             self._model_view, self._projection, self._viewport
         )
-        far = QVector3D(sx, self.height() - sy, 1.0).unproject(
+        far = QVector3D(pixel_x, pixel_y, 1.0).unproject(
             self._model_view, self._projection, self._viewport
         )
         origin = np.array([near.x(), near.y(), near.z()], dtype=float)
@@ -1242,12 +1559,15 @@ class RobotCanvas3D(QOpenGLWidget):
 
         self.configure_camera()
 
-        near = QVector3D(sx, self.height() - sy, 0.0).unproject(
+        scale_x, scale_y = self._viewport_scales
+        pixel_x = float(sx) * scale_x
+        pixel_y = self._viewport.height() - float(sy) * scale_y
+        near = QVector3D(pixel_x, pixel_y, 0.0).unproject(
             self._model_view,
             self._projection,
             self._viewport,
         )
-        far = QVector3D(sx, self.height() - sy, 1.0).unproject(
+        far = QVector3D(pixel_x, pixel_y, 1.0).unproject(
             self._model_view,
             self._projection,
             self._viewport,

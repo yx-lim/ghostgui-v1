@@ -21,7 +21,8 @@ MuJoCo XML sources load directly.
 
 URDF sources are prepared before use:
 
-1. Referenced mesh paths are resolved.
+1. Referenced mesh paths are resolved and direct meshes are copied into the
+   self-contained runtime cache.
 2. COLLADA visuals are converted into cached OBJ material parts when needed.
 3. Visual geometry is retained alongside collision geometry.
 4. A floating root, editor sites, lighting, ground, and home keyframe are added

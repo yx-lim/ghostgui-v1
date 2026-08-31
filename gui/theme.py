@@ -9,6 +9,7 @@ from PySide6.QtCore import QEvent, QObject, QTimer, Qt
 from PySide6.QtGui import QFont, QIcon, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
 
+from core.resources import resource_path
 
 @dataclass(frozen=True)
 class Theme:
@@ -92,7 +93,7 @@ DARK_THEME = Theme(
     icon_variant="dark",
 )
 
-THEME_ASSET_DIR = Path(__file__).resolve().parent / "assets" / "theme"
+THEME_ASSET_DIR = resource_path("gui/assets/theme")
 
 
 def _icon_url(theme: Theme, name: str) -> str:
@@ -237,6 +238,27 @@ def application_stylesheet(widget: QWidget | None = None) -> str:
             border-radius: 4px;
             selection-color: {theme.accent_text};
             selection-background-color: {theme.accent};
+        }}
+        QComboBox {{
+            min-height: 18px;
+            padding: 2px 22px 2px 6px;
+        }}
+        QComboBox::drop-down {{
+            subcontrol-origin: border;
+            subcontrol-position: top right;
+            width: 20px;
+            background: {theme.elevated_bg};
+            border-left: 1px solid {theme.border};
+            border-top-right-radius: 4px;
+            border-bottom-right-radius: 4px;
+        }}
+        QComboBox::drop-down:hover {{
+            background: {theme.panel_hover_bg};
+        }}
+        QComboBox::down-arrow {{
+            image: url("{_icon_url(theme, "chevron-down")}");
+            width: 9px;
+            height: 9px;
         }}
         QSpinBox, QDoubleSpinBox {{
             padding-right: 14px;

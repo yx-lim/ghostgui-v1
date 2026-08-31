@@ -1,6 +1,6 @@
 """MuJoCo-backed robot model logic."""
 
-from .adapter import MuJoCoRobotAdapter
+from .adapter import HomePoseCollisionError, MuJoCoRobotAdapter
 from .assets import (
     CONVERTIBLE_MESH_FORMATS,
     DIRECT_MUJOCO_MESH_FORMATS,
@@ -32,6 +32,7 @@ __all__ = [
     "DIRECT_MUJOCO_MESH_FORMATS",
     "ConvertedMeshPart",
     "FreeJointInfo",
+    "HomePoseCollisionError",
     "IKResult",
     "JointInfo",
     "MuJoCoRobotAdapter",

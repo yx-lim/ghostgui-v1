@@ -4,7 +4,13 @@ from .collision import (
     Collision,
     CollisionAwareIKSolver,
     CollisionChecker,
+    CollisionPolicy,
     DragSolveResult,
+    TrajectoryCollisionReport,
+    first_trajectory_collision,
+    trajectory_collision_reports,
+    format_collision_diagnostics,
+    format_collision_pairs,
 )
 from .tasks import (
     BodyPoseTask,
@@ -17,19 +23,35 @@ from .tasks import (
     TCPPositionTask,
     TaskLinearization,
 )
+from .solver import (
+    IKSolverSettings,
+    PoseIKResult,
+    pose_target_errors,
+    solve_pose_targets,
+)
 
 __all__ = [
     "BodyPoseTask",
     "Collision",
     "CollisionAwareIKSolver",
     "CollisionChecker",
+    "CollisionPolicy",
     "DragSolveResult",
+    "TrajectoryCollisionReport",
+    "first_trajectory_collision",
+    "trajectory_collision_reports",
+    "format_collision_diagnostics",
+    "format_collision_pairs",
     "FootLockTask",
     "IKTask",
+    "IKSolverSettings",
     "JointRegularizationTask",
     "PostureTask",
+    "PoseIKResult",
+    "pose_target_errors",
     "RootPoseTask",
     "TCPOrientationTask",
     "TCPPositionTask",
     "TaskLinearization",
+    "solve_pose_targets",
 ]

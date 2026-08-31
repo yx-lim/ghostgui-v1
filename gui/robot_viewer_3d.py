@@ -5,7 +5,6 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
-from time import monotonic
 
 import numpy as np
 
@@ -19,6 +18,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QLayout,
     QLabel,
     QPushButton,
     QScrollArea,
@@ -32,8 +32,16 @@ from PySide6.QtWidgets import (
 from application.paths import (
     QPOS_CSV_DIR,
     TRAJECTORY_CSV_DIR,
+    mujoco_playback_cache_path,
 )
 from application.background_jobs import SerializedBackgroundJobs
+from application.playback import PlaybackClock
+from application.trajectory_export_formats import (
+    export_dsms_trajectory,
+    export_mjlab_trajectory,
+    mjlab_compatibility_error,
+    resample_trajectory_export,
+)
 from application.csv_io import (
     TrajectoryExport,
     read_qpos_csv,
@@ -41,14 +49,25 @@ from application.csv_io import (
     write_qpos_csv,
     write_trajectory_csv,
 )
+from application.trajectory_import_formats import (
+    read_dsms_trajectory,
+    read_mjlab_trajectory,
+)
 from core.models import (
     RobotStateTimeline,
     TrajectoryGhostRenderer,
     interpolate_qpos,
 )
-from core.ik import CollisionAwareIKSolver, CollisionChecker
+from core.ik import (
+    CollisionAwareIKSolver,
+    CollisionChecker,
+    trajectory_collision_reports,
+    format_collision_diagnostics,
+    format_collision_pairs,
+)
 from core.trajectory import quat_to_rpy, rpy_to_quat
 from gui.file_selection import SynchronousFileSelectionStage
+from gui.viewers import ik_panels
 from gui.viewers.robot_canvas_3d import RobotCanvas3D
 from core.ik import (
     FootLockTask,
@@ -58,7 +77,7 @@ from core.ik import (
 )
 from .widgets.compact import compact_combo as _compact_combo
 from .widgets.compact import compact_spinbox as _compact_spinbox
-from .widgets.joint_controls import IKInfluenceControl, JointControl
+from .widgets.joint_controls import JointControl
 from .widgets.status import StatusValueLabel
 from .widgets.timeline import TimesliceSlider
 
@@ -79,6 +98,9 @@ class PreviewPathValidation:
     ok: bool
     message: str
     failed_index: int | None = None
+    collision_indices: tuple[int, ...] = ()
+    blocking_collision_indices: tuple[int, ...] = ()
+    collisions: tuple = ()
 
 
 class RobotViewer3D(QWidget):
@@ -99,6 +121,15 @@ class RobotViewer3D(QWidget):
     delete_timeslice_requested = Signal()
     history_action_finished = Signal(str)
     playback_state_changed = Signal(bool)
+
+    @property
+    def _playback_last_tick(self):
+        """Compatibility view of the extracted playback clock."""
+        return self.playback_clock.last_tick
+
+    @_playback_last_tick.setter
+    def _playback_last_tick(self, value):
+        self.playback_clock.last_tick = value
 
     def __init__(
         self,
@@ -144,6 +175,9 @@ class RobotViewer3D(QWidget):
         )
         self.robot_trajectory = []
         self.robot_trajectory_times = []
+        self.robot_trajectory_warning_report = None
+        self.robot_trajectory_blocking_report = None
+        self._last_export_collision_warning = None
         self._prompt_trajectory_import_dt_on_load = False
         self._background_trajectory_postprocess_requested = False
         self.csv_file_selection_stage = (
@@ -151,30 +185,41 @@ class RobotViewer3D(QWidget):
             if file_selection_stage is not None
             else SynchronousFileSelectionStage(self)
         )
+        self._owns_file_selection_stage = file_selection_stage is None
         self.background_jobs = (
             background_jobs
             if background_jobs is not None
             else SerializedBackgroundJobs(self)
         )
+        self._owns_background_jobs = background_jobs is None
+        self._shutdown = False
         self.ghost_trajectory = []
+        self.ghost_collision_flags = []
         self.ghost_source = None
         self.joint_controls = {}
         self.ik_influence_controls = {}
-        self.ik_joint_weights = {
-            name: 1.0 for name in (
-                robot_model.get_joint_names() if robot_model else []
-            )
-        }
+        self.ik_joint_weights = (
+            robot_model.default_ik_joint_weights()
+            if robot_model is not None
+            and hasattr(robot_model, "default_ik_joint_weights")
+            else {
+                name: 1.0 for name in (
+                    robot_model.get_joint_names() if robot_model else []
+                )
+            }
+        )
+        self.active_ik_weight_preset = "All joints normal"
         self.preview_reference_qpos = None
         self.foot_lock_targets = {}
         self.root_lock_target = None
         self._last_ik_status = None
         self._syncing_target = False
-        self._playback_last_tick = None
+        self.playback_clock = PlaybackClock()
         self._resume_playback_after_scrub = False
         self._pending_scrub_preview_time = None
         self.canvas = RobotCanvas3D()
         self.canvas.geometry_progress.connect(self._on_geometry_progress)
+        self.canvas.rendering_failed.connect(self._on_rendering_failed)
         self.canvas.target_dragged.connect(self.target_dragged.emit)
         self.canvas.target_transform_dragged.connect(self._on_transform_moved)
         self.canvas.transform_drag_finished.connect(
@@ -202,6 +247,25 @@ class RobotViewer3D(QWidget):
                 self.committed_state, self.preview_state, self.ghost_renderer
             )
             self._set_target_to_selected_pose()
+
+    def shutdown(self):
+        """Stop timers, selectors, jobs, and GL resources idempotently."""
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self.play_timer.stop()
+        self.scrub_preview_timer.stop()
+        self.playback_clock.stop()
+        self._pending_scrub_preview_time = None
+        if self._owns_file_selection_stage:
+            self.csv_file_selection_stage.cancel()
+        if self._owns_background_jobs:
+            self.background_jobs.shutdown()
+        self.canvas.shutdown()
+
+    def closeEvent(self, event):
+        self.shutdown()
+        super().closeEvent(event)
 
     def _build_ui(self, error):
         root = QVBoxLayout(self)
@@ -280,9 +344,14 @@ class RobotViewer3D(QWidget):
         self.qpos_csv_group.setVisible(False)
 
         self.target_context_panel = QWidget()
-        target_layout = QFormLayout(self.target_context_panel)
+        target_layout = QVBoxLayout(self.target_context_panel)
         target_layout.setContentsMargins(0, 0, 0, 0)
-        target_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        target_layout.setSpacing(4)
+        # A late-populated QStackedWidget can otherwise retain the empty
+        # page's zero-height size under QMacStyle. Propagate the native label
+        # and combo minimum sizes to the page and its stack.
+        target_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.advanced_target_label = QLabel("Advanced target")
         self.target_box = QComboBox()
         _compact_combo(self.target_box, minimum_chars=12)
         if self.robot_model:
@@ -299,7 +368,8 @@ class RobotViewer3D(QWidget):
                     if (kind, name) not in known and name != "world":
                         self.target_box.addItem(f"{kind}: {name}", (kind, name))
         self.target_box.currentIndexChanged.connect(self._target_selected)
-        target_layout.addRow("Advanced target", self.target_box)
+        target_layout.addWidget(self.advanced_target_label)
+        target_layout.addWidget(self.target_box)
         self.root_pose_label = StatusValueLabel()
         self.root_pose_label.setWordWrap(True)
 
@@ -330,7 +400,7 @@ class RobotViewer3D(QWidget):
         self.playback_speed.setRange(0.10, 4.00)
         self.playback_speed.setDecimals(2)
         self.playback_speed.setSingleStep(0.25)
-        self.playback_speed.setValue(0.20)
+        self.playback_speed.setValue(1.00)
         self.playback_speed.setSuffix("×")
         self.playback_speed_label = QLabel("Playback speed")
         self.timeslice_context_layout.addRow(
@@ -493,6 +563,34 @@ class RobotViewer3D(QWidget):
             self._on_timeslice_duration_changed
         )
 
+        self.export_dt_label = QLabel("Export interval")
+        self.export_dt_input = QDoubleSpinBox()
+        self.export_dt_input.setObjectName("exportIntervalSpinBox")
+        _compact_spinbox(self.export_dt_input, width=72)
+        self.export_dt_input.setRange(0.01, 10.0)
+        self.export_dt_input.setDecimals(2)
+        self.export_dt_input.setSingleStep(0.01)
+        self.export_dt_input.setValue(0.01)
+        self.export_dt_input.setSuffix(" s")
+        self.export_dt_input.setToolTip(
+            "Choose the uniform time interval used by Generate and trajectory "
+            "export."
+        )
+        self.dsms_motion_speed_label = QLabel("DSMS motion speed")
+        self.dsms_motion_speed_input = QDoubleSpinBox()
+        self.dsms_motion_speed_input.setObjectName("dsmsMotionSpeedSpinBox")
+        _compact_spinbox(self.dsms_motion_speed_input, width=72)
+        self.dsms_motion_speed_input.setRange(0.10, 4.00)
+        self.dsms_motion_speed_input.setDecimals(2)
+        self.dsms_motion_speed_input.setSingleStep(0.25)
+        self.dsms_motion_speed_input.setValue(1.00)
+        self.dsms_motion_speed_input.setSuffix("×")
+        self.dsms_motion_speed_input.setToolTip(
+            "Scale actual DSMS reference timing without changing qpos. "
+            "For example, 0.5× doubles the exported duration. This does not "
+            "change visual playback speed or other trajectory formats."
+        )
+
         self.timeslice_time_row = QHBoxLayout()
         self.timeslice_time_row.setContentsMargins(0, 0, 0, 0)
         self.timeslice_time_row.setSpacing(8)
@@ -506,6 +604,12 @@ class RobotViewer3D(QWidget):
         )
         self.timeslice_context_layout.addRow(
             self.timeslice_duration_label, self.timeslice_duration_input
+        )
+        self.timeslice_context_layout.addRow(
+            self.export_dt_label, self.export_dt_input
+        )
+        self.timeslice_context_layout.addRow(
+            self.dsms_motion_speed_label, self.dsms_motion_speed_input
         )
 
         self.timeslice_timeline_group = QGroupBox("Timeline")
@@ -639,6 +743,18 @@ class RobotViewer3D(QWidget):
     def timeslice_step(self):
         return float(self.timeslice_step_input.value())
 
+    def export_dt(self):
+        return float(self.export_dt_input.value())
+
+    def set_export_dt(self, export_dt):
+        self.export_dt_input.setValue(float(export_dt))
+
+    def dsms_motion_speed(self):
+        return float(self.dsms_motion_speed_input.value())
+
+    def set_dsms_motion_speed(self, motion_speed):
+        self.dsms_motion_speed_input.setValue(float(motion_speed))
+
     def _on_timeslice_duration_changed(self, duration):
         self.set_timeline_duration(duration)
 
@@ -740,147 +856,16 @@ class RobotViewer3D(QWidget):
         return self.joint_angles_page
 
     def _make_ik_scroll_area(self, content):
-        scroll = QScrollArea()
-        scroll.setObjectName("ikEditorScroll")
-        scroll.viewport().setObjectName("ikEditorViewport")
-        content.setObjectName(content.objectName() or "ikEditorTabContent")
-        scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(0)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(content)
-        return scroll
+        return ik_panels.make_ik_scroll_area(content)
 
     def _build_solver_widget(self):
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-
-        solver_group = QGroupBox("Solver")
-        solver_group.setMinimumWidth(0)
-        solver_layout = QFormLayout(solver_group)
-        solver_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
-        self.ik_damping = QDoubleSpinBox()
-        _compact_spinbox(self.ik_damping)
-        self.ik_damping.setRange(0.001, 1.0)
-        self.ik_damping.setDecimals(4)
-        self.ik_damping.setValue(0.04)
-        self.ik_max_iterations = QSpinBox()
-        _compact_spinbox(self.ik_max_iterations)
-        self.ik_max_iterations.setRange(1, 300)
-        self.ik_max_iterations.setValue(80)
-        self.ik_step_size = QDoubleSpinBox()
-        _compact_spinbox(self.ik_step_size)
-        self.ik_step_size.setRange(0.01, 1.0)
-        self.ik_step_size.setValue(0.7)
-        self.ik_max_step = QDoubleSpinBox()
-        _compact_spinbox(self.ik_max_step)
-        self.ik_max_step.setRange(0.001, 0.5)
-        self.ik_max_step.setDecimals(3)
-        self.ik_max_step.setValue(0.08)
-        self.ik_position_tolerance = QDoubleSpinBox()
-        _compact_spinbox(self.ik_position_tolerance)
-        self.ik_position_tolerance.setRange(0.0001, 0.1)
-        self.ik_position_tolerance.setDecimals(4)
-        self.ik_position_tolerance.setValue(0.005)
-        self.ik_orientation_tolerance = QDoubleSpinBox()
-        _compact_spinbox(self.ik_orientation_tolerance)
-        self.ik_orientation_tolerance.setRange(0.001, 1.0)
-        self.ik_orientation_tolerance.setDecimals(3)
-        self.ik_orientation_tolerance.setValue(0.03)
-        solver_layout.addRow("Damping", self.ik_damping)
-        solver_layout.addRow("Max iterations", self.ik_max_iterations)
-        solver_layout.addRow("Step size", self.ik_step_size)
-        solver_layout.addRow("Max joint step", self.ik_max_step)
-        solver_layout.addRow("Position tolerance", self.ik_position_tolerance)
-        solver_layout.addRow("Orientation tolerance", self.ik_orientation_tolerance)
-        layout.addWidget(solver_group)
-        layout.addStretch()
-        return self._make_ik_scroll_area(content)
+        return ik_panels.build_solver_widget(self)
 
     def _build_ik_tasks_widget(self):
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-
-        task_group = QGroupBox("IK Tasks")
-        task_group.setMinimumWidth(0)
-        task_layout = QFormLayout(task_group)
-        task_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
-        self.ik_task_controls = {}
-        defaults = {
-            "tcp_position": (True, 1.0),
-            "tcp_orientation": (
-                self.robot_model.model_type != "quadruped"
-                or self.robot_model.info.key == "go2",
-                0.25,
-            ),
-            # Secondary pose objectives are opt-in. Enabling them by default
-            # makes an ordinary TCP drag settle at a weighted compromise and
-            # look like an artificial range limit.
-            "posture": (False, 0.05),
-            "foot_lock": (False, 0.5),
-            "root_orientation": (True, 0.1),
-            "regularization": (False, 0.01),
-        }
-        labels = {
-            "tcp_position": "TCP position",
-            "tcp_orientation": "TCP orientation",
-            "posture": "Posture preservation",
-            "foot_lock": "Foot lock",
-            "root_orientation": "Root/base upright",
-            "regularization": "Joint regularization",
-        }
-        for key, (enabled, weight) in defaults.items():
-            checkbox = QCheckBox()
-            checkbox.setChecked(enabled)
-            spin = QDoubleSpinBox()
-            _compact_spinbox(spin)
-            spin.setRange(0.0, 10.0)
-            spin.setDecimals(3)
-            spin.setValue(weight)
-            row = QWidget()
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.addWidget(checkbox)
-            row_layout.addWidget(spin)
-            self.ik_task_controls[key] = (checkbox, spin)
-            task_layout.addRow(labels[key], row)
-        layout.addWidget(task_group)
-        layout.addStretch()
-        return self._make_ik_scroll_area(content)
+        return ik_panels.build_ik_tasks_widget(self)
 
     def _build_joint_weights_widget(self):
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-
-        influence_group = QGroupBox("Joint Weights")
-        influence_group.setMinimumWidth(0)
-        influence_layout = QVBoxLayout(influence_group)
-        self.ik_preset_box = QComboBox()
-        _compact_combo(self.ik_preset_box, minimum_chars=8)
-        presets = ["All joints normal", "Root locked", "Selected limb only", "Feet planted"]
-        if self.robot_model.model_type == "humanoid":
-            presets.extend(("Upper body only", "Legs only"))
-        elif self.robot_model.model_type == "quadruped":
-            presets.append("Quadruped legs only")
-        self.ik_preset_box.addItems(presets)
-        apply_preset = QPushButton("Apply")
-        apply_preset.clicked.connect(self.apply_ik_preset)
-        influence_layout.addWidget(self.ik_preset_box)
-        influence_layout.addWidget(apply_preset)
-        for name in self.robot_model.get_joint_names():
-            control = IKInfluenceControl(name, 1.0)
-            control.value_changed.connect(self._ik_influence_changed)
-            self.ik_influence_controls[name] = control
-            influence_layout.addWidget(control)
-        influence_layout.addStretch()
-        layout.addWidget(influence_group)
-        layout.addStretch()
-        return self._make_ik_scroll_area(content)
+        return ik_panels.build_joint_weights_widget(self)
 
     def _on_geometry_progress(self, complete, total):
         if total <= 0:
@@ -891,6 +876,10 @@ class RobotViewer3D(QWidget):
             )
         else:
             self.status_label.setText("3D geometry ready.")
+
+    def _on_rendering_failed(self, message):
+        """Mirror persistent canvas failures into the shared Status panel."""
+        self.status_label.setText(str(message))
 
     def update_scene(
         self,
@@ -933,6 +922,7 @@ class RobotViewer3D(QWidget):
             return
         kind, name = self._selected_target()
         self._set_target_to_selected_pose()
+        self._sync_live_ik_weight_preset()
         frame_name = self.reverse_bindings.get((kind, name))
         if frame_name and not self._syncing_target:
             self.target_frame_changed.emit(frame_name)
@@ -999,11 +989,11 @@ class RobotViewer3D(QWidget):
                 yaw,
             )
         if collisions:
-            names = ", ".join(
-                f"{item.geom1} ↔ {item.geom2}" for item in collisions[:2]
-            )
+            names = format_collision_pairs(collisions)
+            details = format_collision_diagnostics(collisions)
             self.status_label.setText(
                 f"Collision warning: {names}; "
+                f"Contact geometry: {details}; "
                 f"Preview FK: {name} = {value:+.3f} rad; "
                 "adjust the pose before Commit Keyframe"
             )
@@ -1031,8 +1021,13 @@ class RobotViewer3D(QWidget):
 
     def _ik_influence_changed(self, name, value):
         self.ik_joint_weights[name] = float(value)
+        self.active_ik_weight_preset = "Custom"
+        if hasattr(self, "ik_preset_box"):
+            self.ik_preset_box.setCurrentText("Custom")
         state = "locked" if value <= 1e-9 else f"influence {value:.2f}"
-        self.status_label.setText(f"IK joint {name}: {state}")
+        self.status_label.setText(
+            f"IK joint {name}: {state}; joint-weight preset is now Custom"
+        )
 
     def _set_all_ik_influences(self, selector):
         for name, control in self.ik_influence_controls.items():
@@ -1040,10 +1035,52 @@ class RobotViewer3D(QWidget):
             self.ik_joint_weights[name] = value
             control.set_value(value)
 
+    def _apply_selected_limb_weights(self):
+        kind, object_name = self._selected_target()
+        logical = self.reverse_bindings.get((kind, object_name), "")
+        frame_reference = logical or object_name or ""
+        chain = set(
+            self.robot_model.limb_joint_chain_for_frame(frame_reference)
+            if frame_reference and hasattr(
+                self.robot_model, "limb_joint_chain_for_frame"
+            ) else ()
+        )
+        passive = set(getattr(self.robot_model, "passive_joints", ()))
+        self._set_all_ik_influences(
+            lambda name: 1.0
+            if name in chain and name not in passive else 0.0
+        )
+        return frame_reference, len(chain - passive)
+
+    def _sync_live_ik_weight_preset(self):
+        if self.active_ik_weight_preset != "Selected limb only":
+            return False
+        logical, enabled_count = self._apply_selected_limb_weights()
+        selected = logical or "non-limb target"
+        self.status_label.setText(
+            f"Selected limb only synced to {selected}: "
+            f"{enabled_count} joint weights enabled"
+        )
+        return True
+
     def apply_ik_preset(self):
         preset = self.ik_preset_box.currentText()
+        if preset == "Custom":
+            self.active_ik_weight_preset = preset
+            self.status_label.setText(
+                "Custom joint weights active; target changes will not "
+                "overwrite them"
+            )
+            return
         if preset == "All joints normal":
-            self._set_all_ik_influences(lambda name: 1.0)
+            defaults = (
+                self.robot_model.default_ik_joint_weights()
+                if hasattr(self.robot_model, "default_ik_joint_weights")
+                else {}
+            )
+            self._set_all_ik_influences(
+                lambda name: defaults.get(name, 1.0)
+            )
         elif preset == "Root locked":
             # Floating roots are already excluded from limb IK. Keep actuated
             # joints normal and make that hard-lock explicit in status.
@@ -1059,28 +1096,13 @@ class RobotViewer3D(QWidget):
                 lambda name: 1.0 if any(token in name.lower() for token in tokens) else 0.0
             )
         elif preset == "Selected limb only":
-            kind, object_name = self._selected_target()
-            logical = self.reverse_bindings.get((kind, object_name), "")
-            lower = logical.lower()
-            side = next(
-                (token for token in ("left", "right", "fl", "fr", "rl", "rr")
-                 if lower.startswith(token)),
-                "",
-            )
-            limb_tokens = (
-                ("shoulder", "elbow", "wrist", "arm")
-                if "hand" in lower else
-                ("hip", "thigh", "knee", "calf", "ankle", "leg")
-            )
-            self._set_all_ik_influences(lambda name: 1.0 if (
-                (not side or name.lower().startswith(side))
-                and any(token in name.lower() for token in limb_tokens)
-            ) else 0.0)
+            self._apply_selected_limb_weights()
         elif preset == "Feet planted":
             self._set_all_ik_influences(lambda name: 1.0)
             checkbox, spin = self.ik_task_controls["foot_lock"]
             checkbox.setChecked(True)
             spin.setValue(max(1.0, spin.value()))
+        self.active_ik_weight_preset = preset
         self.status_label.setText(f"Applied IK preset: {preset}")
 
     def _task_setting(self, name):
@@ -1194,6 +1216,19 @@ class RobotViewer3D(QWidget):
             kind == "body"
             and self.robot_model.free_joint_for_body(selected_object_id) is not None
         )
+        state_name = self.canvas.gizmo.state.name
+        rotation_drag = "ROTATE" in state_name
+        if not rotation_drag and "TRANSLATE" not in state_name:
+            position_changed = not np.allclose(
+                position, self.last_valid_target_position, atol=1e-9, rtol=0.0
+            )
+            quaternion_changed = not np.allclose(
+                quaternion,
+                self.last_valid_target_quaternion,
+                atol=1e-9,
+                rtol=0.0,
+            )
+            rotation_drag = quaternion_changed and not position_changed
         result = self.collision_solver.solve_drag(
             self.preview_state.get_qpos(),
             self.last_valid_target_position,
@@ -1211,6 +1246,10 @@ class RobotViewer3D(QWidget):
             tcp_orientation_weight=(
                 tcp_orientation_weight if tcp_orientation_enabled else 0.0
             ),
+            # Translation keeps orientation enabled as a best-effort task;
+            # rotation requires both orientation and the held TCP position.
+            tcp_position_required=True,
+            tcp_orientation_required=rotation_drag,
         )
         if result.success:
             self.preview_state.set_qpos(result.qpos)
@@ -1293,6 +1332,9 @@ class RobotViewer3D(QWidget):
 
     def _build_validated_preview_path(self, start, goal, samples=40):
         planned = []
+        collision_indices = []
+        blocking_collision_indices = []
+        first_collisions = ()
         candidate = self.robot_model.create_state()
         for index, alpha in enumerate(np.linspace(0.0, 1.0, int(samples))):
             qpos = self.state_timeline._interpolate(start, goal, alpha)
@@ -1313,25 +1355,38 @@ class RobotViewer3D(QWidget):
                     [],
                 )
             candidate.set_qpos(qpos)
+            planned.append(qpos)
             collisions = (
                 self.collision_checker.get_collisions(candidate)
                 if self.collision_checker else []
             )
             if collisions:
-                names = ", ".join(
-                    f"{item.geom1} <-> {item.geom2}"
-                    for item in collisions[:2]
-                )
-                return (
-                    PreviewPathValidation(
-                        False,
-                        f"collision at path sample {index}: {names}",
-                        index,
-                    ),
-                    [],
-                )
-            planned.append(qpos)
-        return PreviewPathValidation(True, "Preview path is valid."), planned
+                collision_indices.append(index)
+                if any(item.blocking for item in collisions):
+                    blocking_collision_indices.append(index)
+                if not first_collisions:
+                    first_collisions = tuple(collisions)
+        if collision_indices:
+            names = format_collision_pairs(first_collisions)
+            details = format_collision_diagnostics(first_collisions)
+            message = (
+                f"Preview Path contains collision warnings at "
+                f"{len(collision_indices)} of {len(planned)} samples; "
+                f"first at sample {collision_indices[0]}: {names}; "
+                f"contact geometry: {details}. Red poses mark the contacts."
+            )
+            return (
+                PreviewPathValidation(
+                    True,
+                    message,
+                    collision_indices[0],
+                    tuple(collision_indices),
+                    tuple(blocking_collision_indices),
+                    first_collisions,
+                ),
+                planned,
+            )
+        return PreviewPathValidation(True, "Preview Path is valid."), planned
 
     def plan_preview(self):
         if not self.preview_active:
@@ -1347,10 +1402,16 @@ class RobotViewer3D(QWidget):
             )
             return
         self.ghost_trajectory = [qpos.copy() for qpos in planned]
+        collision_indices = set(validation.collision_indices)
+        self.ghost_collision_flags = [
+            index in collision_indices for index in range(len(planned))
+        ]
         self.ghost_source = "preview_path"
         self._rebuild_ghosts()
         self.status_label.setText(
-            "Preview path is valid; no keyframe was changed."
+            validation.message
+            if validation.collision_indices
+            else "Preview Path is valid; no keyframe was changed."
         )
         self.history_action_finished.emit("Preview path")
 
@@ -1368,13 +1429,14 @@ class RobotViewer3D(QWidget):
             self.collision_checker.get_collisions(self.preview_state)
             if self.collision_checker else []
         )
-        if collisions:
+        blocking_collisions = [item for item in collisions if item.blocking]
+        if blocking_collisions:
             self.canvas.set_preview_collisions(collisions)
-            names = ", ".join(
-                f"{item.geom1} ↔ {item.geom2}" for item in collisions[:2]
-            )
+            names = format_collision_pairs(blocking_collisions)
+            details = format_collision_diagnostics(blocking_collisions)
             self.status_label.setText(
-                f"Cannot commit keyframe: collision detected ({names})."
+                f"Cannot commit keyframe: blocking collision ({names}); "
+                f"contact geometry: {details}."
             )
             return False
         self.committed_state.set_qpos(preview_qpos)
@@ -1386,9 +1448,17 @@ class RobotViewer3D(QWidget):
         self._clear_ghost_overlay(source="preview_path")
         self._sync_joint_controls()
         self._set_target_to_selected_pose()
-        self.status_label.setText(
-            f"Committed keyframe at t={self.current_time:.2f} s"
-        )
+        if collisions:
+            names = format_collision_pairs(collisions)
+            details = format_collision_diagnostics(collisions)
+            self.status_label.setText(
+                f"Committed keyframe at t={self.current_time:.2f} s; "
+                f"Collision warning: {names}; Contact geometry: {details}"
+            )
+        else:
+            self.status_label.setText(
+                f"Committed keyframe at t={self.current_time:.2f} s"
+            )
         if emit_pose_finished and self.last_valid_target_position is not None:
             roll, pitch, yaw = quat_to_rpy(self.last_valid_target_quaternion)
             self.target_pose_drag_finished.emit(
@@ -1648,6 +1718,36 @@ class RobotViewer3D(QWidget):
             ),
         )
 
+    def choose_dsms_trajectory_dir(self, prompt_import_dt=False):
+        self._open_csv_file_dialog(
+            title="Load DSMS trajectory folder",
+            directory=TRAJECTORY_CSV_DIR,
+            selected=lambda path: self._load_selected_dsms_trajectory(
+                path, prompt_import_dt
+            ),
+            directory_mode=True,
+            name_filter="Folders (*)",
+        )
+
+    def choose_mjlab_trajectory_csv(
+        self,
+        sample_interval,
+        prompt_import_dt=False,
+    ):
+        error = self.mjlab_export_compatibility_error()
+        if error:
+            self.status_label.setText(f"Could not import mjlab trajectory: {error}")
+            return
+        self._open_csv_file_dialog(
+            title="Load mjlab trajectory",
+            directory=TRAJECTORY_CSV_DIR,
+            selected=lambda path: self._load_selected_mjlab_trajectory(
+                path,
+                sample_interval,
+                prompt_import_dt,
+            ),
+        )
+
     def choose_qpos_save_path(self):
         self._open_csv_file_dialog(
             title="Save robot qpos",
@@ -1659,12 +1759,39 @@ class RobotViewer3D(QWidget):
 
     def choose_trajectory_save_path(self):
         self._open_csv_file_dialog(
-            title="Save robot trajectory",
+            title="Export MuJoCo trajectory",
             directory=TRAJECTORY_CSV_DIR,
             selected=self._save_selected_trajectory_csv,
             save=True,
             filename="robot_trajectory.csv",
         )
+
+    def choose_dsms_trajectory_output_dir(self):
+        self._open_csv_file_dialog(
+            title="Export DSMS trajectory folder",
+            directory=TRAJECTORY_CSV_DIR,
+            selected=self._save_selected_dsms_trajectory,
+            directory_mode=True,
+            name_filter="Folders (*)",
+        )
+
+    def choose_mjlab_trajectory_save_path(self):
+        error = self.mjlab_export_compatibility_error()
+        if error:
+            self.status_label.setText(f"Could not export mjlab trajectory: {error}")
+            return
+        self._open_csv_file_dialog(
+            title="Export mjlab trajectory",
+            directory=TRAJECTORY_CSV_DIR,
+            selected=self._save_selected_mjlab_trajectory,
+            save=True,
+            filename="robot_trajectory_mjlab.csv",
+        )
+
+    def mjlab_export_compatibility_error(self):
+        if self.robot_model is None:
+            return "no robot model is loaded"
+        return mjlab_compatibility_error(self.robot_model)
 
     def _open_csv_file_dialog(
         self,
@@ -1674,6 +1801,8 @@ class RobotViewer3D(QWidget):
         selected,
         save=False,
         filename=None,
+        directory_mode=False,
+        name_filter="CSV files (*.csv);;All files (*)",
     ):
         if self.background_jobs.is_busy():
             self.status_label.setText(
@@ -1685,10 +1814,10 @@ class RobotViewer3D(QWidget):
             return
 
         self.csv_file_selection_stage.select_file(
-            mode="save" if save else "open",
+            mode="directory" if directory_mode else "save" if save else "open",
             title=title,
             directory=directory,
-            name_filter="CSV files (*.csv);;All files (*)",
+            name_filter=name_filter,
             filename=filename,
             selected=selected,
             failed=lambda message: self.status_label.setText(
@@ -1722,6 +1851,51 @@ class RobotViewer3D(QWidget):
                 background_postprocess=True,
             ),
             lambda error: self._trajectory_csv_load_failed(error),
+        )
+
+    def _load_selected_dsms_trajectory(self, path, prompt_import_dt=False):
+        expected = int(self.robot_model.mj_model.nq)
+        expected_dof = len(self.robot_model.actuated_joints)
+        self.status_label.setText(
+            f"Loading DSMS trajectory from {Path(path).name}..."
+        )
+        self._submit_csv_job(
+            "load DSMS trajectory",
+            lambda: read_dsms_trajectory(
+                path,
+                expected,
+                expected_dof=expected_dof,
+            ),
+            lambda loaded: self._apply_loaded_trajectory(
+                loaded,
+                prompt_import_dt=prompt_import_dt,
+                background_postprocess=True,
+            ),
+            lambda error: self._trajectory_csv_load_failed(error, "DSMS"),
+        )
+
+    def _load_selected_mjlab_trajectory(
+        self,
+        path,
+        sample_interval,
+        prompt_import_dt=False,
+    ):
+        self.status_label.setText(
+            f"Loading mjlab trajectory from {Path(path).name}..."
+        )
+        self._submit_csv_job(
+            "load mjlab trajectory",
+            lambda: read_mjlab_trajectory(
+                path,
+                self.robot_model,
+                sample_interval,
+            ),
+            lambda loaded: self._apply_loaded_trajectory(
+                loaded,
+                prompt_import_dt=prompt_import_dt,
+                background_postprocess=True,
+            ),
+            lambda error: self._trajectory_csv_load_failed(error, "mjlab"),
         )
 
     def _save_selected_qpos_csv(self, path):
@@ -1759,6 +1933,120 @@ class RobotViewer3D(QWidget):
             lambda error: self.status_label.setText(
                 f"Could not save trajectory CSV: {error}"
             ),
+        )
+
+    def _save_selected_dsms_trajectory(self, output_dir):
+        try:
+            export = self._trajectory_export_snapshot(
+                sample_dt=self.export_dt()
+            )
+        except ValueError as error:
+            self.status_label.setText(
+                f"Could not export DSMS trajectory: {error}"
+            )
+            return
+        dof = len(self.robot_model.actuated_joints)
+        free_joints = tuple(self.robot_model.free_joints_by_body.values())
+        base_qpos_address = (
+            free_joints[0].qpos_address if len(free_joints) == 1 else None
+        )
+        motion_speed = self.dsms_motion_speed()
+        self.status_label.setText(
+            f"Exporting DSMS trajectory to {Path(output_dir).name}..."
+        )
+        self._submit_csv_job(
+            "export DSMS trajectory",
+            lambda: export_dsms_trajectory(
+                output_dir,
+                export,
+                dof=dof,
+                base_qpos_address=base_qpos_address,
+                motion_speed=motion_speed,
+            ),
+            lambda result: self._show_format_trajectory_saved(
+                "DSMS", result, export
+            ),
+            lambda error: self.status_label.setText(
+                f"Could not export DSMS trajectory: {error}"
+            ),
+        )
+
+    def _save_selected_mjlab_trajectory(self, path):
+        try:
+            export = self._trajectory_export_snapshot(
+                sample_dt=self.export_dt()
+            )
+        except ValueError as error:
+            self.status_label.setText(
+                f"Could not export mjlab trajectory: {error}"
+            )
+            return
+        self.status_label.setText(
+            f"Exporting mjlab trajectory to {Path(path).name}..."
+        )
+        self._submit_csv_job(
+            "export mjlab trajectory",
+            lambda: export_mjlab_trajectory(
+                path,
+                export,
+                self.robot_model,
+                single_sample_dt=self.export_dt(),
+            ),
+            lambda result: self._show_format_trajectory_saved(
+                "mjlab", result, export
+            ),
+            lambda error: self.status_label.setText(
+                f"Could not export mjlab trajectory: {error}"
+            ),
+        )
+
+    def _show_format_trajectory_saved(self, format_name, result, export):
+        if len(result.paths) == 1:
+            destination = str(result.paths[0])
+        else:
+            destination = (
+                f"{result.paths[0].parent} "
+                f"({', '.join(path.name for path in result.paths)})"
+            )
+        if result.motion_speed is not None:
+            speed_note = f"; motion speed {result.motion_speed:.6g}×"
+            duration_note = (
+                ""
+                if result.source_duration is None
+                or result.output_duration is None
+                else f"; duration {result.source_duration:.6g} s → "
+                f"{result.output_duration:.6g} s"
+            )
+            fps_note = (
+                ""
+                if result.source_fps is None or result.input_fps is None
+                else f"; reference frequency {result.source_fps:.6g} Hz → "
+                f"{result.input_fps:.6g} Hz"
+            )
+        else:
+            speed_note = ""
+            duration_note = ""
+            fps_note = (
+                ""
+                if result.input_fps is None
+                else f"; input frequency {result.input_fps:.6g} Hz"
+            )
+        preview_note = (
+            "; unaccepted preview was not saved"
+            if export.preview_active
+            else ""
+        )
+        collision_note = ""
+        if self._last_export_collision_warning is not None:
+            report = self._last_export_collision_warning
+            collision_note = (
+                f"; Collision warning at sample {report.sample_index}: "
+                f"{format_collision_pairs(report.collisions)}"
+            )
+        self.status_label.setText(
+            f"Saved {result.sample_count} {format_name} trajectory samples "
+            f"to {destination}{speed_note}{duration_note}{fps_note}"
+            f"{preview_note}{collision_note}"
         )
 
     def _submit_csv_job(self, name, work, succeeded, failed):
@@ -1828,14 +2116,33 @@ class RobotViewer3D(QWidget):
             f"Loaded {len(qposes)} timed qpos trajectory states from "
             f"{loaded.path.name} ({duration:.3f} s)"
         )
+        if loaded.source_format == "mujoco":
+            self._loaded_trajectory_playback_path = loaded.path
+        else:
+            playback_export = TrajectoryExport(
+                expected_qpos_count=int(self.robot_model.mj_model.nq),
+                times=tuple(times),
+                qposes=tuple(qposes),
+                source_name=f"imported {loaded.source_format} trajectory",
+                preview_active=False,
+            )
+            self._loaded_trajectory_playback_path = write_trajectory_csv(
+                mujoco_playback_cache_path(),
+                playback_export,
+            )
         self._background_trajectory_postprocess_requested = bool(
             background_postprocess
         )
         self.trajectory_csv_loaded.emit(str(loaded.path))
 
-    def _trajectory_csv_load_failed(self, error):
+    def loaded_trajectory_playback_path(self):
+        return getattr(self, "_loaded_trajectory_playback_path", None)
+
+    def _trajectory_csv_load_failed(self, error, format_name="MuJoCo"):
         self._prompt_trajectory_import_dt_on_load = False
-        self.status_label.setText(f"Could not load trajectory CSV: {error}")
+        self.status_label.setText(
+            f"Could not load {format_name} trajectory: {error}"
+        )
 
     def save_qpos_csv(self, csv_path):
         """Save the committed active keyframe as one headerless qpos row."""
@@ -1857,7 +2164,7 @@ class RobotViewer3D(QWidget):
         self._show_trajectory_saved(path, export)
         return path
 
-    def _trajectory_export_snapshot(self):
+    def _trajectory_export_snapshot(self, sample_dt=None):
         if not self.state_timeline:
             raise ValueError("no robot timeline is available")
 
@@ -1880,13 +2187,40 @@ class RobotViewer3D(QWidget):
             )
             source_name = "editable timeline"
 
-        return TrajectoryExport(
+        export = TrajectoryExport(
             expected_qpos_count=expected,
             times=times,
             qposes=qposes,
             source_name=source_name,
             preview_active=bool(self.preview_active),
         )
+        if sample_dt is not None:
+            export = resample_trajectory_export(
+                export,
+                self.robot_model,
+                sample_dt,
+            )
+            times = export.times
+            qposes = export.qposes
+
+        if self.robot_trajectory and sample_dt is None:
+            warning_report = self.robot_trajectory_warning_report
+            blocking_report = self.robot_trajectory_blocking_report
+        else:
+            warning_report, blocking_report = trajectory_collision_reports(
+                self.robot_model, qposes, checker=self.collision_checker
+            )
+        if blocking_report is not None:
+            names = format_collision_pairs(blocking_report.collisions)
+            details = format_collision_diagnostics(blocking_report.collisions)
+            raise ValueError(
+                f"{source_name} has a blocking collision at sample "
+                f"{blocking_report.sample_index}: {names}; "
+                f"contact geometry: {details}"
+            )
+        self._last_export_collision_warning = warning_report
+
+        return export
 
     def _show_trajectory_saved(self, path, export):
         preview_note = (
@@ -1894,10 +2228,31 @@ class RobotViewer3D(QWidget):
             if export.preview_active
             else ""
         )
+        collision_note = ""
+        if self._last_export_collision_warning is not None:
+            report = self._last_export_collision_warning
+            collision_note = (
+                f"; Collision warning at sample {report.sample_index}: "
+                f"{format_collision_pairs(report.collisions)}"
+            )
         self.status_label.setText(
             f"Saved {len(export.qposes)} timed qpos states from "
             f"{export.source_name} "
-            f"to {path}{preview_note}"
+            f"to {path}{preview_note}{collision_note}"
+        )
+
+    def robot_trajectory_collision_status(self):
+        report = (
+            self.robot_trajectory_blocking_report
+            or self.robot_trajectory_warning_report
+        )
+        if report is None:
+            return ""
+        severity = "Blocking collision" if report.blocking else "Collision warning"
+        return (
+            f"{severity} at generated sample {report.sample_index}: "
+            f"{format_collision_pairs(report.collisions)}; "
+            f"Contact geometry: {format_collision_diagnostics(report.collisions)}"
         )
 
     def _refresh_timeline_trajectory(self):
@@ -1954,6 +2309,14 @@ class RobotViewer3D(QWidget):
             valid = [item[1] for item in ordered]
         self.robot_trajectory = valid
         self.robot_trajectory_times = valid_times
+        (
+            self.robot_trajectory_warning_report,
+            self.robot_trajectory_blocking_report,
+        ) = trajectory_collision_reports(
+            self.robot_model,
+            valid,
+            checker=self.collision_checker,
+        ) if valid else (None, None)
         if valid_times:
             self.set_timeline_duration(max(self.timeline_duration, max(valid_times)))
         self._clear_ghost_overlay(source="preview_path")
@@ -1970,7 +2333,10 @@ class RobotViewer3D(QWidget):
         self._pending_scrub_preview_time = None
         self.robot_trajectory = []
         self.robot_trajectory_times = []
+        self.robot_trajectory_warning_report = None
+        self.robot_trajectory_blocking_report = None
         self.ghost_trajectory = []
+        self.ghost_collision_flags = []
         self.ghost_source = None
         self.display_time = self.current_time
         self._set_timeslice_widgets(self.display_time)
@@ -2039,7 +2405,9 @@ class RobotViewer3D(QWidget):
     def _rebuild_ghosts(self):
         if self.ghost_renderer:
             self.ghost_renderer.update(
-                self.ghost_trajectory, self.ghost_stride.value()
+                self.ghost_trajectory,
+                self.ghost_stride.value(),
+                self.ghost_collision_flags,
             )
         self._update_ghost_options()
 
@@ -2047,6 +2415,7 @@ class RobotViewer3D(QWidget):
         if source is not None and self.ghost_source != source:
             return
         self.ghost_trajectory = []
+        self.ghost_collision_flags = []
         self.ghost_source = None
         if self.ghost_renderer:
             self.ghost_renderer.clear()
@@ -2055,11 +2424,13 @@ class RobotViewer3D(QWidget):
     def _sync_playback_pose_ghosts(self):
         if self.show_ghosts.isChecked() and self.robot_trajectory:
             self.ghost_trajectory = [qpos.copy() for qpos in self.robot_trajectory]
+            self.ghost_collision_flags = [False] * len(self.ghost_trajectory)
             self.ghost_source = "playback"
             self._rebuild_ghosts()
             return
         if self.ghost_source == "playback":
             self.ghost_trajectory = []
+            self.ghost_collision_flags = []
             self.ghost_source = None
             if self.ghost_renderer:
                 self.ghost_renderer.clear()
@@ -2100,14 +2471,14 @@ class RobotViewer3D(QWidget):
             return
         if self.display_time < start_time or self.display_time >= end_time:
             self.preview_trajectory_time(start_time, emit_time_signal=True)
-        self._playback_last_tick = monotonic()
+        self.playback_clock.start()
         self.play_timer.start()
         self._set_playback_button_text("Pause")
         self.playback_state_changed.emit(True)
 
     def pause_playback(self, commit_time=False):
         self.play_timer.stop()
-        self._playback_last_tick = None
+        self.playback_clock.stop()
         self._set_playback_button_text("Play")
         self.playback_state_changed.emit(False)
         if commit_time and abs(self.display_time - self.current_time) > 1e-9:
@@ -2127,21 +2498,17 @@ class RobotViewer3D(QWidget):
             self.pause_playback(commit_time=True)
             return
 
-        if elapsed is None:
-            now = monotonic()
-            if self._playback_last_tick is None:
-                elapsed = self.play_timer.interval() / 1000.0
-            else:
-                elapsed = max(0.0, now - self._playback_last_tick)
-            self._playback_last_tick = now
-        else:
-            elapsed = max(0.0, float(elapsed))
-
-        elapsed *= self.playback_speed.value()
-        next_time = self.display_time + elapsed
-        duration = end_time - start_time
-        if next_time > end_time:
-            next_time = start_time + ((next_time - start_time) % duration)
+        elapsed = self.playback_clock.elapsed(
+            self.play_timer.interval() / 1000.0,
+            supplied=elapsed,
+        )
+        next_time = self.playback_clock.advance(
+            self.display_time,
+            start_time,
+            end_time,
+            elapsed,
+            self.playback_speed.value(),
+        )
         self.preview_trajectory_time(next_time, emit_time_signal=True)
 
     def _advance_frame(self):

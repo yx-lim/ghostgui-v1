@@ -19,6 +19,7 @@ from gui.main_window import RobotGuiMainWindow
 from core.models import MuJoCoRobotAdapter
 from application.backend_interface import MujocoIKBackend
 from core.trajectory import TargetFrame, quat_to_rpy, rpy_to_quat
+from gui.viewers.transform_gizmo import GizmoInteractionState
 
 
 class AdvancedIKTests(unittest.TestCase):
@@ -150,6 +151,72 @@ class AdvancedIKTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_gizmo_handle_sets_required_tasks_without_disabling_go2_orientation(self):
+        class CapturingDragSolver:
+            def __init__(self):
+                self.calls = []
+
+            def solve_drag(
+                self,
+                current_qpos,
+                start_position,
+                start_quaternion,
+                proposed_position,
+                proposed_quaternion,
+                **kwargs,
+            ):
+                self.calls.append(kwargs)
+                return DragSolveResult(
+                    np.asarray(current_qpos, dtype=float).copy(),
+                    np.asarray(proposed_position, dtype=float).copy(),
+                    np.asarray(proposed_quaternion, dtype=float).copy(),
+                    1.0,
+                    True,
+                    "Weighted IK converged",
+                )
+
+        window = RobotGuiMainWindow("go2")
+        try:
+            viewer = window.viewer_3d
+            kind, name = viewer.robot_model.resolve_logical_frame("FL_foot")
+            viewer.select_target(kind, name, emit=False)
+            viewer._set_target_to_selected_pose()
+            solver = CapturingDragSolver()
+            viewer.collision_solver = solver
+            orientation_control, orientation_weight = (
+                viewer.ik_task_controls["tcp_orientation"]
+            )
+            self.assertTrue(orientation_control.isChecked())
+
+            start = viewer.last_valid_target_position.copy()
+            quaternion = viewer.last_valid_target_quaternion.copy()
+            viewer.canvas.gizmo.state = (
+                GizmoInteractionState.DRAG_TRANSLATE_X
+            )
+            viewer._on_transform_moved(
+                start + np.array([0.01, 0.0, 0.0]), quaternion
+            )
+
+            translate_call = solver.calls[-1]
+            self.assertTrue(translate_call["tcp_position_required"])
+            self.assertFalse(translate_call["tcp_orientation_required"])
+            self.assertEqual(
+                translate_call["tcp_orientation_weight"],
+                orientation_weight.value(),
+            )
+
+            viewer.canvas.gizmo.state = GizmoInteractionState.DRAG_ROTATE_Z
+            rotated = rpy_to_quat(0.0, 0.0, 0.05)
+            viewer._on_transform_moved(
+                viewer.last_valid_target_position.copy(), rotated
+            )
+
+            rotate_call = solver.calls[-1]
+            self.assertTrue(rotate_call["tcp_position_required"])
+            self.assertTrue(rotate_call["tcp_orientation_required"])
+        finally:
+            window.close()
+
     def test_joint_influence_controls_are_model_generated(self):
         g1 = RobotGuiMainWindow("g1")
         go2 = RobotGuiMainWindow("go2")
@@ -182,8 +249,53 @@ class AdvancedIKTests(unittest.TestCase):
             viewer.ik_preset_box.setCurrentText("Selected limb only")
             viewer.apply_ik_preset()
             self.assertGreater(viewer.ik_joint_weights["right_elbow_joint"], 0.0)
+            self.assertGreater(
+                viewer.ik_joint_weights["right_shoulder_pitch_joint"], 0.0
+            )
             self.assertEqual(viewer.ik_joint_weights["left_elbow_joint"], 0.0)
             self.assertEqual(viewer.ik_joint_weights["right_knee_joint"], 0.0)
+            for waist_joint in (
+                "waist_yaw_joint",
+                "waist_roll_joint",
+                "waist_pitch_joint",
+            ):
+                self.assertEqual(viewer.ik_joint_weights[waist_joint], 0.0)
+
+            viewer.select_target("site", "robot/left_palm", emit=False)
+            self.assertGreater(
+                viewer.ik_joint_weights["left_elbow_joint"], 0.0
+            )
+            self.assertEqual(
+                viewer.ik_joint_weights["right_elbow_joint"], 0.0
+            )
+            self.assertEqual(
+                viewer.active_ik_weight_preset, "Selected limb only"
+            )
+
+            window.controls.frame_box.setCurrentText("right_foot")
+            self.assertGreater(
+                viewer.ik_joint_weights["right_knee_joint"], 0.0
+            )
+            self.assertEqual(
+                viewer.ik_joint_weights["left_elbow_joint"], 0.0
+            )
+
+            viewer.select_target(
+                "body", "robot/right_elbow_link", emit=False
+            )
+            self.assertGreater(
+                viewer.ik_joint_weights["right_elbow_joint"], 0.0
+            )
+            self.assertEqual(
+                viewer.ik_joint_weights["waist_yaw_joint"], 0.0
+            )
+
+            viewer._ik_influence_changed("right_knee_joint", 2.0)
+            self.assertEqual(viewer.active_ik_weight_preset, "Custom")
+            self.assertEqual(viewer.ik_preset_box.currentText(), "Custom")
+            viewer.select_target("site", "robot/left_palm", emit=False)
+            self.assertEqual(viewer.ik_joint_weights["right_knee_joint"], 2.0)
+            self.assertEqual(viewer.ik_joint_weights["left_elbow_joint"], 0.0)
 
             viewer.ik_preset_box.setCurrentText("Feet planted")
             viewer.apply_ik_preset()

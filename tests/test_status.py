@@ -55,6 +55,20 @@ class StatusEventTests(unittest.TestCase):
             "Collision warning: left_hand ↔ torso.",
         )
 
+    def test_ik_reach_limit_remains_primary_when_collision_is_also_reported(self):
+        event = status_event_from_text(
+            "IK reach limit: required position did not converge; "
+            "Collision warning: link02 ↔ link06; accepted=25%; "
+            "IK error=0.0200; tasks=2; frame=tool; model=Z1"
+        )
+
+        self.assertEqual(event.severity, "warning")
+        self.assertEqual(event.title, "IK reach limit")
+        self.assertEqual(
+            event.message,
+            "IK reach limit: required position did not converge.",
+        )
+
     def test_failure_uses_error_severity(self):
         event = status_event_from_text("Could not load Go2: invalid model.")
 

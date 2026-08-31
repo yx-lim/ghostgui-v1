@@ -12,39 +12,53 @@ Updated project flow:
     5. Backend maps robot to each target frame
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
-from PySide6.QtCore import QEvent, QSettings, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
     QWidget,
-    QHBoxLayout,
-    QVBoxLayout,
-    QLabel,
-    QTextEdit,
     QTabWidget,
     QStackedWidget,
     QSizePolicy,
-    QProgressBar,
     QInputDialog,
     QMessageBox,
     QToolBar,
-    QToolButton,
 )
 
 from core.trajectory import (
     TargetFrame,
-    Trajectory,
     quat_to_rpy,
     rpy_to_quat,
 )
-from application import model_sessions, timeslice_service, trajectory_generation
+from application import (
+    model_sessions,
+    motion_clipboard,
+    timeslice_service,
+    trajectory_generation,
+)
+from application import timeline_editing
+from application.editor_commands import (
+    AddKeyframe,
+    ClearTrajectory,
+    DeleteKeyframe,
+    DeleteTimeslice,
+    ReplaceTrajectoryFrames,
+    UpdateKeyframe,
+    UpsertKeyframe,
+    UpsertKeyframes,
+)
+from application.editor_controller import EditorController
+from application.editor_events import DocumentDirtyChanged, EditorEventBus
+from application.project_document import ProjectDocument
+from application.visualization import VisualizationUpdate
 from application.background_jobs import SerializedBackgroundJobs
+from application.history import HistoryStack
 from application.csv_io import write_trajectory_csv
 from application.paths import mujoco_playback_cache_path
 from application.project_manager import (
@@ -58,16 +72,29 @@ from application.project_manager import (
 )
 from .controls import TrajectoryControlPanel
 from .file_selection import SynchronousFileSelectionStage
+from .history import GuiHistorySnapshot
+from .model_loading import ModelLoadThread
+from .panels import EditorStatusPanel
+from .render_progress import RenderProgressOverlay
 from .robot_viewer_3d import RobotViewer3D
 from .widgets.status import StatusEvent, status_event_from_text
 from gui.viewers.mujoco_player import Mujoco3DViewerPanel
 from application.backend_interface import BackendInterface
 from core.models import MujocoReferenceFrames
 from .app_sidebars import AppLeftSidebar, AppRightSidebar, SidebarSplitter
-from .help import HelpCenterDialog
+from .help import HelpCenterDialog, KeyboardShortcutsDialog
 from .project_browser import ProjectBrowserDialog
 from .theme import ensure_application_theme, theme_icon
+from .timeline_edit_dialog import (
+    copy_motion_range_dialog,
+    insert_time_dialog,
+    move_range_dialog,
+    repeat_motion_dialog,
+    scale_range_dialog,
+    shift_motion_dialog,
+)
 from .tutorial import TutorialManager
+from .visualization import SceneSnapshot, build_main_window_visualization
 from core.models import MuJoCoRobotAdapter, ROBOT_MODELS
 from application.model_importer import (
     default_model_library_root,
@@ -85,145 +112,26 @@ UI_SETTINGS_FILENAME = "ui.ini"
 INITIAL_RENDER_PROGRESS_DELAY_MS = 500
 PROJECT_AUTOSAVE_INTERVAL_MS = 30000
 MAX_HISTORY_DEPTH = 100
-
-
-@dataclass(frozen=True)
-class GuiHistorySnapshot:
-    trajectory_frames: tuple
-    trajectory_track_names: tuple
-    active_index: int
-    control_frame: dict
-    selected_row: int
-    current_time: float
-    timeline_states: tuple
-    committed_qpos: object
-    preview_qpos: object
-    preview_active: bool
-    robot_trajectory: tuple
-    robot_trajectory_times: tuple
-    ghost_trajectory: tuple
-    ghost_source: str | None
-    show_ghosts: bool
-    timeline_duration: float
-
-
-@dataclass(frozen=True)
-class GuiHistoryEntry:
-    description: str
-    snapshot: GuiHistorySnapshot
-
-
-class RenderProgressOverlay(QWidget):
-    """Viewer-local overlay for robot model rendering progress."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("renderProgressOverlay")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self._allow_close = False
-        if parent is not None:
-            parent.installEventFilter(self)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        self.card = QWidget(self)
-        self.card.setObjectName("renderProgressCard")
-        self.card.setFixedWidth(420)
-
-        card_layout = QVBoxLayout(self.card)
-        card_layout.setContentsMargins(30, 24, 30, 24)
-        card_layout.setSpacing(10)
-
-        self.title_label = QLabel("Rendering robot model")
-        self.title_label.setObjectName("renderTitle")
-        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.title_label.setWordWrap(True)
-
-        self.detail_label = QLabel("Preparing 3D geometry...")
-        self.detail_label.setObjectName("renderDetail")
-        self.detail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.detail_label.setWordWrap(True)
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMinimumWidth(300)
-        self.progress_bar.setMaximumWidth(360)
-
-        card_layout.addWidget(self.title_label)
-        card_layout.addWidget(self.detail_label)
-        card_layout.addWidget(
-            self.progress_bar,
-            alignment=Qt.AlignmentFlag.AlignHCenter,
-        )
-        self.card.setFixedHeight(self.card.sizeHint().height())
-        layout.addStretch(1)
-        layout.addWidget(self.card, alignment=Qt.AlignmentFlag.AlignCenter)
-        layout.addStretch(1)
-        self.hide()
-
-    def eventFilter(self, watched, event):
-        if watched is self.parentWidget() and event.type() in (
-            QEvent.Type.Resize,
-            QEvent.Type.Show,
-        ):
-            self.update_geometry()
-        return super().eventFilter(watched, event)
-
-    def update_geometry(self):
-        parent = self.parentWidget()
-        if parent is None:
-            return
-        self.setGeometry(parent.rect())
-        if not self.isHidden():
-            self.raise_()
-
-    def set_message(self, title, detail, progress=None):
-        self.title_label.setText(title)
-        self.detail_label.setText(detail)
-        if progress is None:
-            self.progress_bar.setRange(0, 0)
-        else:
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(max(0, min(100, int(progress))))
-
-    def show_rendering(self, title, detail, progress=None):
-        self._allow_close = False
-        self.set_message(title, detail, progress)
-        self.update_geometry()
-        self.show()
-        self.raise_()
-
-    def finish(self):
-        self._allow_close = True
-        self.hide()
-
-    def closeEvent(self, event):
-        if self._allow_close:
-            super().closeEvent(event)
-        else:
-            event.ignore()
-
-
-class ModelLoadThread(QThread):
-    loaded = Signal(str, object)
-    failed = Signal(str, str)
-
-    def __init__(self, model_key, model_info=None, parent=None):
-        super().__init__(parent)
-        self.model_key = model_key
-        self.model_info = model_info
-
-    def run(self):
-        try:
-            adapter = MuJoCoRobotAdapter(self.model_info or self.model_key)
-        except Exception as exc:
-            self.failed.emit(self.model_key, str(exc))
-            return
-        self.loaded.emit(self.model_key, adapter)
+MAX_TIMELINE_DURATION = 120.0
 
 
 class RobotGuiMainWindow(QMainWindow):
+    @property
+    def trajectory(self):
+        return self.document.trajectory
+
+    @trajectory.setter
+    def trajectory(self, value):
+        self.document.trajectory = value
+
+    @property
+    def active_index(self):
+        return self.document.active_index
+
+    @active_index.setter
+    def active_index(self, value):
+        self.document.active_index = int(value)
+
     def __init__(self, model_key="g1"):
         super().__init__()
         app = QApplication.instance()
@@ -279,8 +187,16 @@ class RobotGuiMainWindow(QMainWindow):
         # --------------------------------------------------------
         # Core data
         # --------------------------------------------------------
-        self.trajectory = Trajectory()
-        self.active_index = -1
+        self.document = ProjectDocument(model_key=model_key)
+        self.editor_events = EditorEventBus()
+        self.editor_controller = EditorController(
+            self.document,
+            self.editor_events,
+        )
+        self._document_dirty_subscription = self.editor_events.subscribe(
+            DocumentDirtyChanged,
+            self._on_document_dirty_changed,
+        )
 
         # One immutable MuJoCo model is shared by FK, IK, and rendering. Each
         # subsystem owns its own MjData so live UI and batch solves stay isolated.
@@ -327,6 +243,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.setWindowTitle(
                 f"GhostGui — {self.robot_model_3d.model_name}"
             )
+        self.document.model_key = self.model_key
 
         shared_mj_model = (
             self.robot_model_3d.mj_model if self.robot_model_3d else None
@@ -352,6 +269,7 @@ class RobotGuiMainWindow(QMainWindow):
             background_jobs=self.background_jobs,
             file_selection_stage=self.file_selection_stage,
         )
+        self.document.attach_qpos_timeline(self.viewer_3d.state_timeline)
         self.viewer_3d_mujoco = Mujoco3DViewerPanel(self.robot_model_3d)
         self.viewer_3d_mujoco.set_trajectory_regenerator(
             self.regenerate_mujoco_playback_cache
@@ -362,11 +280,12 @@ class RobotGuiMainWindow(QMainWindow):
                 backend=self.backend_interface,
                 reference=self.model_reference,
                 viewer_3d=self.viewer_3d,
-                trajectory=self.trajectory,
-                active_index=self.active_index,
+                document=self.document,
+                model_key=model_key,
             )
         }
         self.model_loaders = {}
+        self._shutting_down = False
         self.current_project = None
         self._pending_project_restore = None
         self._pending_project_restore_autosave = False
@@ -377,18 +296,24 @@ class RobotGuiMainWindow(QMainWindow):
         self.render_progress_viewer = None
         self.render_progress_restore_widget = None
         self.pending_initial_render_progress = None
-        self.undo_stack = []
-        self.redo_stack = []
+        self.history = HistoryStack[GuiHistorySnapshot](MAX_HISTORY_DEPTH)
+        # Compatibility views retained for integrations that inspect stack
+        # availability directly.
+        self.undo_stack = self.history.undo_entries
+        self.redo_stack = self.history.redo_entries
         self._history_restoring = False
-        self._last_history_snapshot = None
         self.viewer_tabs = self.build_viewer_tabs()
         self.viewer_3d.set_smoothing_widget(self.controls.corner_smoothing_slider)
         self.help_dialog = None
+        self.keyboard_shortcuts_dialog = None
+        self.motion_clipboard = None
         self.build_menu_bar()
+        self.sync_trajectory_export_actions()
         self.app_toolbar = self.build_workflow_toolbar()
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.app_toolbar)
         self.refresh_recent_projects()
         self.status_panel = self.build_status_panel()
+        self.visualization_manager = build_main_window_visualization(self)
         self.left_sidebar_content = AppLeftSidebar(
             self.controls,
             include_view=False,
@@ -487,6 +412,10 @@ class RobotGuiMainWindow(QMainWindow):
         self.refresh_display()
         self._refresh_history_baseline()
 
+    def _on_document_dirty_changed(self, event):
+        if event.document_id == self.document.document_id:
+            self.set_project_dirty(event.dirty)
+
     def register_model_info(self, info):
         if info.key not in self.model_registry:
             self.model_registry[info.key] = info
@@ -511,6 +440,7 @@ class RobotGuiMainWindow(QMainWindow):
         menu_bar.setNativeMenuBar(False)
 
         self.file_menu = menu_bar.addMenu("&File")
+        self.file_menu.setObjectName("fileMenu")
         self.new_project_action = QAction("&New Project…", self)
         self.new_project_action.setObjectName("newProjectAction")
         self.new_project_action.setShortcut(QKeySequence.StandardKey.New)
@@ -544,7 +474,6 @@ class RobotGuiMainWindow(QMainWindow):
         for label, action_key in (
             ("Robot Model…", "model"),
             ("Qpos…", "qpos"),
-            ("Trajectory…", "trajectory"),
         ):
             action = QAction(label, self)
             action.setObjectName(f"import{action_key.title()}Action")
@@ -557,28 +486,169 @@ class RobotGuiMainWindow(QMainWindow):
             self.import_menu.addAction(action)
             self.import_actions[action_key] = action
 
+        self.trajectory_import_menu = self.import_menu.addMenu("Trajectory")
+        self.trajectory_import_menu.setObjectName("trajectoryImportMenu")
+        for label, action_key in (
+            ("MuJoCo", "trajectory_mujoco"),
+            ("DSMS", "trajectory_dsms"),
+            ("mjlab", "trajectory_mjlab"),
+        ):
+            action = QAction(label, self)
+            format_key = action_key.removeprefix("trajectory_")
+            action.setObjectName(
+                "importTrajectoryAction"
+                if format_key == "mujoco"
+                else f"importTrajectory{format_key.title()}Action"
+            )
+            action.setData(action_key)
+            action.triggered.connect(
+                lambda checked=False, key=action_key: (
+                    self.on_setup_import_requested(key)
+                )
+            )
+            self.trajectory_import_menu.addAction(action)
+            self.import_actions[action_key] = action
+            if format_key == "mujoco":
+                self.import_actions["trajectory"] = action
+
         self.export_menu = self.file_menu.addMenu("&Export")
         self.export_menu.setObjectName("exportMenu")
         self.export_actions = {}
+        self.export_qpos_action = QAction("Qpos…", self)
+        self.export_qpos_action.setObjectName("exportQposAction")
+        self.export_qpos_action.setData("qpos")
+        self.export_qpos_action.triggered.connect(
+            lambda checked=False: self.on_setup_export_requested("qpos")
+        )
+        self.export_menu.addAction(self.export_qpos_action)
+        self.export_actions["qpos"] = self.export_qpos_action
+
+        self.trajectory_export_menu = self.export_menu.addMenu("Trajectory")
+        self.trajectory_export_menu.setObjectName("trajectoryExportMenu")
         for label, action_key in (
-            ("Qpos…", "qpos"),
-            ("Trajectory…", "trajectory"),
+            ("MuJoCo", "trajectory_mujoco"),
+            ("DSMS", "trajectory_dsms"),
+            ("mjlab", "trajectory_mjlab"),
         ):
             action = QAction(label, self)
-            action.setObjectName(f"export{action_key.title()}Action")
+            format_key = action_key.removeprefix("trajectory_")
+            action.setObjectName(
+                "exportTrajectoryAction"
+                if format_key == "mujoco"
+                else f"exportTrajectory{format_key.title()}Action"
+            )
             action.setData(action_key)
             action.triggered.connect(
                 lambda checked=False, key=action_key: (
                     self.on_setup_export_requested(key)
                 )
             )
-            self.export_menu.addAction(action)
+            self.trajectory_export_menu.addAction(action)
             self.export_actions[action_key] = action
+            if format_key == "mujoco":
+                self.export_actions["trajectory"] = action
 
         self.robot_menu = menu_bar.addMenu("&Robot")
         self.robot_menu.setObjectName("robotMenu")
         self.robot_menu.aboutToShow.connect(self.refresh_robot_menu)
         self.refresh_robot_menu()
+
+        self.timeline_menu = menu_bar.addMenu("&Timeline")
+        self.timeline_menu.setObjectName("timelineMenu")
+
+        self.insert_time_action = QAction(
+            "Insert Time at Current Time…", self
+        )
+        self.insert_time_action.setObjectName("insertTimelineTimeAction")
+        self.insert_time_action.setToolTip(
+            "Open a held interval and shift all later Keyframes to the right."
+        )
+        self.insert_time_action.triggered.connect(
+            self.on_insert_time_requested
+        )
+        self.timeline_menu.addAction(self.insert_time_action)
+
+        self.shift_motion_action = QAction("Shift Entire Motion…", self)
+        self.shift_motion_action.setObjectName("shiftEntireMotionAction")
+        self.shift_motion_action.setToolTip(
+            "Move every target and robot-pose Keyframe by one time offset."
+        )
+        self.shift_motion_action.triggered.connect(
+            self.on_shift_entire_motion_requested
+        )
+        self.timeline_menu.addAction(self.shift_motion_action)
+
+        self.move_time_range_action = QAction("Move Time Range…", self)
+        self.move_time_range_action.setObjectName("moveTimelineRangeAction")
+        self.move_time_range_action.setToolTip(
+            "Move a non-overlapping Keyframe range after checking conflicts."
+        )
+        self.move_time_range_action.triggered.connect(
+            self.on_move_time_range_requested
+        )
+        self.timeline_menu.addAction(self.move_time_range_action)
+
+        self.scale_time_range_action = QAction("Scale Time Range…", self)
+        self.scale_time_range_action.setObjectName("scaleTimelineRangeAction")
+        self.scale_time_range_action.setToolTip(
+            "Change actual motion speed by scaling Keyframe timestamps."
+        )
+        self.scale_time_range_action.triggered.connect(
+            self.on_scale_time_range_requested
+        )
+        self.timeline_menu.addAction(self.scale_time_range_action)
+
+        self.timeline_menu.addSeparator()
+        self.copy_motion_range_action = QAction("Copy Motion Range…", self)
+        self.copy_motion_range_action.setObjectName("copyMotionRangeAction")
+        self.copy_motion_range_action.setToolTip(
+            "Copy committed target Keyframes and poses, including Joint "
+            "Angles, from a time range."
+        )
+        self.copy_motion_range_action.triggered.connect(
+            self.on_copy_motion_range_requested
+        )
+        self.timeline_menu.addAction(self.copy_motion_range_action)
+
+        self.paste_motion_action = QAction(
+            "Paste Motion at Current Time", self
+        )
+        self.paste_motion_action.setObjectName("pasteMotionAction")
+        self.paste_motion_action.setToolTip(
+            "Paste the copied motion beginning at the active timeline time."
+        )
+        self.paste_motion_action.setEnabled(False)
+        self.paste_motion_action.triggered.connect(
+            lambda checked=False: self.paste_motion_at_current_time()
+        )
+        self.timeline_menu.addAction(self.paste_motion_action)
+
+        self.paste_motion_reversed_action = QAction(
+            "Paste Motion Reversed at Current Time", self
+        )
+        self.paste_motion_reversed_action.setObjectName(
+            "pasteMotionReversedAction"
+        )
+        self.paste_motion_reversed_action.setToolTip(
+            "Paste the copied poses in reverse time order at the active time."
+        )
+        self.paste_motion_reversed_action.setEnabled(False)
+        self.paste_motion_reversed_action.triggered.connect(
+            lambda checked=False: self.paste_motion_at_current_time(
+                reverse=True
+            )
+        )
+        self.timeline_menu.addAction(self.paste_motion_reversed_action)
+
+        self.repeat_motion_action = QAction("Repeat Motion…", self)
+        self.repeat_motion_action.setObjectName("repeatMotionAction")
+        self.repeat_motion_action.setToolTip(
+            "Append forward or ping-pong copies of a committed motion range."
+        )
+        self.repeat_motion_action.triggered.connect(
+            self.on_repeat_motion_requested
+        )
+        self.timeline_menu.addAction(self.repeat_motion_action)
 
         self.view_menu = menu_bar.addMenu("&View")
         self.view_menu.setObjectName("viewMenu")
@@ -670,13 +740,23 @@ class RobotGuiMainWindow(QMainWindow):
         self.help_center_action.triggered.connect(self.show_help_center)
         self.help_menu.addAction(self.help_center_action)
         self.start_tutorial_action = QAction(
-            "Start First Motion &Tutorial", self
+            "Start &Tutorial", self
         )
         self.start_tutorial_action.setObjectName("startTutorialAction")
         self.start_tutorial_action.triggered.connect(
             self.start_first_motion_tutorial
         )
         self.help_menu.addAction(self.start_tutorial_action)
+        self.keyboard_shortcuts_action = QAction(
+            "&Keyboard Shortcuts…", self
+        )
+        self.keyboard_shortcuts_action.setObjectName(
+            "keyboardShortcutsAction"
+        )
+        self.keyboard_shortcuts_action.triggered.connect(
+            self.show_keyboard_shortcuts
+        )
+        self.help_menu.addAction(self.keyboard_shortcuts_action)
 
     def _toolbar_action(self, toolbar, text, icon_name, object_name, tooltip):
         action = QAction(theme_icon(icon_name, self), text, self)
@@ -1087,6 +1167,14 @@ class RobotGuiMainWindow(QMainWindow):
             action.setChecked(key == self.model_key)
 
     def set_gizmo_mode(self, mode):
+        tool_name = {
+            "translate": "Move",
+            "rotate": "Rotate",
+        }.get(mode)
+        manager = getattr(self, "visualization_manager", None)
+        if manager is not None and tool_name is not None:
+            manager.select_tool(tool_name)
+            return
         self.viewer_3d.canvas.set_gizmo_mode(mode)
 
     def sync_transform_gizmo_state(self, _checked=None):
@@ -1127,98 +1215,35 @@ class RobotGuiMainWindow(QMainWindow):
         self.playback_action.setIcon(theme_icon("pause" if playing else "play", self))
         self.undo_action.setEnabled(bool(self.undo_stack))
         self.redo_action.setEnabled(bool(self.redo_stack))
+        self.copy_motion_range_action.setEnabled(has_robot)
+        self.repeat_motion_action.setEnabled(has_robot)
+        clipboard_compatible = (
+            self.motion_clipboard is not None
+            and getattr(self.motion_clipboard, "model_key", None)
+            == self.document.model_key
+        )
+        self.paste_motion_action.setEnabled(
+            has_robot and clipboard_compatible
+        )
+        self.paste_motion_reversed_action.setEnabled(
+            has_robot and clipboard_compatible
+        )
 
     # ============================================================
     # Build right status/debug panel
     # ============================================================
 
     def build_status_panel(self):
-        panel = QWidget()
-        panel.setMinimumWidth(0)
-        layout = QVBoxLayout()
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-
-        self.backend_label = QLabel()
-        self.backend_label.setWordWrap(True)
-
-        self.status_icon_label = QLabel()
-        self.status_icon_label.setObjectName("statusSeverityIcon")
-        self.status_icon_label.setAlignment(
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+        panel = EditorStatusPanel(
+            self.model_source_text(self.robot_model_3d)
         )
-        self.status_icon_label.setFixedWidth(18)
-
-        self.viewer_status_label = QLabel()
-        self.viewer_status_label.setObjectName("statusEventTitle")
-        self.viewer_status_label.setWordWrap(True)
-        self.status_message_label = QLabel()
-        self.status_message_label.setObjectName("statusEventMessage")
-        self.status_message_label.setWordWrap(True)
-
-        summary = QWidget()
-        summary.setObjectName("statusEventSummary")
-        summary.setAccessibleName("Current status")
-        summary_layout = QHBoxLayout(summary)
-        summary_layout.setContentsMargins(0, 0, 0, 0)
-        summary_layout.setSpacing(5)
-        summary_layout.addWidget(self.status_icon_label)
-        summary_copy = QVBoxLayout()
-        summary_copy.setContentsMargins(0, 0, 0, 0)
-        summary_copy.setSpacing(1)
-        summary_copy.addWidget(self.viewer_status_label)
-        summary_copy.addWidget(self.status_message_label)
-        summary_layout.addLayout(summary_copy, stretch=1)
-        layout.addWidget(summary)
-
-        # These values remain available to integrations, but duplicate data is
-        # no longer rendered as permanent rows in the compact Status section.
-        self.status_frame_label = QLabel("-")
-        self.status_ik_label = QLabel("-")
-        self.status_move_label = QLabel("-")
-        self.viewer_time_label = QLabel()
-        self.viewer_root_pose_label = QLabel()
-        self.model_source_label = QLabel(self.model_source_text(self.robot_model_3d))
-
-        self.status_text = QTextEdit()
-        self.status_text.setReadOnly(True)
-        self.status_text.setMinimumWidth(0)
-        self.status_text.setMinimumHeight(80)
-        self.status_text.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-
-        self.status_details_button = QToolButton()
-        self.status_details_button.setText("Details")
-        self.status_details_button.setCheckable(True)
-        self.status_details_button.setChecked(False)
-        self.status_details_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
-        self.status_details_button.setArrowType(Qt.ArrowType.RightArrow)
-
-        self.status_details_panel = QWidget()
-        details_layout = QVBoxLayout(self.status_details_panel)
-        details_layout.setContentsMargins(0, 0, 0, 0)
-        details_layout.setSpacing(4)
-        details_layout.addWidget(self.status_text)
-        self.status_details_panel.setVisible(False)
-
-        def set_details_visible(visible):
-            self.status_details_panel.setVisible(visible)
-            self.status_details_button.setArrowType(
-                Qt.ArrowType.DownArrow if visible else Qt.ArrowType.RightArrow
-            )
-
-        self.status_details_button.toggled.connect(set_details_visible)
-        layout.addWidget(self.status_details_button)
-        layout.addWidget(self.status_details_panel)
-
+        for name, widget in panel.compatibility_widgets().items():
+            setattr(self, name, widget)
         self._status_summary_signature = None
         self._status_repeat_count = 0
         self.apply_status_event(
             status_event_from_text(self.viewer_3d.status_label.text())
         )
-
-        panel.setLayout(layout)
         return panel
 
     def build_viewer_tabs(self):
@@ -1256,9 +1281,22 @@ class RobotGuiMainWindow(QMainWindow):
         if not self.confirm_project_transition("close GhostGUI"):
             event.ignore()
             return
+        self._shutting_down = True
+        self.autosave_timer.stop()
         self.save_ui_settings()
         self.model_file_selection_stage.cancel()
+        manager = getattr(self, "visualization_manager", None)
+        if manager is not None:
+            manager.shutdown()
+        for loader in tuple(self.model_loaders.values()):
+            loader.cancel_and_wait()
+        self.model_loaders.clear()
         self.background_jobs.shutdown()
+        for session in tuple(self.model_sessions.values()):
+            session.close()
+        self.viewer_3d_mujoco.shutdown()
+        self._document_dirty_subscription.unsubscribe()
+        self.editor_events.clear()
         super().closeEvent(event)
 
     def on_autosave_timer(self):
@@ -1565,6 +1603,8 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.show_keyframes_box.setChecked(True)
             self.controls.show_lines_box.setChecked(True)
             self.controls.corner_smoothing_slider.set_value(0.0)
+            viewer.set_export_dt(0.01)
+            viewer.set_dsms_motion_speed(1.0)
             viewer.show_ghosts.setChecked(False)
             if self.controls.table.currentRow() >= 0:
                 self.controls.table.clearSelection()
@@ -1608,14 +1648,14 @@ class RobotGuiMainWindow(QMainWindow):
             )
 
         project.update_robot(self.model_key, self.current_model_display_name())
-        project.write_trajectory(self.trajectory)
-        if viewer.state_timeline is not None:
-            project.save_qpos_timeline(viewer.state_timeline)
-        project.write_workspace(self.capture_project_workspace())
         snapshot_saved = False
         if capture_snapshot:
             snapshot_saved = bool(self.save_project_snapshot(project))
-        project.save_metadata()
+        project.save_bundle(
+            self.trajectory,
+            viewer.state_timeline,
+            self.capture_project_workspace(),
+        )
         project.clear_autosave()
         project.append_session_event(
             "project_saved",
@@ -1626,6 +1666,7 @@ class RobotGuiMainWindow(QMainWindow):
                 }
             ),
         )
+        self.editor_controller.mark_saved()
         self.set_project_dirty(False)
         self.remember_current_project()
         if show_status:
@@ -1717,6 +1758,8 @@ class RobotGuiMainWindow(QMainWindow):
                 "show_keyframes": bool(self.controls.show_keyframes()),
                 "show_trajectory_lines": bool(self.controls.show_trajectory_lines()),
                 "smoothing": float(self.controls.corner_smoothing()),
+                "export_dt": float(viewer.export_dt()),
+                "dsms_motion_speed": float(viewer.dsms_motion_speed()),
                 "show_playback_ghosts": bool(viewer.show_ghosts.isChecked()),
                 "trajectory_import_dt": float(viewer.trajectory_import_dt.value()),
             },
@@ -1897,8 +1940,7 @@ class RobotGuiMainWindow(QMainWindow):
                 }
             ),
         )
-        self.undo_stack.clear()
-        self.redo_stack.clear()
+        self.history.clear()
         self._refresh_history_baseline()
         self.sync_workflow_toolbar()
         source = "autosaved project" if autosave else "project"
@@ -1917,6 +1959,14 @@ class RobotGuiMainWindow(QMainWindow):
             )
         if "smoothing" in display:
             self.controls.corner_smoothing_slider.set_value(float(display["smoothing"]))
+        if "export_dt" in display:
+            self.viewer_3d.set_export_dt(display["export_dt"])
+        elif "export_frequency" in display:
+            frequency = float(display["export_frequency"])
+            if np.isfinite(frequency) and frequency > 0.0:
+                self.viewer_3d.set_export_dt(1.0 / frequency)
+        if "dsms_motion_speed" in display:
+            self.viewer_3d.set_dsms_motion_speed(display["dsms_motion_speed"])
         if "trajectory_import_dt" in display:
             self.viewer_3d.trajectory_import_dt.setValue(
                 float(display["trajectory_import_dt"])
@@ -1976,6 +2026,13 @@ class RobotGuiMainWindow(QMainWindow):
         if self.help_dialog is not None:
             self.help_dialog.hide()
         self.tutorial_manager.start_first_motion()
+
+    def show_keyboard_shortcuts(self):
+        if self.keyboard_shortcuts_dialog is None:
+            self.keyboard_shortcuts_dialog = KeyboardShortcutsDialog(self)
+        self.keyboard_shortcuts_dialog.show()
+        self.keyboard_shortcuts_dialog.raise_()
+        self.keyboard_shortcuts_dialog.activateWindow()
 
     def prepare_pending_initial_render_progress(self):
         if (
@@ -2211,6 +2268,12 @@ class RobotGuiMainWindow(QMainWindow):
         viewer_3d.trajectory_import_dt.valueChanged.connect(
             lambda _value: self.mark_project_dirty("Import time step")
         )
+        viewer_3d.export_dt_input.valueChanged.connect(
+            lambda _value: self.mark_project_dirty("Export interval")
+        )
+        viewer_3d.dsms_motion_speed_input.valueChanged.connect(
+            lambda _value: self.mark_project_dirty("DSMS motion speed")
+        )
         viewer_3d.timeslice_preview_time_changed.connect(
             self.on_viewer_timeslice_preview_time_changed
         )
@@ -2299,6 +2362,7 @@ class RobotGuiMainWindow(QMainWindow):
             ),
             robot_trajectory_times=tuple(float(t) for t in viewer.robot_trajectory_times),
             ghost_trajectory=tuple(qpos.copy() for qpos in viewer.ghost_trajectory),
+            ghost_collision_flags=tuple(viewer.ghost_collision_flags),
             ghost_source=viewer.ghost_source,
             show_ghosts=bool(viewer.show_ghosts.isChecked()),
             timeline_duration=float(viewer.timeline_duration),
@@ -2361,6 +2425,9 @@ class RobotGuiMainWindow(QMainWindow):
                 viewer.ghost_trajectory = [
                     qpos.copy() for qpos in snapshot.ghost_trajectory
                 ]
+                viewer.ghost_collision_flags = list(
+                    snapshot.ghost_collision_flags
+                )
                 viewer.ghost_source = snapshot.ghost_source
                 viewer._rebuild_ghosts()
 
@@ -2403,18 +2470,18 @@ class RobotGuiMainWindow(QMainWindow):
     def _refresh_history_baseline(self):
         if self._history_restoring:
             return
-        self._last_history_snapshot = self.capture_history_snapshot()
+        self.history.set_baseline(self.capture_history_snapshot())
 
     def record_history_action(self, description):
         if self._history_restoring:
             return False
-        before = self._last_history_snapshot or self.capture_history_snapshot()
+        before = self.history.baseline or self.capture_history_snapshot()
         after = self.capture_history_snapshot()
-        self.undo_stack.append(GuiHistoryEntry(description, before))
-        if len(self.undo_stack) > MAX_HISTORY_DEPTH:
-            self.undo_stack.pop(0)
-        self.redo_stack.clear()
-        self._last_history_snapshot = after
+        self.history.record(
+            description,
+            before=before,
+            after=after,
+        )
         self.statusBar().showMessage(f"{description}; Ctrl+Z can undo.", 3000)
         self.mark_project_dirty(description)
         self.sync_workflow_toolbar()
@@ -2424,26 +2491,24 @@ class RobotGuiMainWindow(QMainWindow):
         if not self.undo_stack:
             self.statusBar().showMessage("Nothing to undo.", 2000)
             return
-        current = self.capture_history_snapshot()
-        entry = self.undo_stack.pop()
-        self.redo_stack.append(GuiHistoryEntry(entry.description, current))
-        self.restore_history_snapshot(entry.snapshot)
-        self._last_history_snapshot = entry.snapshot
-        self.statusBar().showMessage(f"Undid {entry.description}.", 3000)
-        self.mark_project_dirty(f"Undo {entry.description}")
+        transition = self.history.undo(self.capture_history_snapshot())
+        self.restore_history_snapshot(transition.target)
+        self.statusBar().showMessage(
+            f"Undid {transition.description}.", 3000
+        )
+        self.mark_project_dirty(f"Undo {transition.description}")
         self.sync_workflow_toolbar()
 
     def redo_last_action(self):
         if not self.redo_stack:
             self.statusBar().showMessage("Nothing to redo.", 2000)
             return
-        current = self.capture_history_snapshot()
-        entry = self.redo_stack.pop()
-        self.undo_stack.append(GuiHistoryEntry(entry.description, current))
-        self.restore_history_snapshot(entry.snapshot)
-        self._last_history_snapshot = entry.snapshot
-        self.statusBar().showMessage(f"Redid {entry.description}.", 3000)
-        self.mark_project_dirty(f"Redo {entry.description}")
+        transition = self.history.redo(self.capture_history_snapshot())
+        self.restore_history_snapshot(transition.target)
+        self.statusBar().showMessage(
+            f"Redid {transition.description}.", 3000
+        )
+        self.mark_project_dirty(f"Redo {transition.description}")
         self.sync_workflow_toolbar()
 
     def on_viewer_history_action_finished(self, description):
@@ -2477,12 +2542,12 @@ class RobotGuiMainWindow(QMainWindow):
         lower_text = str(text).lower()
         state = "Preview"
 
-        if "collision warning" in lower_text:
+        if "ik reach limit" in lower_text or "ik blocked" in lower_text:
+            state = "IK reach limit"
+        elif "collision warning" in lower_text:
             state = "Warning: collision"
         elif "collision blocked" in lower_text:
             state = "Blocked: collision"
-        elif "ik blocked" in lower_text:
-            state = "Blocked: IK"
 
         return {
             "event": event,
@@ -2605,6 +2670,8 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_model_loaded(self, model_key, adapter):
         self.model_loaders.pop(model_key, None)
+        if self._shutting_down:
+            return
         backend = BackendInterface(mj_model=adapter.mj_model, adapter=adapter)
         reference = MujocoReferenceFrames(adapter=adapter)
         viewer_3d = RobotViewer3D(
@@ -2616,7 +2683,12 @@ class RobotGuiMainWindow(QMainWindow):
         self.connect_model_viewer_signals(viewer_3d)
         self.viewer_3d_stack.addWidget(viewer_3d)
         session = model_sessions.RobotModelSession(
-            adapter, backend, reference, viewer_3d, Trajectory(), -1,
+            adapter,
+            backend,
+            reference,
+            viewer_3d,
+            document=ProjectDocument(model_key=model_key),
+            model_key=model_key,
         )
         self.model_sessions[model_key] = session
         self.finish_model_loading_ui()
@@ -2624,6 +2696,8 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_model_load_failed(self, model_key, error):
         self.model_loaders.pop(model_key, None)
+        if self._shutting_down:
+            return
         if (
             self._pending_project_restore is not None
             and self.project_restore_model_key(
@@ -2667,14 +2741,71 @@ class RobotGuiMainWindow(QMainWindow):
             self.on_open_model_file()
         elif action == "qpos":
             self.viewer_3d.choose_qpos_csv()
-        elif action == "trajectory":
+        elif action in ("trajectory", "trajectory_mujoco"):
             self.viewer_3d.choose_trajectory_csv(prompt_import_dt=True)
+        elif action == "trajectory_dsms":
+            self.viewer_3d.choose_dsms_trajectory_dir(prompt_import_dt=True)
+        elif action == "trajectory_mjlab":
+            error = self.viewer_3d.mjlab_export_compatibility_error()
+            if error:
+                self.show_status_message(
+                    f"Could not import mjlab trajectory: {error}"
+                )
+                return
+            sample_interval, accepted = QInputDialog.getDouble(
+                self,
+                "Import mjlab trajectory",
+                "Source sample interval [s]",
+                self.viewer_3d.export_dt(),
+                0.01,
+                10.0,
+                2,
+            )
+            if accepted:
+                self.viewer_3d.choose_mjlab_trajectory_csv(
+                    sample_interval,
+                    prompt_import_dt=True,
+                )
 
     def on_setup_export_requested(self, action):
         if action == "qpos":
             self.viewer_3d.choose_qpos_save_path()
-        elif action == "trajectory":
+        elif action in ("trajectory", "trajectory_mujoco"):
             self.viewer_3d.choose_trajectory_save_path()
+        elif action == "trajectory_dsms":
+            self.viewer_3d.choose_dsms_trajectory_output_dir()
+        elif action == "trajectory_mjlab":
+            self.viewer_3d.choose_mjlab_trajectory_save_path()
+
+    def sync_trajectory_export_actions(self):
+        error = self.viewer_3d.mjlab_export_compatibility_error()
+        enabled = error is None
+        export_action = self.export_actions.get("trajectory_mjlab")
+        if export_action is not None:
+            export_action.setEnabled(enabled)
+            export_action.setToolTip(
+                "Export a Unitree G1 29-DoF trajectory for mjlab."
+                if enabled
+                else error
+            )
+        self.controls.set_export_action_enabled(
+            "trajectory_mjlab",
+            enabled,
+            "" if enabled else error,
+        )
+        import_action = self.import_actions.get("trajectory_mjlab")
+        if import_action is not None:
+            import_action.setEnabled(enabled)
+            import_action.setToolTip(
+                "Import a Unitree G1 29-DoF mjlab trajectory."
+                if enabled
+                else error
+            )
+        self.controls.set_import_action_enabled(
+            "trajectory_mjlab",
+            enabled,
+            "" if enabled else error,
+        )
 
     def on_choose_mesh_folder(self):
         if self.background_jobs.is_busy():
@@ -2820,6 +2951,7 @@ class RobotGuiMainWindow(QMainWindow):
             model_key, session
         ).items():
             setattr(self, name, value)
+        self.editor_controller.activate_document(self.document)
         self.viewer_3d_stack.setCurrentWidget(self.viewer_3d)
         self.viewer_3d_mujoco.set_model_adapter(session.adapter)
         self.viewer_3d_mujoco.clear_trajectory()
@@ -2837,12 +2969,12 @@ class RobotGuiMainWindow(QMainWindow):
             viewer=self.viewer_3d,
         )
         self.controls.set_frame_names(session.adapter.trajectory_frames)
+        self.sync_trajectory_export_actions()
         self.update_project_chrome()
         self.update_editor_context()
         self.refresh_display()
         self.request_active_model_render()
-        self.undo_stack.clear()
-        self.redo_stack.clear()
+        self.history.clear()
         self._refresh_history_baseline()
         self.sync_robot_menu()
         self.sync_display_actions()
@@ -2852,8 +2984,11 @@ class RobotGuiMainWindow(QMainWindow):
         self.restore_pending_project_if_ready()
 
     def on_trajectory_csv_loaded(self, csv_path):
+        playback_path = (
+            self.viewer_3d.loaded_trajectory_playback_path() or csv_path
+        )
         self.viewer_3d_mujoco.set_trajectory_metadata(
-            csv_path,
+            playback_path,
             self.viewer_3d.robot_trajectory_times,
         )
         if self.viewer_3d.consume_trajectory_import_dt_prompt_request():
@@ -2943,6 +3078,330 @@ class RobotGuiMainWindow(QMainWindow):
     # GUI interaction callbacks
     # ============================================================
 
+    def on_insert_time_requested(self):
+        at_time = self.viewer_3d.get_current_time()
+        dialog = insert_time_dialog(
+            self,
+            at_time=at_time,
+            default_duration=self.viewer_3d.timeslice_step(),
+            export_interval=self.viewer_3d.export_dt(),
+        )
+        if not dialog.exec():
+            return
+        if dialog.snap_enabled():
+            at_time = timeline_editing.snap_time(
+                at_time, self.viewer_3d.export_dt()
+            )
+        self.insert_timeline_time(at_time, dialog.value("duration"))
+
+    def on_shift_entire_motion_requested(self):
+        dialog = shift_motion_dialog(
+            self,
+            default_offset=self.viewer_3d.timeslice_step(),
+            export_interval=self.viewer_3d.export_dt(),
+        )
+        if not dialog.exec():
+            return
+        self.shift_entire_motion(dialog.value("offset"))
+
+    def on_move_time_range_requested(self):
+        step = self.viewer_3d.timeslice_step()
+        start_time = self.viewer_3d.get_current_time()
+        end_time = min(self.viewer_3d.timeline_duration, start_time + step)
+        if end_time <= start_time + 1e-9:
+            start_time = max(0.0, end_time - step)
+        dialog = move_range_dialog(
+            self,
+            start_time=start_time,
+            end_time=end_time,
+            destination_start=end_time,
+            export_interval=self.viewer_3d.export_dt(),
+        )
+        if not dialog.exec():
+            return
+        self.move_timeline_range(
+            dialog.value("start"),
+            dialog.value("end"),
+            dialog.value("destination"),
+        )
+
+    def on_scale_time_range_requested(self):
+        bounds = timeline_editing.timeline_content_bounds(self.document)
+        if bounds is None or bounds[1] <= bounds[0] + 1e-9:
+            QMessageBox.warning(
+                self,
+                "Scale Time Range failed",
+                "Scaling requires at least two distinct Keyframe times.",
+            )
+            return
+        step = self.viewer_3d.timeslice_step()
+        start_time = self.viewer_3d.get_current_time()
+        end_time = min(self.viewer_3d.timeline_duration, start_time + step)
+        if end_time <= start_time + 1e-9:
+            start_time = max(0.0, end_time - step)
+        dialog = scale_range_dialog(
+            self,
+            start_time=start_time,
+            end_time=end_time,
+            entire_start=bounds[0],
+            entire_end=bounds[1],
+            export_interval=self.viewer_3d.export_dt(),
+        )
+        if not dialog.exec():
+            return
+        start_time, end_time = dialog.range_values()
+        self.scale_timeline_range(
+            start_time,
+            end_time,
+            dialog.speed(),
+            snap_interval=dialog.snap_interval(),
+        )
+
+    def _motion_range_bounds(self, action_title):
+        bounds = timeline_editing.timeline_content_bounds(self.document)
+        if bounds is not None and bounds[1] > bounds[0] + 1e-9:
+            return bounds
+        QMessageBox.warning(
+            self,
+            f"{action_title} failed",
+            "A motion range requires Keyframes at two distinct times.",
+        )
+        return None
+
+    def on_copy_motion_range_requested(self):
+        bounds = self._motion_range_bounds("Copy Motion Range")
+        if bounds is None:
+            return
+        dialog = copy_motion_range_dialog(
+            self,
+            entire_start=bounds[0],
+            entire_end=bounds[1],
+            export_interval=self.viewer_3d.export_dt(),
+        )
+        if not dialog.exec():
+            return
+        start_time, end_time = dialog.range_values()
+        self.copy_motion_range(start_time, end_time)
+
+    def copy_motion_range(self, start_time, end_time):
+        try:
+            clip = motion_clipboard.capture_motion_clip(
+                self.document, start_time, end_time
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Copy Motion Range failed", str(exc))
+            return False
+
+        self.motion_clipboard = clip
+        self.sync_workflow_toolbar()
+        message = (
+            f"Copied motion from t={start_time:.2f}–{end_time:.2f} s. "
+            "Paste it at the active time or paste it reversed."
+        )
+        self.viewer_3d.status_label.setText(message)
+        self.statusBar().showMessage(message, 3000)
+        return True
+
+    def paste_motion_at_current_time(self, *, reverse=False):
+        clip = self.motion_clipboard
+        compatible = (
+            clip is not None
+            and getattr(clip, "model_key", None) == self.document.model_key
+        )
+        if not compatible:
+            QMessageBox.warning(
+                self,
+                "Paste Motion failed",
+                "Copy a motion range for the active robot before pasting.",
+            )
+            return False
+
+        destination_start = self.viewer_3d.get_current_time()
+        try:
+            plan = motion_clipboard.plan_paste_motion(
+                self.document,
+                clip,
+                destination_start,
+                reverse=reverse,
+                maximum_time=MAX_TIMELINE_DURATION,
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Paste Motion failed", str(exc))
+            return False
+
+        direction = "reversed " if reverse else ""
+        message = (
+            f"Pasted {direction}motion at t={destination_start:.2f}–"
+            f"{plan.current_time:.2f} s."
+        )
+        description = "Paste Motion Reversed" if reverse else "Paste Motion"
+        return self._apply_timeline_edit(plan, description, message)
+
+    def on_repeat_motion_requested(self):
+        bounds = self._motion_range_bounds("Repeat Motion")
+        if bounds is None:
+            return
+        dialog = repeat_motion_dialog(
+            self,
+            entire_start=bounds[0],
+            entire_end=bounds[1],
+            export_interval=self.viewer_3d.export_dt(),
+        )
+        if not dialog.exec():
+            return
+        start_time, end_time = dialog.range_values()
+        self.repeat_motion_range(
+            start_time,
+            end_time,
+            dialog.additional_copies(),
+            ping_pong=dialog.ping_pong(),
+        )
+
+    def repeat_motion_range(
+        self,
+        start_time,
+        end_time,
+        additional_copies,
+        *,
+        ping_pong=False,
+    ):
+        try:
+            clip = motion_clipboard.capture_motion_clip(
+                self.document, start_time, end_time
+            )
+            plan = motion_clipboard.plan_repeat_motion(
+                self.document,
+                clip,
+                end_time,
+                additional_copies,
+                ping_pong=ping_pong,
+                maximum_time=MAX_TIMELINE_DURATION,
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Repeat Motion failed", str(exc))
+            return False
+
+        pattern = "ping-pong" if ping_pong else "forward"
+        message = (
+            f"Repeated the t={start_time:.2f}–{end_time:.2f} s motion with "
+            f"{additional_copies} additional {pattern} "
+            f"{'copy' if additional_copies == 1 else 'copies'}."
+        )
+        return self._apply_timeline_edit(plan, "Repeat Motion", message)
+
+    def insert_timeline_time(self, at_time, duration):
+        try:
+            plan = timeline_editing.plan_insert_time(
+                self.document,
+                at_time,
+                duration,
+                maximum_time=MAX_TIMELINE_DURATION,
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Insert Time failed", str(exc))
+            return False
+        message = (
+            f"Inserted {duration:.2f} s at t={at_time:.2f} s; moved "
+            f"{plan.moved_frame_count} target frames and "
+            f"{plan.moved_state_count} robot poses."
+        )
+        return self._apply_timeline_edit(plan, "Insert Time", message)
+
+    def shift_entire_motion(self, offset):
+        try:
+            plan = timeline_editing.plan_shift_entire_motion(
+                self.document,
+                offset,
+                maximum_time=MAX_TIMELINE_DURATION,
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Shift Entire Motion failed", str(exc))
+            return False
+        message = (
+            f"Shifted the entire motion by {offset:+.2f} s; moved "
+            f"{plan.moved_frame_count} target frames and "
+            f"{plan.moved_state_count} robot poses."
+        )
+        return self._apply_timeline_edit(
+            plan, "Shift Entire Motion", message
+        )
+
+    def move_timeline_range(self, start_time, end_time, destination_start):
+        try:
+            plan = timeline_editing.plan_move_time_range(
+                self.document,
+                start_time,
+                end_time,
+                destination_start,
+                maximum_time=MAX_TIMELINE_DURATION,
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Move Time Range failed", str(exc))
+            return False
+        message = (
+            f"Moved the {start_time:.2f}–{end_time:.2f} s range to "
+            f"{destination_start:.2f} s; moved {plan.moved_frame_count} target "
+            f"frames and {plan.moved_state_count} robot poses."
+        )
+        return self._apply_timeline_edit(plan, "Move Time Range", message)
+
+    def scale_timeline_range(
+        self,
+        start_time,
+        end_time,
+        speed,
+        *,
+        snap_interval=None,
+    ):
+        try:
+            plan = timeline_editing.plan_scale_time_range(
+                self.document,
+                start_time,
+                end_time,
+                speed,
+                snap_interval=snap_interval,
+                maximum_time=MAX_TIMELINE_DURATION,
+            )
+        except timeline_editing.TimelineEditError as exc:
+            QMessageBox.warning(self, "Scale Time Range failed", str(exc))
+            return False
+        result_end = start_time + (end_time - start_time) / speed
+        result_start = start_time
+        if snap_interval is not None:
+            result_start = timeline_editing.snap_time(
+                start_time, snap_interval
+            )
+            result_end = timeline_editing.snap_time(
+                result_end, snap_interval
+            )
+        message = (
+            f"Scaled the {start_time:.2f}–{end_time:.2f} s range to "
+            f"{speed:.2f}× ({result_start:.2f}–{result_end:.2f} s); moved "
+            f"{plan.moved_frame_count} target frames and "
+            f"{plan.moved_state_count} robot poses."
+        )
+        return self._apply_timeline_edit(
+            plan, "Scale Time Range", message
+        )
+
+    def _apply_timeline_edit(self, plan, description, message):
+        self.editor_controller.execute(
+            timeline_editing.ApplyTimelineEditPlan(plan)
+        )
+        self.viewer_3d.clear_robot_trajectory()
+        self.viewer_3d_mujoco.clear_trajectory()
+        self.backend_interface.clear_last_solution()
+        self.set_editor_timeline_duration(plan.timeline_duration)
+        self.controls.time_slider.set_value(plan.current_time)
+        self.viewer_3d.set_current_time(plan.current_time)
+        self.controls.table.clearSelection()
+        self.refresh_display()
+        self.viewer_3d.status_label.setText(
+            f"{message} Generated motion was cleared; select Generate again."
+        )
+        self.record_history_action(description)
+        return True
+
     def on_pose_changed(self, x, y, z, roll, pitch, yaw):
         """
         Called when sliders change.
@@ -2961,6 +3420,8 @@ class RobotGuiMainWindow(QMainWindow):
 
     def on_time_changed(self, time):
         """Load or create the editable qpos keyframe for this GUI time."""
+        self.viewer_3d.set_current_time(time)
+        self.editor_controller.set_current_time(time)
         frame_name = self.controls.frame_box.currentText()
         target = self.trajectory.targets_at_time(time).get(frame_name)
         if target is not None:
@@ -2974,7 +3435,6 @@ class RobotGuiMainWindow(QMainWindow):
                 emit_pose_changed=False,
             )
         self.refresh_display()
-        self.viewer_3d.set_current_time(time)
         self._refresh_history_baseline()
 
     def on_viewer_timeslice_time_changed(self, time):
@@ -2996,6 +3456,7 @@ class RobotGuiMainWindow(QMainWindow):
     def set_editor_timeline_duration(self, duration):
         self.viewer_3d.set_timeline_duration(duration, emit_signal=False)
         self.set_sidebar_timeline_duration(duration)
+        self.document.set_timeline_duration(duration)
 
     def on_accept_timeslice_requested(self):
         if (
@@ -3060,18 +3521,30 @@ class RobotGuiMainWindow(QMainWindow):
 
     def define_timeslice_from_committed_pose(self):
         """Snapshot every editable logical target from the committed MuJoCo pose."""
-        result = timeslice_service.define_timeslice_from_committed_pose(
-            self.trajectory,
+        frames = timeslice_service.capture_timeslice_from_committed_pose(
             self.viewer_3d.committed_state,
             time=self.viewer_3d.get_current_time(),
             phase=self.controls.phase_box.currentText(),
-            selected_frame_name=self.controls.frame_box.currentText(),
             frame_names=self.editable_logical_frame_names(),
             frame_bindings=self.viewer_3d.frame_bindings,
         )
-        self.active_index = result.active_index
-        if result.selected_frame is not None:
-            selected_frame = result.selected_frame
+        selected_frame_name = self.controls.frame_box.currentText()
+        result = self.editor_controller.execute(
+            UpsertKeyframes(
+                frames,
+                selected_frame_name=selected_frame_name,
+                operation="commit_timeslice",
+            )
+        )
+        selected_frame = next(
+            (
+                frame
+                for frame in frames
+                if frame.frame_name == selected_frame_name
+            ),
+            None,
+        )
+        if selected_frame is not None:
             self.controls.set_position_values(
                 x=selected_frame.x,
                 y=selected_frame.y,
@@ -3081,11 +3554,13 @@ class RobotGuiMainWindow(QMainWindow):
                 yaw=selected_frame.yaw,
                 emit_pose_changed=False,
             )
-        return result.count
+        return result.affected_count
 
     def editable_logical_frame_names(self):
         return timeslice_service.editable_logical_frame_names(
-            self.robot_model_3d, self.controls, self.viewer_3d
+            self.robot_model_3d,
+            self.controls.frame_names,
+            self.viewer_3d.frame_bindings,
         )
 
     def import_loaded_robot_trajectory_as_keyframes(self):
@@ -3110,22 +3585,24 @@ class RobotGuiMainWindow(QMainWindow):
         return self._apply_loaded_trajectory_targets(result)
 
     def _apply_loaded_trajectory_targets(self, result):
-        self.trajectory.clear()
         selected_frame_name = self.controls.frame_box.currentText()
-        selected_frame = None
-        for frame in result.frames:
-            self.trajectory.ensure_track(frame.frame_name)
-            self.trajectory.tracks[frame.frame_name].append(frame)
-            if (
-                selected_frame is None
-                and frame.frame_name == selected_frame_name
-                and abs(
-                    frame.time - self.viewer_3d.get_current_time()
-                ) <= 1e-6
-            ):
-                selected_frame = frame
-        for track in self.trajectory.tracks.values():
-            track.sort(key=lambda frame: frame.time)
+        current_time = self.viewer_3d.get_current_time()
+        self.editor_controller.execute(
+            ReplaceTrajectoryFrames(
+                result.frames,
+                selected_frame_name=selected_frame_name,
+                selected_time=current_time,
+            )
+        )
+        selected_frame = next(
+            (
+                frame
+                for frame in result.frames
+                if frame.frame_name == selected_frame_name
+                and abs(frame.time - current_time) <= 1e-6
+            ),
+            None,
+        )
 
         qposes = self.viewer_3d.robot_trajectory
         times = self.viewer_3d.robot_trajectory_times
@@ -3136,14 +3613,6 @@ class RobotGuiMainWindow(QMainWindow):
             self.viewer_3d.canvas.set_preview_visible(False)
             self.controls.time_slider.set_value(float(times[0]))
 
-        if selected_frame is not None:
-            self.active_index = self.trajectory.index_of_frame(selected_frame)
-        elif result.frames:
-            self.active_index = self.trajectory.index_of_frame(
-                result.frames[-1]
-            )
-        else:
-            self.active_index = -1
         if selected_frame is not None:
             self.controls.set_position_values(
                 x=selected_frame.x,
@@ -3164,9 +3633,10 @@ class RobotGuiMainWindow(QMainWindow):
         )
 
     def delete_timeslice_at_time(self, time, tolerance=1e-6):
-        return timeslice_service.delete_timeslice_at_time(
-            self.trajectory, time, tolerance
+        result = self.editor_controller.execute(
+            DeleteTimeslice(time, tolerance)
         )
+        return result.affected_count
 
     def on_target_dragged(self, x, z):
         """
@@ -3199,7 +3669,7 @@ class RobotGuiMainWindow(QMainWindow):
         # selected logical target at the active time while RobotViewer3D stores
         # the corresponding accepted qpos in its time-keyed state timeline.
         frame = self.controls.current_frame()
-        self.active_index = self.trajectory.upsert_frame(frame)
+        self.editor_controller.execute(UpsertKeyframe(frame))
         self.refresh_display()
         description = (
             getattr(self.viewer_3d, "_pending_history_action_description", None)
@@ -3258,7 +3728,7 @@ class RobotGuiMainWindow(QMainWindow):
         """
 
         frame = self.controls.current_frame()
-        self.active_index = self.trajectory.add_frame(frame)
+        self.editor_controller.execute(AddKeyframe(frame))
 
         self.refresh_display()
         self.record_history_action("Add keyframe")
@@ -3275,9 +3745,7 @@ class RobotGuiMainWindow(QMainWindow):
             return
 
         frame = self.controls.current_frame()
-        self.trajectory.update_frame(row, frame)
-
-        self.active_index = row
+        self.editor_controller.execute(UpdateKeyframe(row, frame))
         self.refresh_display()
         self.record_history_action("Update keyframe")
 
@@ -3292,8 +3760,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.show_status_message("No keyframe selected to delete.")
             return
 
-        self.trajectory.delete_frame(row)
-        self.active_index = -1
+        self.editor_controller.execute(DeleteKeyframe(row))
 
         self.refresh_display()
         self.record_history_action("Delete keyframe")
@@ -3315,8 +3782,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.show_status_message("Clear trajectory cancelled.")
             return
 
-        self.trajectory.clear()
-        self.active_index = -1
+        self.editor_controller.execute(ClearTrajectory())
         self.viewer_3d.clear_robot_trajectory()
         self.viewer_3d_mujoco.clear_trajectory()
         self.backend_interface.clear_last_solution()
@@ -3411,14 +3877,26 @@ class RobotGuiMainWindow(QMainWindow):
             self.show_status_message("Trajectory is empty. Add keyframes first.")
             return
 
-        result = trajectory_generation.generate_trajectory_status(
-            self.trajectory,
-            self.backend_interface,
-            smoothing=self.controls.corner_smoothing(),
-        )
+        try:
+            result = trajectory_generation.generate_trajectory_status(
+                self.trajectory,
+                self.backend_interface,
+                smoothing=self.controls.corner_smoothing(),
+                export_dt=self.viewer_3d.export_dt(),
+                state_timeline=self.viewer_3d.state_timeline,
+            )
+        except (RuntimeError, ValueError) as error:
+            self.show_status_message(
+                f"Could not generate trajectory: {error}"
+            )
+            return
         self.viewer_3d.load_backend_states(result.result_states)
         self.viewer_3d_mujoco.set_trajectory_csv(result.csv_path)
-        self.show_status_message(result.status_text)
+        collision_status = self.viewer_3d.robot_trajectory_collision_status()
+        self.show_status_message(
+            f"{result.status_text}; {collision_status}"
+            if collision_status else result.status_text
+        )
         self.record_history_action("Generate trajectory")
 
     def regenerate_mujoco_playback_cache(self):
@@ -3441,23 +3919,44 @@ class RobotGuiMainWindow(QMainWindow):
         Refresh viewer, table, and status text.
         """
 
-        active_frame = self.controls.current_frame()
-        show_keyframes = self.controls.show_keyframes()
-        show_trajectory_lines = self.controls.show_trajectory_lines()
-        trajectory_smoothing = self.controls.corner_smoothing()
-
-        self.viewer_3d.update_scene(
+        scene = SceneSnapshot(
             trajectory=self.trajectory,
-            active_frame=active_frame,
-            show_trajectory_lines=show_trajectory_lines,
-            trajectory_smoothing=trajectory_smoothing,
-            show_keyframes=show_keyframes,
+            active_frame=self.controls.current_frame(),
+            show_trajectory_lines=self.controls.show_trajectory_lines(),
+            trajectory_smoothing=self.controls.corner_smoothing(),
+            show_keyframes=self.controls.show_keyframes(),
+            defined_timeslices=tuple(
+                sorted({frame.time for frame in self.trajectory.frames})
+            ),
+        )
+        self.visualization_manager.update(
+            VisualizationUpdate(
+                scene=scene,
+                revision=self.document.revision,
+            )
         )
         self.controls.refresh_table(self.trajectory)
-        self.viewer_3d.set_defined_timeslices(
-            sorted({frame.time for frame in self.trajectory.frames})
+
+    def _render_robot_scene(self, update):
+        """Display adapter retaining the existing RobotViewer3D API."""
+        scene = update.scene
+        self.viewer_3d.update_scene(
+            trajectory=scene.trajectory,
+            active_frame=scene.active_frame,
+            show_trajectory_lines=scene.show_trajectory_lines,
+            trajectory_smoothing=scene.trajectory_smoothing,
+            show_keyframes=scene.show_keyframes,
         )
 
+    def _render_timeline_markers(self, update):
+        """Display adapter owning the committed-timeslice markers."""
+        scene = update.scene
+        self.viewer_3d.set_defined_timeslices(
+            scene.defined_timeslices
+        )
+
+    def _refresh_status_panel(self, _update):
+        """Panel adapter for backend and live viewer diagnostics."""
         self.backend_label.setText(
             f"Backend: {self.backend_interface.backend_name()}"
         )

@@ -23,6 +23,13 @@ from dataclasses import dataclass, asdict
 import json
 import math
 
+from core.math3d import (
+    normalize_quaternion,
+    quaternion_slerp,
+    quaternion_to_rpy,
+    rpy_to_quaternion,
+)
+
 
 # ============================================================
 # Quaternion helpers
@@ -36,15 +43,8 @@ import math
 # ============================================================
 
 def normalize_quat(q):
-    """
-    Normalize quaternion q = [w, x, y, z].
-    """
-    norm = math.sqrt(sum(v * v for v in q))
-
-    if norm < 1e-12:
-        raise ValueError("Quaternion norm is too close to zero.")
-
-    return tuple(v / norm for v in q)
+    """Compatibility tuple wrapper around the shared wxyz contract."""
+    return tuple(float(value) for value in normalize_quaternion(q))
 
 
 def rpy_to_quat(roll, pitch, yaw):
@@ -52,21 +52,7 @@ def rpy_to_quat(roll, pitch, yaw):
     Convert roll/pitch/yaw to quaternion [w, x, y, z].
     Angles are in radians.
     """
-    cr = math.cos(roll * 0.5)
-    sr = math.sin(roll * 0.5)
-
-    cp = math.cos(pitch * 0.5)
-    sp = math.sin(pitch * 0.5)
-
-    cy = math.cos(yaw * 0.5)
-    sy = math.sin(yaw * 0.5)
-
-    w = cr * cp * cy + sr * sp * sy
-    x = sr * cp * cy - cr * sp * sy
-    y = cr * sp * cy + sr * cp * sy
-    z = cr * cp * sy - sr * sp * cy
-
-    return normalize_quat((w, x, y, z))
+    return tuple(float(value) for value in rpy_to_quaternion(roll, pitch, yaw))
 
 
 def quat_to_rpy(q):
@@ -74,27 +60,7 @@ def quat_to_rpy(q):
     Convert quaternion [w, x, y, z] back to roll/pitch/yaw.
     Angles are returned in radians.
     """
-    w, x, y, z = normalize_quat(q)
-
-    # Roll, x-axis rotation
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
-
-    # Pitch, y-axis rotation
-    sinp = 2.0 * (w * y - z * x)
-
-    if abs(sinp) >= 1.0:
-        pitch = math.copysign(math.pi / 2.0, sinp)
-    else:
-        pitch = math.asin(sinp)
-
-    # Yaw, z-axis rotation
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(siny_cosp, cosy_cosp)
-
-    return roll, pitch, yaw
+    return quaternion_to_rpy(q)
 
 
 def slerp(q0, q1, alpha):
@@ -107,36 +73,9 @@ def slerp(q0, q1, alpha):
     alpha:
         Interpolation value from 0.0 to 1.0.
     """
-    q0 = normalize_quat(q0)
-    q1 = normalize_quat(q1)
-
-    dot = sum(a * b for a, b in zip(q0, q1))
-
-    # q and -q represent the same rotation.
-    # If dot < 0, flip q1 so interpolation takes the shorter path.
-    if dot < 0.0:
-        q1 = tuple(-v for v in q1)
-        dot = -dot
-
-    dot = max(-1.0, min(1.0, dot))
-
-    # If orientations are almost identical, use normalized lerp.
-    # This avoids numerical issues when sin(theta) is tiny.
-    if dot > 0.9995:
-        q = tuple((1.0 - alpha) * a + alpha * b for a, b in zip(q0, q1))
-        return normalize_quat(q)
-
-    theta_0 = math.acos(dot)
-    sin_theta_0 = math.sin(theta_0)
-
-    theta = theta_0 * alpha
-    sin_theta = math.sin(theta)
-
-    s0 = math.sin(theta_0 - theta) / sin_theta_0
-    s1 = sin_theta / sin_theta_0
-
-    q = tuple(s0 * a + s1 * b for a, b in zip(q0, q1))
-    return normalize_quat(q)
+    return tuple(
+        float(value) for value in quaternion_slerp(q0, q1, float(alpha))
+    )
 
 
 # ============================================================
@@ -168,6 +107,31 @@ class TargetFrame:
     roll: float = 0.0
     pitch: float = 0.0
     yaw: float = 0.0
+
+    def __post_init__(self):
+        self.time = float(self.time)
+        self.phase = str(self.phase)
+        self.frame_name = str(self.frame_name).strip()
+        if not self.frame_name:
+            raise ValueError("target frame_name cannot be empty")
+        values = (
+            self.time,
+            self.x,
+            self.y,
+            self.z,
+            self.roll,
+            self.pitch,
+            self.yaw,
+        )
+        if not all(math.isfinite(float(value)) for value in values):
+            raise ValueError("target frame contains a non-finite value")
+        if self.time < 0.0:
+            raise ValueError("target frame time cannot be negative")
+        self.x, self.y, self.z = map(float, (self.x, self.y, self.z))
+        self.roll, self.pitch, self.yaw = map(
+            float,
+            (self.roll, self.pitch, self.yaw),
+        )
 
     def to_dict(self):
         return asdict(self)
@@ -307,16 +271,40 @@ class Trajectory:
         if isinstance(data, list):
             items = data
         else:
+            if not isinstance(data, dict):
+                raise ValueError(
+                    "trajectory project data must be an object or legacy list"
+                )
+            schema_version = int(data.get("schema_version", 1))
+            if schema_version != 1:
+                raise ValueError(
+                    f"Unsupported target trajectory schema: {schema_version}"
+                )
             tracks = data.get("tracks", {})
+            if not isinstance(tracks, dict):
+                raise ValueError("trajectory tracks must be an object")
             for name in tracks:
                 self.ensure_track(name)
-            items = [
-                item
-                for track_items in tracks.values()
-                for item in track_items
-            ]
+            items = []
+            for name, track_items in tracks.items():
+                if not isinstance(track_items, list):
+                    raise ValueError(f"trajectory track {name!r} must be a list")
+                for item in track_items:
+                    if not isinstance(item, dict):
+                        raise ValueError(
+                            f"trajectory track {name!r} contains a non-object"
+                        )
+                    if str(item.get("frame_name", name)) != str(name):
+                        raise ValueError(
+                            f"trajectory frame_name does not match track {name!r}"
+                        )
+                    normalized = dict(item)
+                    normalized.setdefault("frame_name", name)
+                    items.append(normalized)
 
         for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("trajectory contains a non-object keyframe")
             self.add_frame(TargetFrame.from_dict(item))
 
     def save_json(self, path):
@@ -358,6 +346,9 @@ class Trajectory:
 
             {"time": t, "targets": {"pelvis": TargetFrame(...), ...}}
         """
+        dt = float(dt)
+        if not math.isfinite(dt) or dt <= 0.0:
+            raise ValueError("trajectory sample dt must be a positive finite value")
         non_empty_tracks = {
             name: sorted(track, key=lambda f: f.time)
             for name, track in self.tracks.items()
@@ -371,15 +362,17 @@ class Trajectory:
 
         t_start = min(track[0].time for track in non_empty_tracks.values())
         t_end = max(track[-1].time for track in non_empty_tracks.values())
-        num_steps = int(round((t_end - t_start) / dt))
+        # A uniform-dt export must not clamp an overshooting final sample onto
+        # t_end, because that creates one shorter, nonuniform last interval.
+        num_steps = int(math.floor(((t_end - t_start) / dt) + 1e-9))
         samples = []
 
         for k in range(num_steps + 1):
             t = t_start + k * dt
             t = round(t, 10)
 
-            if t > t_end:
-                t = t_end
+            if t > t_end + 1e-9:
+                break
 
             targets = {}
 

@@ -1,8 +1,14 @@
 # Advanced IK
 
-GhostGUI uses MuJoCo position and rotation Jacobians with weighted,
-damped-least-squares inverse kinematics. The **IK / Constraints** sidebar
-controls the solver used for the orange preview.
+GhostGUI uses MuJoCo position and rotation Jacobians with damped-least-squares
+inverse kinematics. The **IK / Constraints** sidebar controls the weighted
+solver used for the orange preview.
+
+Interactive preview and generated-trajectory solving share the same task and
+coordinate contracts. Generated motion with complete committed keyframes uses
+a hierarchical solver: Cartesian targets are primary and posture is optimized
+only in their joint-space null space. Positions are meters, angles are radians,
+and quaternions use MuJoCo `w, x, y, z` order throughout.
 
 ## Solver Controls
 
@@ -34,8 +40,10 @@ TCP position is enabled by default. Secondary posture and regularization tasks
 are opt-in so an ordinary target drag can use the model's available kinematic
 range.
 
-A weight of zero disables a task's influence. Larger values give the task more
-influence within the shared weighted solve, but do not create a hard hierarchy.
+A weight of zero disables a task's influence. In the interactive solver, larger
+values give the task more influence within the shared weighted solve. Generated
+posture references use a separate secondary hierarchy and cannot intentionally
+trade primary Cartesian accuracy for posture accuracy.
 
 ## Joint Influence
 
@@ -46,7 +54,17 @@ Each controllable joint has an influence value:
 - values above `1` prefer movement through that joint.
 
 Model-aware presets include all joints, selected limb, planted feet, and
-body-region choices appropriate to humanoid or quadruped models.
+body-region choices appropriate to humanoid or quadruped models. The selected
+limb is derived from the compiled MuJoCo root-to-target body chain. Joints in a
+prefix shared with another End Effector, such as a humanoid waist shared by
+both arms, are excluded. This does not depend on names such as `shoulder`,
+`elbow`, `wrist`, or `waist`.
+
+After **Selected limb only** is applied, it remains live: changing the target
+robot frame from the sidebar, advanced-target selector, or 3D body selection
+recomputes the enabled branch immediately. Editing an individual joint weight
+switches the preset to **Custom**, so later target changes preserve the manual
+weights.
 
 Floating roots are handled separately from ordinary limb-joint weighting.
 
@@ -58,9 +76,18 @@ Tasks record descriptive priority values:
 2. selected TCP position and orientation;
 3. posture and regularization.
 
-The current solver sorts the tasks but combines them into one weighted stack.
-It does not implement strict null-space projection, so lower-priority tasks can
-still trade off with higher-priority tasks according to their weights.
+The interactive orange-preview solver sorts these tasks but combines them into
+one weighted stack, so optional interactive tasks may still trade off according
+to their weights. Generated motion with qpos anchors instead projects the
+posture task into the null space of the Cartesian task stack.
+
+Interactive requirements follow the active gizmo handle. Translation requires
+the selected TCP position while keeping enabled orientation as a best-effort
+task. Rotation requires both the requested orientation and the held TCP
+position. If optional orientation, posture, foot-lock, or root constraints stop
+an otherwise reachable edit, the drag retries once using only required tasks
+and reports that the optional constraints were relaxed. Go2 TCP orientation
+remains enabled by default.
 
 ## Collision Behavior
 
@@ -68,15 +95,35 @@ During a drag, GhostGUI solves incremental substeps and displays collision
 warnings on the orange preview. Collision substeps control how finely the drag
 motion is sampled.
 
-Two later checks protect saved motion:
+Later checks distinguish advisory contact from meaningful penetration:
 
-- **Preview Path** rejects intermediate path samples that violate raw joint
-  limits or collide.
-- **Commit Keyframe** rejects a final orange preview that contains a collision
-  or non-finite qpos values.
+- **Preview Path** still rejects non-finite states and raw joint-limit
+  violations. It renders colliding samples as red ghosts instead of hiding the
+  path.
+- **Commit Keyframe** permits advisory shallow contact with a warning, but
+  rejects blocking penetration and non-finite qpos values.
+- trajectory generation reports its first collision, and trajectory export
+  rejects blocking penetration while permitting advisory contact with a
+  warning.
+
+Model-aware contact policy distinguishes shallow intended foot support from
+penetrating ground collision. Support contacts within the numerical tolerance
+are allowed. Other contacts become blocking only after the registered model's
+penetration threshold. Maintained models may also declare narrowly audited
+body-frame pairs with an explicit maximum allowed penetration.
+
+## Backend Selection
+
+The normal trajectory backend is the MuJoCo hierarchical pose/posture solver.
+An approximate Unitree G1 analytic backend exists for degraded environments,
+but it has no exact-qpos or whole-body-IK guarantee. It is never selected for a
+generic or non-G1 model. G1 use requires the `allow_approximate` fallback
+policy, emits a runtime warning, and is identified as approximate in the status
+output. Unexpected solver exceptions are never converted into fallback results.
 
 Inspect the **Status** details for the selected frame, error, singularity
-metrics, and collision names when a solve fails.
+metrics, and collision names. `IK reach limit` identifies solver reach or
+required-constraint failure separately from collision warnings.
 
 ## Tuning Order
 

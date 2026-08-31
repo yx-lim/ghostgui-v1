@@ -5,8 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.resources import bundled_resource_root
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Compatibility name retained for callers that treated the checkout as the
+# resource root. In an installed wheel this points at ``share/ghostgui``.
+PROJECT_ROOT = bundled_resource_root()
 
 
 @dataclass(frozen=True)
@@ -23,7 +27,14 @@ class RobotModelInfo:
         "camera", "imu", "radar", "rotor", "logo", "sensor", "contour",
         "constraint", "support",
     )
+    floating_base: bool | None = None
+    end_effector_frames: tuple[str, ...] = ()
+    joint_groups: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    passive_joints: tuple[str, ...] = ()
     home_joints: dict[str, float] = field(default_factory=dict)
+    body_labels: dict[str, str] = field(default_factory=dict)
+    collision_blocking_penetration_m: float = 0.001
+    allowed_contact_body_pairs: tuple[tuple[str, str, float], ...] = ()
 
 
 ROBOT_MODELS = {
@@ -42,6 +53,7 @@ ROBOT_MODELS = {
             "left_foot": ("robot/left_foot", "left_foot", "left_ankle_roll_link"),
             "right_foot": ("robot/right_foot", "right_foot", "right_ankle_roll_link"),
         },
+        end_effector_frames=("left_hand", "right_hand", "left_foot", "right_foot"),
     ),
     "go2": RobotModelInfo(
         key="go2",
@@ -58,6 +70,10 @@ ROBOT_MODELS = {
             "RL_foot": ("RL_foot", "RL_calf"),
             "RR_foot": ("RR_foot", "RR_calf"),
         },
+        end_effector_frames=("FL_foot", "FR_foot", "RL_foot", "RR_foot"),
+        # The source calls the central chassis ``base`` while users generally
+        # identify it as the quadruped's trunk.
+        body_labels={"base": "Trunk"},
         package_map={
             # The vendored ROS package stores its DAE files in a flattened
             # model-specific asset directory instead of go2_description/dae.
@@ -67,6 +83,9 @@ ROBOT_MODELS = {
             **{f"{leg}_thigh_joint": 0.8 for leg in ("FL", "FR", "RL", "RR")},
             **{f"{leg}_calf_joint": -1.5 for leg in ("FL", "FR", "RL", "RR")},
         },
+        # Shallow contacts remain visible warnings. Expected foot support is
+        # handled separately with its tighter ground-contact policy.
+        collision_blocking_penetration_m=0.005,
     ),
     "h2": RobotModelInfo(
         key="h2",
@@ -87,6 +106,7 @@ ROBOT_MODELS = {
                 "right_ankle_pitch_link", "right_ankle_roll_link", "right_foot",
             ),
         },
+        end_effector_frames=("left_hand", "right_hand", "left_foot", "right_foot"),
     ),
     "z1": RobotModelInfo(
         key="z1",
@@ -100,6 +120,21 @@ ROBOT_MODELS = {
             "tool": ("link06", "tool", "ee_link"),
             "wrist": ("link05", "link06"),
         },
+        end_effector_frames=("tool",),
+        # Unitree's published ``forward`` state.  The URDF has no initial
+        # joint-state field, so leaving these joints at MuJoCo's zero default
+        # folds link06 into link02 and starts the editor in self-collision.
+        home_joints={
+            "joint1": 0.0,
+            "joint2": 1.5,
+            "joint3": -1.0,
+            "joint4": -0.54,
+            "joint5": 0.0,
+            "joint6": 0.0,
+        },
+        # The arm's collision primitives are intentionally conservative; a
+        # few millimetres is advisory, while the folded 8 mm overlap blocks.
+        collision_blocking_penetration_m=0.003,
     ),
 }
 

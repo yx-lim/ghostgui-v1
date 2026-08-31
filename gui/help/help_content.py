@@ -3,8 +3,9 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.resources import resource_path
 
-USER_GUIDE_PATH = Path(__file__).resolve().parents[2] / "docs" / "user_guide.md"
+USER_GUIDE_PATH = resource_path("docs/user_guide.md")
 
 
 @dataclass(frozen=True)
@@ -22,10 +23,10 @@ HELP_SECTIONS = [
 Use this workflow to create one editable robot motion.
 
 1. Choose the robot model in the app toolbar.
-2. Select a **Target robot frame**, such as `left_hand`.
+2. Select a **Target robot frame**, such as `left_hand`, or double-click the robot to choose the target to edit.
 3. Move the target with the 3D gizmo or the position/orientation sliders.
 4. The orange robot is the temporary preview. It is not saved yet.
-5. Click **Preview Path** when you want to validate the path from the committed pose to the orange preview.
+5. Click **Preview Path** when you want to validate the path from the committed pose to the orange preview. Collision samples remain visible as red ghosts.
 6. Click **Commit Keyframe** to record the preview at the active time and advance the timeline.
 7. Add another keyframe at a later time.
 8. Click **Generate** or **Generate / Simulate**.
@@ -45,7 +46,11 @@ move target -> orange preview -> Commit Keyframe -> Generate -> Export
 
 ## Menu Bar
 
-Create/open/save projects, choose the robot model, import or export data, switch views, and open help.
+Create/open/save projects, choose the robot model, import or export data, retime Keyframes, switch views, and open help. Use **Help → Keyboard Shortcuts…** for the concise editing shortcut reference.
+
+Use **Timeline → Insert Time at Current Time** to open a held interval and shift later Keyframes. **Shift Entire Motion** applies one offset to the whole motion. **Move Time Range** relocates an inclusive range when its non-overlapping destination is free. **Scale Time Range** changes actual timeline speed: `2×` halves duration and `0.5×` doubles it.
+
+Use **Copy Motion Range…** to store committed Keyframes and robot poses, including Joint Angles, in a transient, model-specific Motion Clip. At an in-between boundary, GhostGUI samples the committed pose and uses forward kinematics to materialize logical target anchors; exact boundary Keyframes are preserved. It does not copy the Orange preview or generated samples, and copying does not change history or dirty the project. **Paste Motion at Current Time** preserves relative time; a forward append requires a closed seam. **Paste Motion Reversed at Current Time** reverses time order only, producing `A → B → A` without mirroring poses or negating Joint Angles. **Repeat Motion…** adds the requested number of copies in **Forward** or alternating **Ping-pong** order. A destination may touch existing motion only at a boundary: equivalent seams coalesce, different seams and any interior overlap reject the complete edit. A successful Paste or Repeat keeps targets and committed robot poses synchronized, clears generated motion, and is one Undo/Redo action.
 
 ## Target
 
@@ -62,11 +67,11 @@ Drag either divider to resize its sidebar between 200 and 400 pixels. Use the di
 
 ## Planning
 
-Use the single Time slider to scrub the robot live or follow time-based playback. The frame readout is derived from the trajectory, and releasing the slider commits the selected edit time once. Configure playback speed without changing trajectory timestamps, along with smoothing, collision substeps, playback opacity, and preview opacity; capture committed robot states; generate trajectories; and manage the editable timeline here.
+Use the single Time slider to scrub the robot live or follow time-based playback. The frame readout is derived from the trajectory, and releasing the slider commits the selected edit time once. Configure playback speed without changing trajectory timestamps. DSMS motion speed separately changes actual DSMS export timestamps while preserving qpos. Configure smoothing, collision substeps, playback opacity, and preview opacity; capture committed robot states; generate trajectories; and manage the editable timeline here.
 
 ## Workflow Toolbar
 
-- **Preview Path** validates the path from the committed pose to the orange preview.
+- **Preview Path** validates the path from the committed pose to the orange preview and marks collision samples with red ghosts.
 - **Commit Keyframe** records the preview at the active time.
 - **Generate** samples the saved keyframes into a robot trajectory.
 - **Play/Pause** controls the current generated or editable timeline.
@@ -110,6 +115,8 @@ Records the preview at the active time and advances by the configured keyframe i
 ## Generated Trajectory
 
 A sampled sequence built from saved keyframes and IK. This is the data you usually export for MuJoCo validation or downstream tools.
+
+Export interval sets the generated time step from 0.01 s to 10.00 s. This is separate from the Keyframe interval, which only advances the editing time after Commit Keyframe. DSMS motion speed divides elapsed `time.csv` timestamps after sampling; 0.50× doubles actual DSMS duration without changing qpos or other export formats.
 """.strip(),
     ),
     HelpSection(
@@ -148,14 +155,26 @@ A sampled sequence built from saved keyframes and IK. This is the data you usual
 """.strip(),
     ),
     HelpSection(
-        "Export Format",
+        "Import And Export Formats",
         """
-# Export Format
+# Import And Export Formats
+
+Use **File > Import > Trajectory** to choose the source format.
+
+- **MuJoCo** loads one headerless CSV containing time followed by qpos values.
+- **DSMS** loads a selected reference folder containing both `time.csv` and one `qpos_<dof>dof.csv`; do not select the two files separately.
+- **mjlab** loads a headerless Unitree G1 29-DoF CSV. Because mjlab rows do not contain timestamps, enter the source sample interval when prompted. The default `0.01 s` means 100 Hz.
+
+After loading any trajectory, choose the separate editable Keyframe interval used to derive editable target-frame Keyframes from the imported samples.
 
 Use **File > Export** to choose what to save.
 
 - **Qpos** saves the current committed pose as one headerless qpos row.
-- **Trajectory** saves timed qpos rows from the generated trajectory, or from the editable timeline when no generated trajectory is active.
+- **Trajectory > MuJoCo** saves timed qpos rows in one CSV.
+- **Trajectory > DSMS** saves qpos and time CSVs in one reference folder.
+- **Trajectory > mjlab** saves a headerless Unitree G1 29-DoF input CSV. It does not launch mjlab's external NPZ converter.
+
+DSMS and mjlab need uniform timestamps. Their GUI exports sample the current generated or editable trajectory at the selected Export interval. DSMS motion speed then scales DSMS timestamps only; visual Playback speed remains independent.
 
 Uncommitted orange previews are intentionally not exported. Use **Commit Keyframe** first when you want the current preview to become part of the saved motion.
 """.strip(),
@@ -171,7 +190,7 @@ The orange robot is only a preview. Click **Commit Keyframe** to store it at the
 
 ## Preview fails or moves only partway
 
-IK, joint limits, singularity checks, or collision checks may be blocking an unsafe pose. Check the **Status** panel and the **IK / Constraints** section.
+An **IK reach limit** means the required handle task could not be reached; collision warnings are reported separately. Translation may relax optional orientation and lock tasks once while keeping the required position. **Commit Keyframe** blocks meaningful penetration but allows shallow advisory contact with a warning. Check the **Status** panel and the **IK / Constraints** section.
 
 ## Generate gives an unexpected path
 

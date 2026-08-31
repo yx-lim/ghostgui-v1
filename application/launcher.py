@@ -23,10 +23,16 @@ def main() -> None:
 
     from PySide6.QtWidgets import QApplication
 
+    from gui.viewers.opengl_compat import configure_default_surface_format
+
+    # The canvas uses the fixed-function API. On macOS the format must be
+    # requested before QApplication creates any shared OpenGL contexts.
+    configure_default_surface_format()
+    app = QApplication([sys.argv[0], *qt_args])
+
     from gui.main_window import RobotGuiMainWindow
     from gui.theme import apply_application_theme
 
-    app = QApplication([sys.argv[0], *qt_args])
     apply_application_theme(app)
 
     window = RobotGuiMainWindow(model_key=args.model)
