@@ -31,7 +31,7 @@ Use a test module while iterating:
 ```bash
 python3 -m unittest tests.test_robot_viewer_timeline -v
 python3 -m unittest tests.test_advanced_ik -v
-python3 -m unittest tests.test_model_resources -v
+python3 -m unittest tests.test_project_persistence.ResourceLocationTests -v
 ```
 
 Choose the test that owns the changed contract rather than relying only on a

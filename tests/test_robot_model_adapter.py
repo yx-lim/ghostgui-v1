@@ -458,7 +458,10 @@ class RobotModelAdapterTests(unittest.TestCase):
             ]
             self.assertTrue(mesh_files)
             self.assertTrue(
-                all(path.is_relative_to(cache_root) for path in mesh_files)
+                all(
+                    path.resolve().is_relative_to(cache_root.resolve())
+                    for path in mesh_files
+                )
             )
             mesh.unlink()
             mujoco.MjModel.from_xml_path(str(adapter.runtime_model_path))
@@ -501,7 +504,10 @@ class RobotModelAdapterTests(unittest.TestCase):
 
             info = import_robot_model(source, root / "models")
             self.assertEqual(info.key, "go3")
-            self.assertEqual(info.model_path, root / "models" / "go3.urdf")
+            self.assertEqual(
+                info.model_path.resolve(),
+                (root / "models" / "go3.urdf").resolve(),
+            )
             self.assertTrue((root / "models" / "assets-go3" / "body.stl").exists())
             saved = info.model_path.read_text()
             self.assertIn('filename="assets-go3/body.stl"', saved)
