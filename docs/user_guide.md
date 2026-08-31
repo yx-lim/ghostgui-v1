@@ -60,12 +60,35 @@ select target → edit → orange preview → Commit Keyframe → Generate → E
 
 ## Interface
 
-### Menu Bar
+The interface is arranged around the 3D viewport:
+
+```text
+┌──────────────────────────── 1. Menu bar ─────────────────────────────┐
+├──────────────────────── 2. Workflow toolbar ─────────────────────────┤
+│ 3. Left sidebar       │                         │ 5. Right sidebar   │
+│ Target                │     4. 3D viewport      │ Status             │
+│ End Effector /        │                         │ IK / Constraints   │
+│ Joint Angles          │                         │                    │
+├───────────────────────┴─────────────────────────┴────────────────────┤
+│                  6. Planning and timeline controls                   │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+| Region | Purpose |
+| --- | --- |
+| 1. Menu bar | Projects, robots, import/export, timeline tools, views, and help |
+| 2. Workflow toolbar | Preview Path, Commit Keyframe, Generate, playback, and history |
+| 3. Left sidebar | Target selection and End Effector or Joint Angles editing |
+| 4. 3D viewport | Committed robot, Orange preview, gizmo, and path ghosts |
+| 5. Right sidebar | Status diagnostics and IK constraints |
+| 6. Planning controls | Time, intervals, smoothing, speed, and display options |
+
+### 1. Menu Bar
 
 Use the menu bar to create, open, and save projects; select the active robot;
 import or export data; retime Keyframes; switch views; and open help.
 
-### Timeline Menu
+## Timeline Editing
 
 **Insert Time at Current Time** opens a new interval at the active time. All
 Keyframes at or after that time move later, and GhostGUI inserts matching hold
@@ -129,12 +152,29 @@ boundary, an equivalent seam coalesces and a different seam is rejected. Slower
 range scaling is also rejected when it would expand into a later Keyframe; move
 or insert time first to create enough room.
 
-### Target
+## Interface Control Reference
+
+### 2. Workflow Toolbar
+
+**Preview Path** validates the transition to the orange preview without saving
+it.
+
+**Commit Keyframe** records the current pose at the active time.
+
+**Generate** samples the saved keyframes into a robot trajectory.
+
+**Play/Pause** controls the active generated or editable timeline. **Reset**
+restores the model home pose at the active time, **Clear** clears the editable
+trajectory, and **Undo/Redo** navigate recorded editing history.
+
+### 3. Left Sidebar
+
+#### Target
 
 Choose a registered logical frame or use **Advanced target** to select another
 body or site exposed by the active MuJoCo model.
 
-### Editing Mode
+#### Editing Mode
 
 Use **End Effector** to edit the target frame with X, Y, Z, Roll, Pitch, and Yaw
 controls or the 3D transform gizmo.
@@ -142,7 +182,27 @@ controls or the 3D transform gizmo.
 Use **Joint Angles** to edit joints directly. The controls and 3D view remain
 synchronized when switching modes, and both modes update the orange preview.
 
-### Planning
+### 4. 3D Viewport
+
+The model-colored robot shows the committed state. Edits appear as the Orange
+preview until **Commit Keyframe** is selected. Use the transform gizmo to move
+or rotate the selected target; Preview Path and playback ghosts show sampled
+motion without adding Keyframes.
+
+Camera controls orbit, pan, and zoom the view. **Move/Rotate** select the gizmo
+mode, and **Gizmo** shows or hides it.
+
+### 5. Right Sidebar And Layout
+
+The right sidebar contains a compact **Status** summary and the
+**IK / Constraints** controls. Expand **Details** to inspect solver and
+operation diagnostics.
+
+Drag the dividers to resize the sidebars. Use the divider arrows or
+**View → Left Sidebar** and **View → Right Sidebar** to collapse or restore them.
+GhostGUI remembers the expanded widths and collapsed states.
+
+### 6. Planning And Timeline Controls
 
 The active time determines where the next keyframe is stored. The time slider
 supports live scrubbing and playback. Releasing the slider selects an editable
@@ -151,15 +211,6 @@ time.
 Planning controls include the keyframe interval, timeline duration, Export
 interval, DSMS motion speed, playback speed, smoothing, collision substeps, and
 preview/playback opacity.
-
-### Workflow Toolbar
-
-**Preview Path** validates the transition to the orange preview without saving
-it.
-
-**Commit Keyframe** records the current pose at the active time.
-
-**Generate** samples the saved keyframes into a robot trajectory.
 
 **Export interval** sets the uniform time step used by **Generate** and the
 resulting trajectory export. Enter a value from `0.01 s` to `10.00 s`; the
@@ -174,27 +225,6 @@ without changing qpos samples. For example, `0.50×` doubles the DSMS reference
 duration. It does not change Keyframes, visual **Playback speed**, MuJoCo CSV,
 or mjlab export.
 
-**Play/Pause** controls the active generated or editable timeline.
-
-**Reset** restores the model home pose at the active time.
-
-**Clear** clears the editable trajectory.
-
-**Move/Rotate** select the transform-gizmo mode.
-
-**Gizmo** shows or hides the transform gizmo.
-
-**Undo/Redo** navigate recorded editing history.
-
-### Sidebars
-
-Drag the dividers to resize the sidebars. Use the divider arrows or
-**View → Left Sidebar** and **View → Right Sidebar** to collapse or restore them.
-GhostGUI remembers the expanded widths and collapsed states.
-
-The right sidebar contains a compact **Status** summary and the
-**IK / Constraints** controls. Expand **Details** to inspect solver and
-operation diagnostics.
 
 ## Keyboard And Mouse
 

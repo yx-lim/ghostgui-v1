@@ -14,6 +14,8 @@ GhostGUI.
 - [Preview And Keyframe Concepts](concepts.md) explains temporary, committed,
   and generated states.
 - [Data Formats](data_formats.md) defines qpos and trajectory CSV files.
+- [Motion Math](motion_math.md) explains interpolation, Jacobian IK, posture
+  projection, and trajectory validation.
 - [Models](models.md) describes bundled models, assets, and runtime caching.
 
 ## Configure And Extend

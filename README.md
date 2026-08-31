@@ -76,6 +76,7 @@ See [Models](docs/models.md) for model loading, asset, cache, and import details
 - [Models](docs/models.md)
 - [Adding models](docs/adding_models.md)
 - [Advanced IK](docs/advanced_ik.md)
+- [Motion Math](docs/motion_math.md)
 - [Architecture](docs/architecture.md)
 - [Migration guide](docs/migration.md)
 - [Operations guide](docs/operations.md)
