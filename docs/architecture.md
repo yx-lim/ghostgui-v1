@@ -186,6 +186,8 @@ but focused components now own the mechanics it previously embedded:
 | `gui/panels/status_panel.py` | Status summary and diagnostic-detail widgets |
 | `gui/panels/ai_assistant_panel.py` | Motion Assistant presentation and intent signals |
 | `gui/ai_assistant_controller.py` | Background provider/session orchestration and Orange preview adaptation |
+| `application/ai/frame_capture.py` | Qt-free representative timestamp selection and paired-image capture contract |
+| `gui/ai_frame_capture.py` | GUI-thread OpenGL capture, timestamp overlay, and editor-state restoration |
 | `gui/visualization/` | Main-window display/tool/panel adapters |
 
 `RobotViewer3D` similarly retains its public API while delegating the advanced

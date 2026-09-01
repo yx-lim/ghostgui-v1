@@ -46,6 +46,15 @@ from application.ai.metadata import (
 )
 from application.ai.motion_state import MotionStateSnapshot, ReplaceMotionState
 from application.ai.preview import sample_working_preview_qpos
+from application.ai.frame_capture import (
+    EncodedFrame,
+    FrameCaptureError,
+    FrameSampler,
+    FrameSamplingPlan,
+    FrameSamplingRequest,
+    MotionFrameRenderer,
+    capture_comparison_frames,
+)
 from application.ai.context import (
     AIContext,
     ContextBuilder,
@@ -87,10 +96,15 @@ __all__ = [
     "AIContext",
     "ContextBuilder",
     "EditAuthor",
+    "EncodedFrame",
     "EditorSelectionContext",
     "GhostGUIMotionService",
     "GhostGUIAgent",
     "ImageVariant",
+    "FrameCaptureError",
+    "FrameSampler",
+    "FrameSamplingPlan",
+    "FrameSamplingRequest",
     "InMemoryMotionMetadataStore",
     "MessageRole",
     "LLMProvider",
@@ -101,6 +115,7 @@ __all__ = [
     "MotionEditMetadata",
     "MotionEntityRef",
     "MotionFrameImage",
+    "MotionFrameRenderer",
     "MotionMetadataService",
     "MotionStateSnapshot",
     "MotionValidationReport",
@@ -135,5 +150,6 @@ __all__ = [
     "TimestampMotionIdentityResolver",
     "Usage",
     "build_semantic_tool_registry",
+    "capture_comparison_frames",
     "sample_working_preview_qpos",
 ]

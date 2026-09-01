@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - clean-up
+      - v3-dev
 
 permissions:
   contents: read

@@ -53,6 +53,18 @@ contextual retiming, End Effector IK, protected user constraints, editable
 multi-Keyframe plans, manual-edit-then-Refine, cancellation, offline failure,
 and rejection of arbitrary-code tool requests.
 
+The v3.1 frame-selection boundary can be checked without Qt, OpenGL, or a
+provider account:
+
+```bash
+python3 -m unittest tests.test_ai_frame_capture -v
+```
+
+It verifies the 4--8 frame bound, selected-interval and suspected-time hints,
+and exact timestamp correspondence for original/candidate image pairs. The
+GUI capture adapter adds the same timestamp as an image overlay and must run
+on the GUI thread because it reads a `QOpenGLWidget` framebuffer.
+
 Gemini smoke tests are opt-in manual checks. Normal CI must not require a
 Gemini key or consume provider credits. Claude provider tests remain deferred
 until AnthropicProvider is implemented.
