@@ -184,6 +184,8 @@ but focused components now own the mechanics it previously embedded:
 | `gui/model_loading.py` | Off-GUI-thread adapter construction |
 | `gui/render_progress.py` | Render-progress overlay behavior |
 | `gui/panels/status_panel.py` | Status summary and diagnostic-detail widgets |
+| `gui/panels/ai_assistant_panel.py` | Motion Assistant presentation and intent signals |
+| `gui/ai_assistant_controller.py` | Background provider/session orchestration and Orange preview adaptation |
 | `gui/visualization/` | Main-window display/tool/panel adapters |
 
 `RobotViewer3D` similarly retains its public API while delegating the advanced

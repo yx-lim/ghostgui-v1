@@ -67,7 +67,7 @@ The interface is arranged around the 3D viewport:
 ├──────────────────────── 2. Workflow toolbar ─────────────────────────┤
 │ 3. Left sidebar       │                         │ 5. Right sidebar   │
 │ Target                │     4. 3D viewport      │ Status             │
-│ End Effector /        │                         │ IK / Constraints   │
+│ End Effector /        │                         │ Motion Assistant   │
 │ Joint Angles          │                         │                    │
 ├───────────────────────┴─────────────────────────┴────────────────────┤
 │                  6. Planning and timeline controls                   │
@@ -80,7 +80,7 @@ The interface is arranged around the 3D viewport:
 | 2. Workflow toolbar | Preview Path, Commit Keyframe, Generate, playback, and history |
 | 3. Left sidebar | Target selection and End Effector or Joint Angles editing |
 | 4. 3D viewport | Committed robot, Orange preview, gizmo, and path ghosts |
-| 5. Right sidebar | Status diagnostics and IK constraints |
+| 5. Right sidebar | Status, Motion Assistant, and IK constraints |
 | 6. Planning controls | Time, intervals, smoothing, speed, and display options |
 
 ### 1. Menu Bar
@@ -194,9 +194,12 @@ mode, and **Gizmo** shows or hides it.
 
 ### 5. Right Sidebar And Layout
 
-The right sidebar contains a compact **Status** summary and the
-**IK / Constraints** controls. Expand **Details** to inspect solver and
-operation diagnostics.
+The right sidebar contains a compact **Status** summary, the optional **Motion
+Assistant**, and **IK / Constraints** controls. Expand **Details** to inspect
+solver and operation diagnostics. Motion Assistant stages language edits on a
+detached working copy; use **Accept**, **Reject**, or **Refine** after reviewing
+its Orange preview. See [Motion Assistant](ai_assistant.md) for secure API-key
+setup and failure behavior.
 
 Drag the dividers to resize the sidebars. Use the divider arrows or
 **View → Left Sidebar** and **View → Right Sidebar** to collapse or restore them.

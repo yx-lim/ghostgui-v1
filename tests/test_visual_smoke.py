@@ -54,7 +54,7 @@ class MainWindowVisualSmokeTests(unittest.TestCase):
                     section.title
                     for section in window.right_sidebar_content.sections
                 ],
-                ["Status", "IK / Constraints"],
+                ["Status", "Motion Assistant", "IK / Constraints"],
             )
             self.assertEqual(
                 [

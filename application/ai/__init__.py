@@ -3,8 +3,12 @@
 from application.ai.errors import (
     AIError,
     ProviderCancelledError,
+    ProviderAuthenticationError,
     ProviderCapabilityError,
+    ProviderConfigurationError,
     ProviderError,
+    ProviderRateLimitError,
+    ProviderResponseError,
     ToolExecutionError,
     ToolNotFoundError,
     ToolRegistrationError,
@@ -27,7 +31,7 @@ from application.ai.schemas import (
     Usage,
 )
 from application.ai.tool_registry import ToolCategory, ToolRegistry, ToolSpec
-from application.ai.providers import LLMProvider, MockProvider, MockStep
+from application.ai.providers import GeminiProvider, LLMProvider, MockProvider, MockStep
 from application.ai.edit_session import (
     AIEditSession,
     AIEditSessionError,
@@ -41,6 +45,7 @@ from application.ai.metadata import (
     TimestampMotionIdentityResolver,
 )
 from application.ai.motion_state import MotionStateSnapshot, ReplaceMotionState
+from application.ai.preview import sample_working_preview_qpos
 from application.ai.context import (
     AIContext,
     ContextBuilder,
@@ -89,6 +94,7 @@ __all__ = [
     "InMemoryMotionMetadataStore",
     "MessageRole",
     "LLMProvider",
+    "GeminiProvider",
     "LogicalFrameSolveResult",
     "MockProvider",
     "MockStep",
@@ -99,9 +105,13 @@ __all__ = [
     "MotionStateSnapshot",
     "MotionValidationReport",
     "ProviderCancelledError",
+    "ProviderAuthenticationError",
     "ProviderCapabilityError",
+    "ProviderConfigurationError",
     "ProviderCapabilities",
     "ProviderError",
+    "ProviderRateLimitError",
+    "ProviderResponseError",
     "ProviderMessage",
     "ProviderRequest",
     "ProviderResponse",
@@ -125,4 +135,5 @@ __all__ = [
     "TimestampMotionIdentityResolver",
     "Usage",
     "build_semantic_tool_registry",
+    "sample_working_preview_qpos",
 ]

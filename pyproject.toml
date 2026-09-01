@@ -35,6 +35,12 @@ dependencies = [
     "mujoco",
 ]
 
+[project.optional-dependencies]
+ai = [
+    "google-genai>=1.0",
+    "keyring>=24",
+]
+
 [project.urls]
 Homepage = "https://github.com/yx-lim/ghostgui"
 Repository = "https://github.com/yx-lim/ghostgui"

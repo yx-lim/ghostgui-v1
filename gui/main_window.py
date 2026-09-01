@@ -74,7 +74,8 @@ from .controls import TrajectoryControlPanel
 from .file_selection import SynchronousFileSelectionStage
 from .history import GuiHistorySnapshot
 from .model_loading import ModelLoadThread
-from .panels import EditorStatusPanel
+from .panels import AIAssistantPanel, EditorStatusPanel
+from .ai_assistant_controller import AIAssistantController
 from .render_progress import RenderProgressOverlay
 from .robot_viewer_3d import RobotViewer3D
 from .widgets.status import StatusEvent, status_event_from_text
@@ -313,13 +314,16 @@ class RobotGuiMainWindow(QMainWindow):
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.app_toolbar)
         self.refresh_recent_projects()
         self.status_panel = self.build_status_panel()
+        self.ai_assistant_panel = AIAssistantPanel()
         self.visualization_manager = build_main_window_visualization(self)
         self.left_sidebar_content = AppLeftSidebar(
             self.controls,
             include_view=False,
         )
         self.right_sidebar_content = AppRightSidebar(
-            self.status_panel, self.controls.inspector_sections()
+            self.status_panel,
+            self.controls.inspector_sections(),
+            ai_assistant_panel=self.ai_assistant_panel,
         )
         self.left_sidebar = self.left_sidebar_content
         self.right_sidebar = self.right_sidebar_content
@@ -387,6 +391,12 @@ class RobotGuiMainWindow(QMainWindow):
             self.on_main_splitter_moved
         )
         self.setCentralWidget(self.main_splitter)
+        self.ai_assistant_controller = AIAssistantController(
+            self,
+            self.ai_assistant_panel,
+            self.ui_settings,
+            self.background_jobs,
+        )
         if self._restore_left_sidebar_collapsed:
             restored_width = self._left_sidebar_last_width
             self.set_left_sidebar_visible(False)
@@ -1285,6 +1295,9 @@ class RobotGuiMainWindow(QMainWindow):
         self.autosave_timer.stop()
         self.save_ui_settings()
         self.model_file_selection_stage.cancel()
+        ai_controller = getattr(self, "ai_assistant_controller", None)
+        if ai_controller is not None:
+            ai_controller.shutdown()
         manager = getattr(self, "visualization_manager", None)
         if manager is not None:
             manager.shutdown()
@@ -1298,6 +1311,46 @@ class RobotGuiMainWindow(QMainWindow):
         self._document_dirty_subscription.unsubscribe()
         self.editor_events.clear()
         super().closeEvent(event)
+
+    def set_ai_motion_controls_enabled(self, enabled):
+        """Freeze document-mutating controls while an AI session is unresolved.
+
+        The 3D canvas and viewer timeline remain interactive for inspection. A
+        later UI phase can route direct manipulation to ``AIEditSession``'s
+        already-supported manual working-copy path.
+        """
+
+        enabled = bool(enabled)
+        self.controls.setEnabled(enabled)
+        for section in self.left_sidebar_content.sections:
+            section.content.setEnabled(enabled)
+        for section in self.right_sidebar_content.sections:
+            if section.title == "IK / Constraints":
+                section.content.setEnabled(enabled)
+        self.robot_menu.setEnabled(enabled)
+        self.timeline_menu.setEnabled(enabled)
+        self.new_project_action.setEnabled(enabled)
+        self.open_project_action.setEnabled(enabled)
+        self.recent_projects_menu.setEnabled(enabled)
+        self.import_menu.setEnabled(enabled)
+        for action_name in (
+            "preview_action",
+            "slice_action",
+            "generate_action",
+            "reset_action",
+            "clear_action",
+            "move_action",
+            "rotate_action",
+        ):
+            action = getattr(self, action_name, None)
+            if action is not None:
+                action.setEnabled(enabled)
+        if enabled:
+            self.sync_workflow_toolbar()
+            self.sync_transform_gizmo_state()
+        else:
+            self.viewer_3d.canvas.cancel_transform_drag()
+            self.viewer_3d.canvas.set_transform_gizmo_interactive(False)
 
     def on_autosave_timer(self):
         try:

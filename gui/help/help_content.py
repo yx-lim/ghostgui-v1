@@ -84,6 +84,7 @@ Use the single Time slider to scrub the robot live or follow time-based playback
 ## Right Sidebar
 
 - **Status** shows the latest important event or problem. Expand **Details** for the latest operation's frame, IK result, and solver diagnostics.
+- **Motion Assistant** stages focused language edits on a detached working copy. Configure Gemini through **Settings**, then review the Orange preview and choose **Accept**, **Reject**, or **Refine**. API keys can be kept in the system credential store and are never saved in a project.
 - **IK / Constraints** exposes IK weights, solver settings, collision checks, and preview controls.
 """.strip(),
     ),

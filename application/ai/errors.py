@@ -17,6 +17,22 @@ class ProviderCancelledError(ProviderError):
     """A provider request was cooperatively cancelled."""
 
 
+class ProviderConfigurationError(ProviderError):
+    """A provider cannot start because required local configuration is absent."""
+
+
+class ProviderAuthenticationError(ProviderError):
+    """A provider rejected its credentials."""
+
+
+class ProviderRateLimitError(ProviderError):
+    """A provider rejected a request because its usage limit was reached."""
+
+
+class ProviderResponseError(ProviderError):
+    """A provider returned a response that cannot satisfy the common contract."""
+
+
 class ToolRegistrationError(AIError, ValueError):
     """A tool definition is invalid or conflicts with an existing tool."""
 

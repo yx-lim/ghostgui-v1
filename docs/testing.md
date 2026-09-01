@@ -37,6 +37,26 @@ python3 -m unittest tests.test_model_resources -v
 Choose the test that owns the changed contract rather than relying only on a
 manual launch.
 
+### Motion Assistant
+
+The v3.0 AI integration suite is deterministic and needs no provider account,
+API key, or internet connection:
+
+```bash
+python3 -m unittest tests.test_ai_v3_integration -v
+```
+
+It drives real context building, strict ToolRegistry validation, semantic
+tools, the detached AIEditSession, working-copy Orange preview sampling, and
+atomic Accept/Reject through scripted MockProvider responses. Scenarios cover
+contextual retiming, End Effector IK, protected user constraints, editable
+multi-Keyframe plans, manual-edit-then-Refine, cancellation, offline failure,
+and rejection of arbitrary-code tool requests.
+
+Gemini smoke tests are opt-in manual checks. Normal CI must not require a
+Gemini key or consume provider credits. Claude provider tests remain deferred
+until AnthropicProvider is implemented.
+
 ## Package Smoke Test
 
 Build and inspect a wheel, then install it into a clean environment. Run the
@@ -112,6 +132,24 @@ structure. It skips outside the explicitly configured visual environment.
   timeline when needed, and is restored by one Undo/Redo action.
 - Switch robot models and confirm the model-specific Motion Clip cannot be
   pasted into the other model.
+
+### Motion Assistant
+
+- Launch without an API key and confirm all standard editing remains usable.
+- Open Motion Assistant settings, verify the API key is password-masked, and
+  test both session-only and system-keyring storage.
+- Apply a focused edit and confirm the committed motion stays unchanged while
+  the Orange preview shows the staged working copy.
+- Scrub the viewer timeline and move the camera while the provider request is
+  running; confirm document-mutating controls remain unavailable.
+- Use **Refine** twice and confirm each turn builds on the same staged result.
+- Use **Accept** and confirm the entire session is one Undo/Redo entry. Repeat
+  with **Reject** and confirm committed motion does not change.
+- Cancel a request, remove network access, use an invalid key, and exercise a
+  rate-limited response; confirm the error stays inside Motion Assistant.
+- Run the same focused request with MockProvider and an opt-in Gemini smoke
+  configuration and compare semantic tool results rather than provider-native
+  response objects.
 
 ### Model Checks
 

@@ -246,9 +246,21 @@ class AppLeftSidebar(AppSidebar):
 class AppRightSidebar(AppSidebar):
     SECTION_MAX_WIDTH = None
 
-    def __init__(self, status_panel, base_sections=None, parent=None):
+    def __init__(
+        self,
+        status_panel,
+        base_sections=None,
+        ai_assistant_panel=None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.add_section("Status", status_panel, expanded=True)
+        if ai_assistant_panel is not None:
+            self.add_section(
+                "Motion Assistant",
+                ai_assistant_panel,
+                expanded=True,
+            )
         if base_sections:
             self.add_sections(base_sections)
         self.add_stretch()
