@@ -110,6 +110,14 @@ from application.ai.agent import (
     GhostGUIAgent,
     ToolExecutionRecord,
 )
+from application.ai.provider_comparison import (
+    ProviderBehaviorComparison,
+    ProviderBehaviorSnapshot,
+    ProviderComparisonCase,
+    ProviderRunStatus,
+    SemanticToolObservation,
+    compare_provider_agents,
+)
 
 __all__ = [
     "AIError",
@@ -160,9 +168,14 @@ __all__ = [
     "ProviderMessage",
     "ProviderRequest",
     "ProviderResponse",
+    "ProviderBehaviorComparison",
+    "ProviderBehaviorSnapshot",
+    "ProviderComparisonCase",
+    "ProviderRunStatus",
     "ReplaceMotionState",
     "RobotCapabilityContext",
     "SemanticMotionError",
+    "SemanticToolObservation",
     "SemanticToolContext",
     "SessionEditRecord",
     "StopReason",
@@ -198,6 +211,7 @@ __all__ = [
     "build_semantic_tool_registry",
     "capture_comparison_frames",
     "capture_motion_frames",
+    "compare_provider_agents",
     "parse_visual_critique",
     "parse_visual_comparison",
     "sample_working_preview_qpos",

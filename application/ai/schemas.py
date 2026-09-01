@@ -7,6 +7,8 @@ from enum import Enum
 import math
 from typing import Any, Mapping
 
+from application.ai.limits import MAX_MOTION_FRAME_BYTES
+
 
 class MessageRole(str, Enum):
     SYSTEM = "system"
@@ -62,6 +64,8 @@ class MotionFrameImage:
     def __post_init__(self) -> None:
         if not self.data:
             raise ValueError("motion frame image data must not be empty")
+        if len(self.data) > MAX_MOTION_FRAME_BYTES:
+            raise ValueError("motion frame image exceeds the local upload-size limit")
         if self.mime_type not in {"image/jpeg", "image/png", "image/webp"}:
             raise ValueError("unsupported motion frame image MIME type")
         if not math.isfinite(self.time_seconds) or self.time_seconds < 0.0:

@@ -79,3 +79,17 @@ motion unchanged and do not stop standard GhostGUI workflows.
 
 The assistant can call only GhostGUI's registered semantic motion tools. It
 cannot execute arbitrary code or generate an unrestricted raw qpos trajectory.
+See [Motion Assistant Security And Data Boundaries](ai_security.md) for the
+exact provider disclosure, credential, payload-limit, and safety contracts.
+
+## Compare Providers
+
+Provider evaluation uses the same committed motion, selection, instruction,
+semantic ToolRegistry, and a fresh detached session for each model. Compare
+validated tool arguments, edit authorship, deterministic validation, and the
+resulting motion rather than wording in the provider response. Token use and
+provider turns are operational measurements, not semantic quality scores.
+
+Normal tests use MockProvider and do not consume provider credits. Live
+Gemini-versus-Claude checks are explicit manual smoke tests requiring both SDKs
+and locally configured credentials.

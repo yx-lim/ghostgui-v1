@@ -98,3 +98,15 @@ other skip is the existing unavailable-Z2 platform fixture.
 
 This page records the current quality contract. Architectural ownership and
 migration details live in [Architecture](architecture.md).
+
+## Motion Assistant Gate
+
+The optional Motion Assistant has a credential-free regression suite covering
+the provider contract, detached working copy, strict semantic tools, human-edit
+priority, atomic Accept/Reject, Gemini and Anthropic conversion, timestamped
+vision input, bounded refinement, provider comparison, payload limits, and
+failure isolation. Normal CI performs no live Gemini or Claude requests.
+
+Security and data-disclosure assumptions are recorded in
+[Motion Assistant Security](ai_security.md); changes to that boundary require
+focused tests plus documentation and architecture validation.

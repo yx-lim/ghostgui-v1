@@ -98,6 +98,7 @@ class VisualComparisonTests(unittest.IsolatedAsyncioTestCase):
         request = provider.requests[0]
         self.assertEqual(request.tools, ())
         self.assertEqual(request.response_schema, VISUAL_COMPARISON_RESPONSE_SCHEMA)
+        self.assertEqual(request.max_output_tokens, 4096)
         self.assertIn("never image", request.messages[0].text)
 
     async def test_comparison_requires_complete_identically_timed_pairs(self):
@@ -110,6 +111,26 @@ class VisualComparisonTests(unittest.IsolatedAsyncioTestCase):
                 comparison_frames=_comparison_frames()[:-1],
             )
         self.assertEqual(provider.remaining_steps, 1)
+
+    async def test_comparison_goal_and_response_sizes_are_bounded(self):
+        unused = MockProvider([ProviderResponse(text="unused")])
+        with self.assertRaisesRegex(VisualRefinementError, "goal"):
+            await VisualComparator(unused).run(
+                "x" * 16_001,
+                model="mock",
+                motion_context={},
+                comparison_frames=_comparison_frames(),
+            )
+        self.assertEqual(unused.remaining_steps, 1)
+
+        oversized = MockProvider([ProviderResponse(text="x" * 65_537)])
+        with self.assertRaisesRegex(VisualRefinementError, "response"):
+            await VisualComparator(oversized).run(
+                "Improve it",
+                model="mock",
+                motion_context={},
+                comparison_frames=_comparison_frames(),
+            )
 
 
 class VisualRefinementStepTests(unittest.IsolatedAsyncioTestCase):

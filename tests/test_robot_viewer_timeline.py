@@ -1721,12 +1721,13 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertEqual(
             right_titles,
-            ["Status", "IK / Constraints"],
+            ["Status", "Motion Assistant", "IK / Constraints"],
         )
         expected_visible = {
             "Target": True,
             "Editing Mode": True,
             "Planning": False,
+            "Motion Assistant": True,
             "IK / Constraints": False,
             "Status": True,
         }
@@ -1939,7 +1940,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.viewer.timeslice_context_panel,
         )
         self.assertIs(
-            self.window.right_sidebar_content.sections[1].content,
+            self.window.right_sidebar_content.sections[2].content,
             self.window.controls.preview_ik_panel,
         )
         self.assertIs(

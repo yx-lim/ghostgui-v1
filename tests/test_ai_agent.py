@@ -231,6 +231,29 @@ class GhostGUIAgentTests(unittest.IsolatedAsyncioTestCase):
         system_prompt = provider.requests[0].messages[0].text
         self.assertIn("parallel tool calls", system_prompt)
         self.assertIn("validates staged motion automatically", system_prompt)
+        self.assertEqual(
+            provider.requests[0].max_output_tokens,
+            AgentLimits().max_output_tokens,
+        )
+
+    async def test_local_payload_limits_apply_before_or_after_provider_work(self):
+        _committed, _store, session, context, provider, agent = _setup(
+            [ProviderResponse(text="unused")],
+            limits=AgentLimits(max_instruction_characters=8),
+        )
+        with self.assertRaisesRegex(AgentLimitError, "instruction"):
+            await agent.run("instruction too long", model="mock", context=context)
+        self.assertEqual(provider.remaining_steps, 1)
+        self.assertEqual(session.state, AIEditSessionState.READY)
+
+        _committed, _store, session, context, provider, agent = _setup(
+            [ProviderResponse(text="response too long")],
+            limits=AgentLimits(max_response_characters=8),
+        )
+        with self.assertRaisesRegex(AgentLimitError, "response"):
+            await agent.run("short", model="mock", context=context)
+        self.assertEqual(provider.remaining_steps, 0)
+        self.assertEqual(session.state, AIEditSessionState.READY)
 
     async def test_provider_failure_and_timeout_leave_session_usable(self):
         _committed, _store, session, context, _provider, agent = _setup([

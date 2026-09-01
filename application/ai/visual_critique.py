@@ -9,6 +9,11 @@ import math
 from typing import Mapping
 
 from application.ai.errors import ProviderCancelledError, ProviderCapabilityError
+from application.ai.limits import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    MAX_AI_INSTRUCTION_CHARACTERS,
+    MAX_AI_RESPONSE_CHARACTERS,
+)
 from application.ai.providers import CancellationSignal, LLMProvider
 from application.ai.schemas import (
     MessageRole,
@@ -125,6 +130,10 @@ class VisualCritic:
     ) -> VisualCritiqueResult:
         if not instruction.strip():
             raise ValueError("visual critique instruction must not be empty")
+        if len(instruction) > MAX_AI_INSTRUCTION_CHARACTERS:
+            raise VisualCritiqueError(
+                "visual critique instruction exceeds the local size limit"
+            )
         if not 4 <= len(motion_frames) <= 8:
             raise VisualCritiqueError("visual critique requires 4--8 motion frames")
         capabilities = self.provider.capabilities
@@ -162,6 +171,7 @@ class VisualCritic:
             model=model,
             messages=tuple(messages),
             response_schema=VISUAL_CRITIQUE_RESPONSE_SCHEMA,
+            max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
         )
         try:
             response = await asyncio.wait_for(
@@ -171,6 +181,10 @@ class VisualCritic:
         except asyncio.TimeoutError as error:
             raise VisualCritiqueError("visual critique request timed out") from error
         _raise_if_cancelled(cancellation_token)
+        if len(response.text) > MAX_AI_RESPONSE_CHARACTERS:
+            raise VisualCritiqueError(
+                "visual critique response exceeds the local size limit"
+            )
         if response.tool_calls:
             raise VisualCritiqueError("critique-only mode cannot execute tool calls")
         critique = parse_visual_critique(response.text)

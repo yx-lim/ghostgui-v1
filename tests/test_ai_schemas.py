@@ -15,9 +15,20 @@ from application.ai.schemas import (
     StopReason,
     ToolCall,
 )
+from application.ai.limits import MAX_MOTION_FRAME_BYTES
 
 
 class AISchemaTests(unittest.TestCase):
+    def test_motion_frame_rejects_oversized_upload(self):
+        with self.assertRaisesRegex(ValueError, "upload-size"):
+            MotionFrameImage(
+                data=b"x" * (MAX_MOTION_FRAME_BYTES + 1),
+                mime_type="image/png",
+                time_seconds=0.0,
+                variant=ImageVariant.ORIGINAL,
+                comparison_id="frame-1",
+            )
+
     def test_motion_entity_reference_is_opaque(self):
         reference = MotionEntityRef("keyframe-id:v1:abc123")
         self.assertEqual(reference.identifier, "keyframe-id:v1:abc123")

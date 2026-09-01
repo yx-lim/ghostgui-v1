@@ -24,6 +24,11 @@ in this repository.
   Forward or Ping-pong repetition of committed motion ranges.
 - Transaction recovery, cancellation, shutdown, architecture, packaging, and
   visual regression tests.
+- An optional provider-neutral Motion Assistant with detached editing,
+  semantic tools, Gemini and Claude adapters, timestamped visual critique,
+  bounded visual refinement, and semantic provider comparison.
+- Motion Assistant security and data-disclosure documentation with local
+  request, response, tool-result, token, and rendered-frame limits.
 
 ### Changed
 

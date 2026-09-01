@@ -112,6 +112,7 @@ class VisualCriticTests(unittest.IsolatedAsyncioTestCase):
         request = provider.requests[0]
         self.assertEqual(request.tools, ())
         self.assertEqual(request.response_schema, VISUAL_CRITIQUE_RESPONSE_SCHEMA)
+        self.assertEqual(request.max_output_tokens, 4096)
         self.assertEqual(request.messages[-1].motion_frames, _frames())
         self.assertIn("approximate motion time", request.messages[0].text)
         self.assertNotIn("qpos", request.messages[-1].text)
@@ -179,6 +180,26 @@ class VisualCriticTests(unittest.IsolatedAsyncioTestCase):
                 slow_provider,
                 request_timeout_seconds=0.001,
             ).run(
+                "Critique",
+                model="mock",
+                motion_context={},
+                motion_frames=_frames(),
+            )
+
+    async def test_local_instruction_and_response_sizes_are_bounded(self):
+        unused = MockProvider([ProviderResponse(text="unused")])
+        with self.assertRaisesRegex(VisualCritiqueError, "instruction"):
+            await VisualCritic(unused).run(
+                "x" * 16_001,
+                model="mock",
+                motion_context={},
+                motion_frames=_frames(),
+            )
+        self.assertEqual(unused.remaining_steps, 1)
+
+        oversized = MockProvider([ProviderResponse(text="x" * 65_537)])
+        with self.assertRaisesRegex(VisualCritiqueError, "response"):
+            await VisualCritic(oversized).run(
                 "Critique",
                 model="mock",
                 motion_context={},

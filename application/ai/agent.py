@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import hashlib
 import json
 import math
 
 from application.ai.edit_session import AIEditSessionState
 from application.ai.errors import ProviderCancelledError
+from application.ai.limits import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    MAX_AI_INSTRUCTION_CHARACTERS,
+    MAX_AI_OUTPUT_TOKENS,
+    MAX_AI_RESPONSE_CHARACTERS,
+    MAX_TOOL_RESULT_CHARACTERS,
+)
 from application.ai.providers import CancellationSignal, LLMProvider
 from application.ai.schemas import (
     MessageRole,
@@ -58,10 +66,29 @@ class AgentLimits:
     max_provider_turns: int = 17
     max_tool_calls: int = 16
     request_timeout_seconds: float = 60.0
+    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    max_instruction_characters: int = MAX_AI_INSTRUCTION_CHARACTERS
+    max_response_characters: int = MAX_AI_RESPONSE_CHARACTERS
+    max_tool_result_characters: int = MAX_TOOL_RESULT_CHARACTERS
 
     def __post_init__(self) -> None:
         if self.max_provider_turns <= 0 or self.max_tool_calls <= 0:
             raise ValueError("agent iteration limits must be positive")
+        if min(
+            self.max_output_tokens,
+            self.max_instruction_characters,
+            self.max_response_characters,
+            self.max_tool_result_characters,
+        ) <= 0:
+            raise ValueError("agent payload limits must be positive")
+        if self.max_output_tokens > MAX_AI_OUTPUT_TOKENS:
+            raise ValueError("agent output-token limit exceeds the local safety bound")
+        if self.max_instruction_characters > MAX_AI_INSTRUCTION_CHARACTERS:
+            raise ValueError("agent instruction limit exceeds the local safety bound")
+        if self.max_response_characters > MAX_AI_RESPONSE_CHARACTERS:
+            raise ValueError("agent response limit exceeds the local safety bound")
+        if self.max_tool_result_characters > MAX_TOOL_RESULT_CHARACTERS:
+            raise ValueError("agent tool-result limit exceeds the local safety bound")
         if (
             not math.isfinite(self.request_timeout_seconds)
             or self.request_timeout_seconds <= 0.0
@@ -116,6 +143,8 @@ class GhostGUIAgent:
     ) -> AgentRunResult:
         if not instruction.strip():
             raise ValueError("AI edit instruction must not be empty")
+        if len(instruction) > self.limits.max_instruction_characters:
+            raise AgentLimitError("AI edit instruction exceeds the local size limit")
         if context.session.state in {
             AIEditSessionState.ACCEPTED,
             AIEditSessionState.REJECTED,
@@ -140,12 +169,15 @@ class GhostGUIAgent:
                     model=model,
                     messages=tuple(messages),
                     tools=self.tools.definitions(),
+                    max_output_tokens=self.limits.max_output_tokens,
                 ),
                 context,
                 cancellation_token,
             )
             total_input_tokens += response.usage.input_tokens
             total_output_tokens += response.usage.output_tokens
+            if len(response.text) > self.limits.max_response_characters:
+                raise AgentLimitError("AI provider response exceeds the local size limit")
             if not response.text and not response.tool_calls:
                 raise AgentError("provider returned an empty response")
             messages.append(ProviderMessage(
@@ -180,10 +212,18 @@ class GhostGUIAgent:
                         call.arguments,
                         context=context,
                     )
-                    output = _json_value(output)
+                    output = _json_value(
+                        output,
+                        max_characters=self.limits.max_tool_result_characters,
+                    )
                     succeeded = True
+                except AgentLimitError:
+                    raise
                 except Exception as error:
-                    output = {"error": str(error)}
+                    message = str(error)
+                    if len(message) > self.limits.max_tool_result_characters:
+                        message = "tool failed with an oversized error message"
+                    output = {"error": message}
                     succeeded = False
                     signature = _call_signature(call)
                     failed_call_attempts[signature] = (
@@ -241,7 +281,10 @@ class GhostGUIAgent:
             sort_keys=True,
             separators=(",", ":"),
         )
-        user_text = f"GhostGUI context:\n{context_text}\n\nUser instruction:\n{instruction.strip()}"
+        user_text = (
+            f"GhostGUI context:\n{context_text}\n\n"
+            f"User instruction:\n{instruction.strip()}"
+        )
         if self.provider.capabilities.supports_system_messages:
             return [
                 ProviderMessage(MessageRole.SYSTEM, text=self.system_prompt),
@@ -255,11 +298,10 @@ class GhostGUIAgent:
     def _validate_if_needed(self, context):
         if not self.auto_validate or not context.session.has_changes:
             return None
-        result = _json_value(self.tools.execute(
-            "validate_motion",
-            {},
-            context=context,
-        ))
+        result = _json_value(
+            self.tools.execute("validate_motion", {}, context=context),
+            max_characters=self.limits.max_tool_result_characters,
+        )
         if not isinstance(result, dict) or result.get("valid") is not True:
             issues = result.get("issues", []) if isinstance(result, dict) else []
             detail = "; ".join(str(issue) for issue in issues) or "unknown issue"
@@ -272,9 +314,11 @@ class GhostGUIAgent:
             raise ProviderCancelledError("AI agent run was cancelled")
 
 
-def _json_value(value):
+def _json_value(value, *, max_characters: int | None = None):
     try:
         encoded = json.dumps(value, allow_nan=False)
+        if max_characters is not None and len(encoded) > max_characters:
+            raise AgentLimitError("tool result exceeds the local size limit")
         return json.loads(encoded)
     except (TypeError, ValueError) as error:
         raise AgentError("tool returned a non-JSON result") from error
@@ -290,4 +334,5 @@ def _call_signature(call) -> str:
         )
     except (TypeError, ValueError):
         arguments = repr(dict(call.arguments))
-    return f"{call.name}:{arguments}"
+    digest = hashlib.sha256(arguments.encode("utf-8")).hexdigest()
+    return f"{call.name}:{digest}"

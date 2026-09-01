@@ -90,6 +90,26 @@ response conversion is covered without network access by:
 python3 -m unittest tests.test_ai_anthropic_provider -v
 ```
 
+Provider comparison is likewise deterministic in CI:
+
+```bash
+python3 -m unittest tests.test_ai_provider_comparison -v
+```
+
+Prepare each comparison case from the same committed motion, selection, and
+instruction, but give it a separate detached `AIEditSession`. The comparison
+runner executes cases sequentially and reports normalized completion status,
+semantic tool names and argument digests, tool success, edit authorship,
+validation, and the resulting motion digest. Provider-native call IDs and prose
+are deliberately excluded; token use and provider-turn counts are reported as
+operational differences, not semantic quality. Live Gemini-versus-Claude runs
+remain an explicit manual smoke test because they require both local SDKs and
+credentials and can consume provider credits.
+
+The AI regression suite also checks local instruction, response, tool-result,
+output-token, and rendered-frame budgets. Comparison preflight failures must be
+detected before any provider callback is invoked.
+
 ## Package Smoke Test
 
 Build and inspect a wheel, then install it into a clean environment. Run the
