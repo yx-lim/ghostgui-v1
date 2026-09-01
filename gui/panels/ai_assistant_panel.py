@@ -29,6 +29,7 @@ class AIAssistantPanel(QWidget):
 
     submit_requested = Signal(str)
     critique_requested = Signal(str)
+    visual_refine_requested = Signal(str)
     refine_requested = Signal(str)
     preview_requested = Signal()
     accept_requested = Signal()
@@ -95,12 +96,19 @@ class AIAssistantPanel(QWidget):
         self.reject_button.setObjectName("aiRejectButton")
         self.refine_button = QPushButton("Refine")
         self.refine_button.setObjectName("aiRefineButton")
+        self.visual_refine_button = QPushButton("Visual refine")
+        self.visual_refine_button.setObjectName("aiVisualRefineButton")
+        self.visual_refine_button.setToolTip(
+            "Compare original and staged frames, then apply bounded semantic refinements"
+        )
         self.accept_button.clicked.connect(self.accept_requested.emit)
         self.reject_button.clicked.connect(self.reject_requested.emit)
         self.refine_button.clicked.connect(self._emit_refine)
+        self.visual_refine_button.clicked.connect(self._emit_visual_refine)
         for button in (self.accept_button, self.reject_button, self.refine_button):
             decision_row.addWidget(button)
         layout.addLayout(decision_row)
+        layout.addWidget(self.visual_refine_button)
 
         self.prompt_input = QPlainTextEdit()
         self.prompt_input.setObjectName("aiPromptInput")
@@ -156,15 +164,19 @@ class AIAssistantPanel(QWidget):
         self.accept_button.setEnabled(staged)
         self.reject_button.setEnabled(staged)
         self.refine_button.setEnabled(staged)
+        self.visual_refine_button.setEnabled(staged)
 
     def begin_request(
         self,
         *,
         refinement: bool = False,
         critique: bool = False,
+        visual_refinement: bool = False,
     ) -> None:
         self.set_state(AIAssistantPanelState.RUNNING)
-        if critique:
+        if visual_refinement:
+            self.response_label.setText("Comparing and refining staged motion…")
+        elif critique:
             self.response_label.setText("Inspecting timestamped rendered frames…")
         elif refinement:
             self.response_label.setText("Refining the staged working copy…")
@@ -252,3 +264,6 @@ class AIAssistantPanel(QWidget):
     def _emit_critique(self) -> None:
         instruction = self._instruction() or "What is visually wrong with this motion?"
         self.critique_requested.emit(instruction)
+
+    def _emit_visual_refine(self) -> None:
+        self.visual_refine_requested.emit(self._instruction())

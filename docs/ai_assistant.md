@@ -52,6 +52,22 @@ AI edit session, and does not change committed motion. If an Orange preview is
 already staged, **Critique** inspects that detached working copy while leaving
 it available for Accept, Reject, or Refine.
 
+## Visual Refinement
+
+After an edit is staged, choose **Visual refine** to compare the committed
+motion with the staged candidate at identical timestamps. GhostGUI separates
+each cycle into observation, a small semantic plan, and execution through the
+same strict motion tools used by ordinary AI edits. It never asks the provider
+for raw trajectory samples or executes provider-generated code.
+
+Automatic refinement is capped at two edit iterations. GhostGUI then performs
+one final read-only comparison and returns control for Orange preview review,
+Accept, Reject, or manual Refine. If the final comparison still finds an issue,
+the panel reports that the automatic limit was reached instead of continuing
+indefinitely. Any text entered before choosing **Visual refine** is treated as
+additional user direction and user-authored or protected Keyframes retain
+priority.
+
 ## Failures And Cancellation
 
 Use **Cancel request** to stop a running provider call. Missing credentials,

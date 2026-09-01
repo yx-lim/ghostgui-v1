@@ -22,7 +22,13 @@ from application.ai import (
     TimestampMotionIdentityResolver,
     VisualCritic,
     VisualCritiqueResult,
+    VisualRefinementAction,
+    VisualRefinementLimits,
+    VisualRefinementProgress,
+    VisualRefinementStep,
+    VisualRefinementStepResult,
     build_semantic_tool_registry,
+    capture_comparison_frames,
     capture_motion_frames,
     sample_working_preview_qpos,
 )
@@ -43,7 +49,6 @@ from application.ai.schemas import (
 )
 from gui.ai_frame_capture import RobotViewerFrameRenderer
 from gui.ai_settings_dialog import AISettingsDialog
-from gui.panels.ai_assistant_panel import AIAssistantPanelState
 
 
 DEFAULT_AI_PROVIDER = "gemini"
@@ -65,6 +70,10 @@ class AIAssistantController:
         self.active_handle = None
         self._session_api_key = None
         self._settings_dialog = None
+        self._session_goal = ""
+        self._visual_refinement_progress = None
+        self._visual_refinement_plan = None
+        self._visual_refinement_goal = ""
 
         self.provider_name = str(
             settings.value("ai/provider", DEFAULT_AI_PROVIDER)
@@ -73,6 +82,7 @@ class AIAssistantController:
         self.panel.set_provider(self.provider_name, self.model)
         self.panel.submit_requested.connect(self.start_edit)
         self.panel.critique_requested.connect(self.start_critique)
+        self.panel.visual_refine_requested.connect(self.start_visual_refinement)
         self.panel.refine_requested.connect(self.refine)
         self.panel.preview_requested.connect(self.preview)
         self.panel.accept_requested.connect(self.accept)
@@ -99,12 +109,194 @@ class AIAssistantController:
                 self.host.document,
                 metadata_store=self.metadata_store,
             )
+        if not self.session_staged:
+            self._session_goal = instruction.strip()
         self._start_request(instruction, refinement=False)
 
     def refine(self, instruction: str) -> None:
         if not self.session_staged or self.active_handle is not None:
             return
+        self._session_goal = self._combined_goal(instruction)
         self._start_request(instruction, refinement=True)
+
+    def start_visual_refinement(self, instruction: str = "") -> None:
+        if not self.session_staged or self.active_handle is not None:
+            return
+        if self.host.robot_model_3d is None:
+            self.panel.show_error(
+                "No robot model is available for visual refinement.",
+                session_staged=True,
+            )
+            return
+        self._visual_refinement_goal = self._combined_goal(instruction)
+        self._visual_refinement_progress = VisualRefinementProgress(
+            VisualRefinementLimits(max_edit_iterations=2)
+        )
+        try:
+            self._visual_refinement_plan = FrameSampler().plan(
+                self.session.working_document,
+                FrameSamplingRequest(
+                    suspected_times=(float(self.host.viewer_3d.display_time),),
+                ),
+            )
+        except Exception as error:
+            self._clear_visual_refinement()
+            self.panel.show_error(str(error), session_staged=True)
+            return
+        self.panel.begin_request(visual_refinement=True)
+        self.host.set_ai_motion_controls_enabled(False)
+        self._submit_visual_refinement_step(allow_edit=True)
+
+    def _submit_visual_refinement_step(self, *, allow_edit: bool) -> None:
+        try:
+            renderer = RobotViewerFrameRenderer(self.host.viewer_3d)
+            frames = capture_comparison_frames(
+                self.host.document,
+                self.session.working_document,
+                self._visual_refinement_plan,
+                renderer,
+            )
+            motion_context = self._critique_context(self.session.working_document)
+            motion = GhostGUIMotionService(self.host.robot_model_3d)
+            tools = build_semantic_tool_registry(motion)
+            metadata = MotionMetadataService(
+                self.metadata_store,
+                self.identity_resolver,
+            )
+            semantic_context = SemanticToolContext(
+                session=self.session,
+                metadata=metadata,
+                selection=EditorSelectionContext(
+                    logical_frame=self.host.controls.frame_box.currentText(),
+                ),
+                motion_name=(
+                    None
+                    if self.host.current_project is None
+                    else self.host.current_project.project_name
+                ),
+            )
+        except Exception as error:
+            self._clear_visual_refinement()
+            self.panel.show_error(str(error), session_staged=True)
+            return
+
+        def work(token):
+            return asyncio.run(self._run_visual_refinement_step(
+                self._visual_refinement_goal,
+                motion_context,
+                frames,
+                tools,
+                semantic_context,
+                allow_edit,
+                token,
+            ))
+
+        self.active_handle = self.background_jobs.submit_cancellable(
+            "AI visual refinement",
+            work,
+            self._visual_refinement_step_succeeded,
+            self._request_failed,
+            self._request_cancelled,
+        )
+        if self.active_handle is None:
+            self._clear_visual_refinement()
+            self.panel.show_error(
+                "The background worker is shutting down.",
+                session_staged=True,
+            )
+
+    async def _run_visual_refinement_step(
+        self,
+        goal,
+        motion_context,
+        frames,
+        tools,
+        semantic_context,
+        allow_edit,
+        token,
+    ):
+        provider = self._provider()
+        try:
+            return await VisualRefinementStep(
+                provider,
+                tools,
+                limits=self._visual_refinement_progress.limits,
+            ).run(
+                goal,
+                model=self.model,
+                motion_context=motion_context,
+                comparison_frames=frames,
+                semantic_context=semantic_context,
+                allow_edit=allow_edit,
+                cancellation_token=token,
+            )
+        finally:
+            await provider.aclose()
+
+    def _visual_refinement_step_succeeded(
+        self,
+        result: VisualRefinementStepResult,
+    ) -> None:
+        self.active_handle = None
+        try:
+            action = self._visual_refinement_progress.after_step(result)
+            self._update_visual_refinement_plan(result)
+        except Exception as error:
+            self._request_failed(error)
+            return
+        if action is VisualRefinementAction.REFINE:
+            self._submit_visual_refinement_step(allow_edit=True)
+            return
+        if action is VisualRefinementAction.ASSESS_ONLY:
+            self._submit_visual_refinement_step(allow_edit=False)
+            return
+        self._finish_visual_refinement(result)
+
+    def _update_visual_refinement_plan(self, result) -> None:
+        suspected = tuple(
+            observation.time_seconds
+            for observation in result.comparison_result.comparison.observations
+            if observation.time_seconds is not None
+        )
+        if not suspected:
+            return
+        self._visual_refinement_plan = FrameSampler().plan(
+            self.session.working_document,
+            FrameSamplingRequest(suspected_times=suspected),
+        )
+
+    def _finish_visual_refinement(self, result) -> None:
+        comparison = result.comparison_result.comparison
+        edit_count = self._visual_refinement_progress.completed_edit_iterations
+        lines = tuple(comparison.reasons)
+        lines += tuple(
+            self._format_observation(value)
+            for value in comparison.observations
+        )
+        if edit_count:
+            lines += (f"Visual semantic refinement iterations: {edit_count}",)
+        if comparison.should_refine and (
+            edit_count >= self._visual_refinement_progress.limits.max_edit_iterations
+        ):
+            lines += ("Automatic refinement limit reached; review remaining issues",)
+        self.panel.show_proposal(
+            comparison.summary,
+            lines or ("No additional visual refinement was needed",),
+        )
+        self._session_goal = self._visual_refinement_goal
+        self._clear_visual_refinement()
+        self.preview()
+
+    def _clear_visual_refinement(self) -> None:
+        self._visual_refinement_progress = None
+        self._visual_refinement_plan = None
+        self._visual_refinement_goal = ""
+
+    def _combined_goal(self, instruction: str) -> str:
+        addition = instruction.strip()
+        if self._session_goal and addition:
+            return f"{self._session_goal}\nAdditional user direction: {addition}"
+        return self._session_goal or addition or "Improve the remaining visual motion issues."
 
     def start_critique(self, instruction: str) -> None:
         """Inspect committed or staged motion without opening an edit session."""
@@ -320,6 +512,7 @@ class AIAssistantController:
                 result.text.strip() or "The assistant made no motion changes."
             )
             self.session = None
+            self._session_goal = ""
             self.host.set_ai_motion_controls_enabled(True)
 
     def _request_failed(self, error: Exception) -> None:
@@ -328,12 +521,14 @@ class AIAssistantController:
             self._request_cancelled()
             return
         self.panel.show_error(str(error), session_staged=self.session_staged)
+        self._clear_visual_refinement()
         if not self.session_staged:
             self.host.set_ai_motion_controls_enabled(True)
 
     def _request_cancelled(self) -> None:
         self.active_handle = None
         self.panel.show_cancelled(session_staged=self.session_staged)
+        self._clear_visual_refinement()
         if not self.session_staged:
             self.host.set_ai_motion_controls_enabled(True)
 
@@ -392,6 +587,8 @@ class AIAssistantController:
             return
         self.panel.reset_session("AI motion edit accepted as one history entry.")
         self.session = None
+        self._session_goal = ""
+        self._clear_visual_refinement()
         self.host.set_ai_motion_controls_enabled(True)
 
     def reject(self) -> None:
@@ -405,6 +602,8 @@ class AIAssistantController:
         self.host.viewer_3d.cancel_preview()
         self.panel.reset_session("AI working copy rejected; committed motion is unchanged.")
         self.session = None
+        self._session_goal = ""
+        self._clear_visual_refinement()
         self.host.set_ai_motion_controls_enabled(True)
 
     def open_settings(self) -> None:

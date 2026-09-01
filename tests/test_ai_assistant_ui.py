@@ -38,6 +38,7 @@ class AIAssistantPanelTests(unittest.TestCase):
         self.panel.show_proposal("Done", ("Modified 2 Keyframes",))
         self.assertEqual(self.panel.state, AIAssistantPanelState.STAGED)
         self.assertTrue(self.panel.accept_button.isEnabled())
+        self.assertTrue(self.panel.visual_refine_button.isEnabled())
         self.assertEqual(self.panel.proposal_list.item(0).text(), "Modified 2 Keyframes")
 
     def test_apply_and_refine_emit_trimmed_instructions(self):
@@ -74,6 +75,17 @@ class AIAssistantPanelTests(unittest.TestCase):
         )
         self.assertFalse(self.panel.accept_button.isEnabled())
         self.assertEqual(self.panel.proposal_heading.text(), "Visual observations")
+
+    def test_visual_refine_is_available_only_for_a_staged_working_copy(self):
+        refinements = []
+        self.panel.visual_refine_requested.connect(refinements.append)
+        self.assertFalse(self.panel.visual_refine_button.isEnabled())
+
+        self.panel.show_proposal("Done", ("Moved pelvis",))
+        self.panel.prompt_input.setPlainText("  keep the feet planted  ")
+        self.panel.visual_refine_button.click()
+
+        self.assertEqual(refinements, ["keep the feet planted"])
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 unavailable")

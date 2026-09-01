@@ -72,6 +72,16 @@ the no-tool request boundary are covered by:
 python3 -m unittest tests.test_ai_visual_critique -v
 ```
 
+The bounded visual Observe/Plan/Edit contract is covered by:
+
+```bash
+python3 -m unittest tests.test_ai_visual_refinement -v
+```
+
+These tests verify complete timestamp-matched image pairs, comparison-only
+provider turns, semantic ToolRegistry execution, unchanged committed motion,
+the two-edit default, and the mandatory final read-only assessment.
+
 Gemini smoke tests are opt-in manual checks. Normal CI must not require a
 Gemini key or consume provider credits. Claude provider tests remain deferred
 until AnthropicProvider is implemented.

@@ -197,8 +197,10 @@ mode, and **Gizmo** shows or hides it.
 The right sidebar contains a compact **Status** summary, the optional **Motion
 Assistant**, and **IK / Constraints** controls. Expand **Details** to inspect
 solver and operation diagnostics. Motion Assistant stages language edits on a
-detached working copy; use **Accept**, **Reject**, or **Refine** after reviewing
-its Orange preview. See [Motion Assistant](ai_assistant.md) for secure API-key
+detached working copy; use **Critique** for read-only visual observations, or
+**Visual refine** for a bounded before/after semantic refinement loop. Use
+**Accept**, **Reject**, or **Refine** after reviewing its Orange preview. See
+[Motion Assistant](ai_assistant.md) for secure API-key
 setup and failure behavior.
 
 Drag the dividers to resize the sidebars. Use the divider arrows or
