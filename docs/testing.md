@@ -82,9 +82,13 @@ These tests verify complete timestamp-matched image pairs, comparison-only
 provider turns, semantic ToolRegistry execution, unchanged committed motion,
 the two-edit default, and the mandatory final read-only assessment.
 
-Gemini smoke tests are opt-in manual checks. Normal CI must not require a
-Gemini key or consume provider credits. Claude provider tests remain deferred
-until AnthropicProvider is implemented.
+Gemini and Claude smoke tests are opt-in manual checks. Normal CI must not
+require either provider key or consume provider credits. Anthropic request and
+response conversion is covered without network access by:
+
+```bash
+python3 -m unittest tests.test_ai_anthropic_provider -v
+```
 
 ## Package Smoke Test
 
@@ -176,8 +180,8 @@ structure. It skips outside the explicitly configured visual environment.
   with **Reject** and confirm committed motion does not change.
 - Cancel a request, remove network access, use an invalid key, and exercise a
   rate-limited response; confirm the error stays inside Motion Assistant.
-- Run the same focused request with MockProvider and an opt-in Gemini smoke
-  configuration and compare semantic tool results rather than provider-native
+- Run the same focused request with MockProvider and opt-in Gemini and Claude
+  smoke configurations. Compare semantic tool results rather than provider-native
   response objects.
 
 ### Model Checks

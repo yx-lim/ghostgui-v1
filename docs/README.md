@@ -16,7 +16,7 @@ GhostGUI.
 - [Data Formats](data_formats.md) defines qpos and trajectory CSV files.
 - [Motion Math](motion_math.md) explains interpolation, Jacobian IK, posture
   projection, and trajectory validation.
-- [Motion Assistant](ai_assistant.md) explains secure Gemini setup and the
+- [Motion Assistant](ai_assistant.md) explains secure Gemini/Claude setup and the
   staged Apply, Preview, Critique, Visual refine, Accept, Reject, and Refine
   workflow.
 - [Models](models.md) describes bundled models, assets, and runtime caching.

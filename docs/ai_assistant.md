@@ -4,19 +4,21 @@ The right-sidebar **Motion Assistant** applies focused language edits to the
 current motion. AI support is optional: standard GhostGUI editing continues to
 work without an AI package or API key.
 
-## Configure Gemini
+## Configure Gemini Or Claude
 
 Open **Settings** in the Motion Assistant and choose the provider and model.
-The model field is editable so a newer compatible Gemini model can be selected
-without changing GhostGUI.
+Choose **Gemini** or **Anthropic**. The model field is editable so a newer
+compatible Gemini or Claude model can be selected without changing GhostGUI.
 
 Enter a Bring Your Own Key only when AI support is wanted. With **Store
 securely** enabled, GhostGUI writes the key to the operating-system credential
 store. Without it, the entered key remains in memory for the current process.
 GhostGUI never writes the key to a project or its plain UI preferences. The
-official `GOOGLE_API_KEY` and `GEMINI_API_KEY` environment variables remain
-supported. **Test Connection** performs a small provider request without
-changing the motion.
+official `GOOGLE_API_KEY`, `GEMINI_API_KEY`, and `ANTHROPIC_API_KEY`
+environment variables remain supported. Session-only keys are kept separately
+per provider so switching providers cannot reuse a key with the wrong service.
+**Test Connection** performs a small provider request without changing the
+motion.
 
 ## Edit And Review
 

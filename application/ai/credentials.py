@@ -38,16 +38,18 @@ class CredentialStorageError(RuntimeError):
 
 @dataclass(frozen=True)
 class EnvironmentCredentialSource:
-    """Read Gemini's official environment variables without mutating them."""
+    """Read providers' official environment variables without mutating them."""
 
     environ: Mapping[str, str] | None = None
 
     def get_secret(self, provider_name: str) -> str | None:
-        if provider_name != "gemini":
-            return None
         values = os.environ if self.environ is None else self.environ
-        # The Gemini SDK gives GOOGLE_API_KEY precedence when both are present.
-        return values.get("GOOGLE_API_KEY") or values.get("GEMINI_API_KEY") or None
+        if provider_name == "gemini":
+            # The Gemini SDK gives GOOGLE_API_KEY precedence when both are present.
+            return values.get("GOOGLE_API_KEY") or values.get("GEMINI_API_KEY") or None
+        if provider_name == "anthropic":
+            return values.get("ANTHROPIC_API_KEY") or None
+        return None
 
 
 @dataclass(frozen=True)

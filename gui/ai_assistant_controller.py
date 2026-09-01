@@ -41,6 +41,11 @@ from application.ai.providers.gemini import (
     DEFAULT_GEMINI_CAPABILITIES,
     GeminiProvider,
 )
+from application.ai.providers.anthropic import (
+    DEFAULT_ANTHROPIC_CAPABILITIES,
+    DEFAULT_CLAUDE_MODEL,
+    AnthropicProvider,
+)
 from application.ai.schemas import (
     ImageVariant,
     MessageRole,
@@ -53,6 +58,10 @@ from gui.ai_settings_dialog import AISettingsDialog
 
 DEFAULT_AI_PROVIDER = "gemini"
 DEFAULT_AI_MODEL = "gemini-3.7-flash"
+DEFAULT_PROVIDER_MODELS = {
+    "gemini": DEFAULT_AI_MODEL,
+    "anthropic": DEFAULT_CLAUDE_MODEL,
+}
 
 
 class AIAssistantController:
@@ -68,7 +77,7 @@ class AIAssistantController:
         self.identity_resolver = TimestampMotionIdentityResolver()
         self.session = None
         self.active_handle = None
-        self._session_api_key = None
+        self._session_api_keys = {}
         self._settings_dialog = None
         self._session_goal = ""
         self._visual_refinement_progress = None
@@ -78,7 +87,10 @@ class AIAssistantController:
         self.provider_name = str(
             settings.value("ai/provider", DEFAULT_AI_PROVIDER)
         )
-        self.model = str(settings.value("ai/model", DEFAULT_AI_MODEL))
+        self.model = str(settings.value(
+            "ai/model",
+            DEFAULT_PROVIDER_MODELS.get(self.provider_name, DEFAULT_AI_MODEL),
+        ))
         self.panel.set_provider(self.provider_name, self.model)
         self.panel.submit_requested.connect(self.start_edit)
         self.panel.critique_requested.connect(self.start_critique)
@@ -497,9 +509,12 @@ class AIAssistantController:
             await provider.aclose()
 
     def _provider(self, *, api_key=None):
-        if self.provider_name != "gemini":
-            raise ValueError(f"Unsupported AI provider: {self.provider_name}")
-        return GeminiProvider(api_key=api_key or self._session_api_key)
+        key = api_key or self._session_api_keys.get(self.provider_name)
+        if self.provider_name == "gemini":
+            return GeminiProvider(api_key=key)
+        if self.provider_name == "anthropic":
+            return AnthropicProvider(api_key=key)
+        raise ValueError(f"Unsupported AI provider: {self.provider_name}")
 
     def _request_succeeded(self, result: AgentRunResult) -> None:
         self.active_handle = None
@@ -607,14 +622,20 @@ class AIAssistantController:
         self.host.set_ai_motion_controls_enabled(True)
 
     def open_settings(self) -> None:
-        secure_key_available = bool(
-            self.credential_store.get_secret(self.provider_name)
-        )
+        secure_key_availability = {
+            provider: bool(self.credential_store.get_secret(provider))
+            for provider in DEFAULT_PROVIDER_MODELS
+        }
         dialog = AISettingsDialog(
             provider=self.provider_name,
             model=self.model,
-            capabilities=DEFAULT_GEMINI_CAPABILITIES,
-            secure_key_available=secure_key_available,
+            capabilities=self._provider_capabilities(self.provider_name),
+            secure_key_available=secure_key_availability[self.provider_name],
+            provider_capabilities={
+                "gemini": DEFAULT_GEMINI_CAPABILITIES,
+                "anthropic": DEFAULT_ANTHROPIC_CAPABILITIES,
+            },
+            secure_key_availability=secure_key_availability,
             parent=self.host,
         )
         self._settings_dialog = dialog
@@ -629,9 +650,9 @@ class AIAssistantController:
                         values.provider,
                         values.api_key,
                     )
-                    self._session_api_key = None
+                    self._session_api_keys.pop(values.provider, None)
                 elif values.api_key:
-                    self._session_api_key = values.api_key
+                    self._session_api_keys[values.provider] = values.api_key
             except CredentialStorageError as error:
                 self.panel.show_error(str(error), session_staged=self.session_staged)
             self.provider_name = values.provider
@@ -665,9 +686,13 @@ class AIAssistantController:
             dialog.set_test_result(False, "The background worker is shutting down.")
 
     async def _run_connection_test(self, provider_name, model, api_key):
-        if provider_name != "gemini":
+        key = api_key or self._session_api_keys.get(provider_name)
+        if provider_name == "gemini":
+            provider = GeminiProvider(api_key=key)
+        elif provider_name == "anthropic":
+            provider = AnthropicProvider(api_key=key)
+        else:
             raise ValueError(f"Unsupported AI provider: {provider_name}")
-        provider = GeminiProvider(api_key=api_key or self._session_api_key)
         try:
             response = await provider.generate(
                 ProviderRequest(
@@ -697,6 +722,14 @@ class AIAssistantController:
             self._settings_dialog.set_test_result(False, str(error))
             return
         self._settings_dialog.mark_stored_key_removed(removed)
+
+    @staticmethod
+    def _provider_capabilities(provider_name):
+        if provider_name == "gemini":
+            return DEFAULT_GEMINI_CAPABILITIES
+        if provider_name == "anthropic":
+            return DEFAULT_ANTHROPIC_CAPABILITIES
+        raise ValueError(f"Unsupported AI provider: {provider_name}")
 
     def shutdown(self) -> None:
         self.cancel_request()

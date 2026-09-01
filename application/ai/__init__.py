@@ -31,7 +31,13 @@ from application.ai.schemas import (
     Usage,
 )
 from application.ai.tool_registry import ToolCategory, ToolRegistry, ToolSpec
-from application.ai.providers import GeminiProvider, LLMProvider, MockProvider, MockStep
+from application.ai.providers import (
+    AnthropicProvider,
+    GeminiProvider,
+    LLMProvider,
+    MockProvider,
+    MockStep,
+)
 from application.ai.edit_session import (
     AIEditSession,
     AIEditSessionError,
@@ -117,6 +123,7 @@ __all__ = [
     "AIEditSessionError",
     "AIEditSessionState",
     "AIContext",
+    "AnthropicProvider",
     "ContextBuilder",
     "EditAuthor",
     "EncodedFrame",

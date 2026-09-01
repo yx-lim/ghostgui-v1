@@ -189,6 +189,7 @@ but focused components now own the mechanics it previously embedded:
 | `application/ai/frame_capture.py` | Qt-free representative timestamp selection and paired-image capture contract |
 | `application/ai/visual_critique.py` | Read-only structured multimodal observation request and validation |
 | `application/ai/visual_refinement.py` | Bounded visual comparison, semantic plan, and edit-step orchestration |
+| `application/ai/providers/` | Provider-neutral protocol plus isolated Mock, Gemini, and Anthropic adapters |
 | `gui/ai_frame_capture.py` | GUI-thread OpenGL capture, timestamp overlay, and editor-state restoration |
 | `gui/visualization/` | Main-window display/tool/panel adapters |
 

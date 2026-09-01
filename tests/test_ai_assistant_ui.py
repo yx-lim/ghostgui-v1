@@ -107,6 +107,27 @@ class AISettingsDialogTests(unittest.TestCase):
         self.assertEqual(values.provider, "gemini")
         self.assertTrue(values.store_securely)
 
+    def test_switching_to_anthropic_updates_model_and_capabilities(self):
+        from application.ai.providers.anthropic import DEFAULT_ANTHROPIC_CAPABILITIES
+        from application.ai.providers.gemini import DEFAULT_GEMINI_CAPABILITIES
+        from gui.ai_settings_dialog import AISettingsDialog
+
+        dialog = AISettingsDialog(
+            capabilities=DEFAULT_GEMINI_CAPABILITIES,
+            provider_capabilities={
+                "gemini": DEFAULT_GEMINI_CAPABILITIES,
+                "anthropic": DEFAULT_ANTHROPIC_CAPABILITIES,
+            },
+        )
+        self.addCleanup(dialog.close)
+        dialog.provider_box.setCurrentIndex(
+            dialog.provider_box.findData("anthropic")
+        )
+
+        self.assertEqual(dialog.values().provider, "anthropic")
+        self.assertEqual(dialog.values().model, "claude-sonnet-5")
+        self.assertIn("Vision", dialog.capabilities_label.text())
+
 
 if __name__ == "__main__":
     unittest.main()
