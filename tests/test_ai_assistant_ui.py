@@ -61,6 +61,20 @@ class AIAssistantPanelTests(unittest.TestCase):
         self.assertEqual(self.panel.state, AIAssistantPanelState.ERROR)
         self.assertFalse(self.panel.accept_button.isEnabled())
 
+    def test_critique_uses_default_prompt_and_does_not_enable_accept(self):
+        critiques = []
+        self.panel.critique_requested.connect(critiques.append)
+
+        self.panel.critique_button.click()
+        self.assertEqual(critiques, ["What is visually wrong with this motion?"])
+
+        self.panel.show_critique(
+            "Two visible issues.",
+            ("Around 2.10 s: right foot: It appears to slide.",),
+        )
+        self.assertFalse(self.panel.accept_button.isEnabled())
+        self.assertEqual(self.panel.proposal_heading.text(), "Visual observations")
+
 
 @unittest.skipUnless(QApplication is not None, "PySide6 unavailable")
 class AISettingsDialogTests(unittest.TestCase):

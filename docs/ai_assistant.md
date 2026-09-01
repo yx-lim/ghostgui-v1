@@ -38,6 +38,20 @@ owns an unresolved AI session. This prevents them from editing the committed
 document by accident. The underlying session already distinguishes user and AI
 authorship so direct manipulation can later target the same working copy.
 
+## Visual Critique
+
+Choose **Critique** to inspect the motion without editing it. The Motion
+Assistant captures 4--8 representative frames using the current 3D camera,
+adds a visible timestamp to every frame, and asks the configured vision-capable
+provider for structured observations. Leave the prompt empty for a general
+critique, or enter a focused question first.
+
+Observations use approximate motion times such as “Around 2.10 s” rather than
+image indexes. Critique-only mode sends no semantic edit tools, does not open an
+AI edit session, and does not change committed motion. If an Orange preview is
+already staged, **Critique** inspects that detached working copy while leaving
+it available for Accept, Reject, or Refine.
+
 ## Failures And Cancellation
 
 Use **Cancel request** to stop a running provider call. Missing credentials,

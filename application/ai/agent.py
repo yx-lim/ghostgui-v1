@@ -26,7 +26,12 @@ Never request raw qpos trajectories, code execution, shell access, or filesystem
 Prefer body/logical-frame and End Effector targets over calculating Joint Angles.
 Use Joint Angle tools only when the user explicitly refers to a joint or joint group.
 Preserve user-authored and protected motion content. Ask for clarification when selection
-context does not resolve an ambiguous instruction. Validate the staged result before finishing."""
+context does not resolve an ambiguous instruction. Plan the complete edit before calling tools,
+and send independent changes as parallel tool calls in one response. The current motion context
+is already supplied, so do not call inspect_motion unless a tool failure makes reinspection
+necessary. GhostGUI validates staged motion automatically after your final response; do not call
+validate_motion merely to finish. Once the intended edits succeed, immediately return a concise
+summary instead of making another tool call."""
 
 
 class AgentError(RuntimeError):
@@ -47,7 +52,10 @@ class AgentValidationError(AgentError):
 
 @dataclass(frozen=True)
 class AgentLimits:
-    max_provider_turns: int = 8
+    # One provider turn per allowed tool call plus a final text response keeps
+    # the independent safety bounds internally consistent. The previous value
+    # of eight could terminate a progressing workflow before its 16-tool budget.
+    max_provider_turns: int = 17
     max_tool_calls: int = 16
     request_timeout_seconds: float = 60.0
 
@@ -121,6 +129,7 @@ class GhostGUIAgent:
         )
         messages = self._initial_messages(instruction, compact_context)
         executions = []
+        failed_call_attempts: dict[str, int] = {}
         total_input_tokens = 0
         total_output_tokens = 0
 
@@ -176,6 +185,15 @@ class GhostGUIAgent:
                 except Exception as error:
                     output = {"error": str(error)}
                     succeeded = False
+                    signature = _call_signature(call)
+                    failed_call_attempts[signature] = (
+                        failed_call_attempts.get(signature, 0) + 1
+                    )
+                    if failed_call_attempts[signature] >= 2:
+                        raise AgentLimitError(
+                            f"AI repeated the failing {call.name} tool call "
+                            "without progress"
+                        ) from error
                 executions.append(ToolExecutionRecord(
                     call.identifier,
                     call.name,
@@ -193,7 +211,10 @@ class GhostGUIAgent:
                 tool_results=tuple(tool_results),
             ))
 
-        raise AgentLimitError("AI provider-turn limit exceeded")
+        raise AgentLimitError(
+            "AI could not finish within the provider-turn budget of "
+            f"{self.limits.max_provider_turns}"
+        )
 
     async def _provider_turn(self, request, context, cancellation_token):
         session = context.session
@@ -257,3 +278,16 @@ def _json_value(value):
         return json.loads(encoded)
     except (TypeError, ValueError) as error:
         raise AgentError("tool returned a non-JSON result") from error
+
+
+def _call_signature(call) -> str:
+    try:
+        arguments = json.dumps(
+            dict(call.arguments),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        arguments = repr(dict(call.arguments))
+    return f"{call.name}:{arguments}"

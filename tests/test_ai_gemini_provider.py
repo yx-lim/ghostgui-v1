@@ -75,6 +75,10 @@ class _StatusError(RuntimeError):
         self.status_code = code
 
 
+class ServerError(RuntimeError):
+    """Stand-in for SDK releases that omit a numeric status attribute."""
+
+
 def _request(**changes):
     values = {
         "model": "gemini-test-model",
@@ -177,6 +181,60 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(function_response["id"], "call-1")
         self.assertEqual(function_response["response"], {"valid": True})
 
+    async def test_preserves_gemini_3_thought_signature_across_tool_turn(self):
+        function_call = SimpleNamespace(
+            id="call-signed",
+            name="validate_motion",
+            args={},
+        )
+        responses = [
+            _response(
+                SimpleNamespace(
+                    text=None,
+                    function_call=function_call,
+                    thought_signature=b"opaque-signature",
+                )
+            ),
+            _response(SimpleNamespace(text="Done", function_call=None)),
+        ]
+
+        class _SequencedModels:
+            def __init__(self):
+                self.calls = []
+
+            async def generate_content(self, **kwargs):
+                self.calls.append(kwargs)
+                return responses.pop(0)
+
+        models = _SequencedModels()
+        provider = GeminiProvider(
+            client=SimpleNamespace(aio=SimpleNamespace(models=models)),
+            cancellation_poll_seconds=0.001,
+        )
+        first = await provider.generate(_request())
+        call = first.tool_calls[0]
+
+        await provider.generate(
+            _request(
+                messages=(
+                    ProviderMessage(MessageRole.USER, text="Check it"),
+                    ProviderMessage(MessageRole.ASSISTANT, tool_calls=(call,)),
+                    ProviderMessage(
+                        MessageRole.TOOL,
+                        tool_results=(
+                            ToolResult(call.identifier, call.name, {"valid": True}),
+                        ),
+                    ),
+                )
+            )
+        )
+
+        replayed_part = models.calls[1]["contents"][1]["parts"][0]
+        self.assertEqual(
+            replayed_part["thought_signature"],
+            b"opaque-signature",
+        )
+
     async def test_image_input_always_precedes_bytes_with_exact_time_metadata(self):
         frames = tuple(
             MotionFrameImage(
@@ -204,7 +262,9 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_normalizes_auth_rate_limit_and_offline_errors_without_details(self):
         cases = (
+            (400, ProviderError),
             (401, ProviderAuthenticationError),
+            (404, ProviderConfigurationError),
             (429, ProviderRateLimitError),
             (503, ProviderError),
         )
@@ -213,10 +273,78 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
                 provider = GeminiProvider(
                     client=_FakeClient(_StatusError(code)),
                     cancellation_poll_seconds=0.001,
+                    max_attempts=1,
                 )
                 with self.assertRaises(expected) as raised:
                     await provider.generate(_request())
                 self.assertNotIn("secret-key", str(raised.exception))
+                if code == 400:
+                    self.assertIn("HTTP 400 INVALID_ARGUMENT", str(raised.exception))
+
+    async def test_retries_transient_server_errors_then_returns_response(self):
+        class _RecoveringModels:
+            def __init__(self):
+                self.calls = []
+
+            async def generate_content(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) < 3:
+                    raise _StatusError(503)
+                return _response(
+                    SimpleNamespace(text="OK", function_call=None)
+                )
+
+        models = _RecoveringModels()
+        client = SimpleNamespace(aio=SimpleNamespace(models=models))
+        provider = GeminiProvider(
+            client=client,
+            cancellation_poll_seconds=0.001,
+            retry_base_seconds=0.001,
+        )
+
+        result = await provider.generate(_request())
+
+        self.assertEqual(result.text, "OK")
+        self.assertEqual(len(models.calls), 3)
+
+    async def test_reports_retryable_server_failure_as_actionable_error(self):
+        cases = (_StatusError(500), ServerError("request contained secret-key"))
+        for error in cases:
+            with self.subTest(error=error):
+                client = _FakeClient(error)
+                provider = GeminiProvider(
+                    client=client,
+                    cancellation_poll_seconds=0.001,
+                    max_attempts=2,
+                    retry_base_seconds=0.001,
+                )
+
+                with self.assertRaisesRegex(
+                    ProviderError,
+                    r"temporarily unavailable.*after 2 attempts; try again",
+                ) as raised:
+                    await provider.generate(_request())
+
+                self.assertEqual(len(client.models.calls), 2)
+                self.assertNotIn("secret-key", str(raised.exception))
+
+    async def test_can_cancel_during_retry_backoff(self):
+        client = _FakeClient(_StatusError(503))
+        provider = GeminiProvider(
+            client=client,
+            cancellation_poll_seconds=0.001,
+            retry_base_seconds=1.0,
+        )
+        token = _Token()
+        task = asyncio.create_task(provider.generate(_request(), token))
+        while not client.models.calls:
+            await asyncio.sleep(0)
+        token.cancellation_requested = True
+
+        with self.assertRaises(ProviderCancelledError):
+            await task
+
+        self.assertEqual(len(client.models.calls), 1)
 
     async def test_cancels_an_active_sdk_request(self):
         gate = asyncio.Event()

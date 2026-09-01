@@ -11,6 +11,7 @@ from application.ai.frame_capture import (
     FrameSamplingPlan,
     FrameSamplingRequest,
     capture_comparison_frames,
+    capture_motion_frames,
 )
 from application.ai.schemas import ImageVariant, MessageRole, ProviderMessage
 from application.project_document import ProjectDocument
@@ -103,6 +104,23 @@ class FrameSamplerTests(unittest.TestCase):
 
 
 class ComparisonCaptureTests(unittest.TestCase):
+    def test_single_motion_capture_keeps_timestamp_metadata(self):
+        document = _document(
+            states=((0.0, [0.0]), (1.0, [1.0]), (2.0, [2.0]), (3.0, [3.0]))
+        )
+        renderer = _RecordingRenderer()
+
+        frames = capture_motion_frames(
+            document,
+            FrameSamplingPlan((0.0, 1.0, 2.0, 3.0)),
+            renderer,
+            variant=ImageVariant.CANDIDATE,
+        )
+
+        self.assertEqual(len(frames), 4)
+        self.assertTrue(all(frame.variant is ImageVariant.CANDIDATE for frame in frames))
+        self.assertEqual([frame.time_seconds for frame in frames], [0.0, 1.0, 2.0, 3.0])
+
     def test_original_and_candidate_use_identical_explicit_timestamps(self):
         original = _document(
             states=((0.0, [0.0]), (1.0, [1.0]), (2.0, [2.0]), (3.0, [3.0]))

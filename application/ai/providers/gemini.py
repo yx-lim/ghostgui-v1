@@ -43,6 +43,10 @@ DEFAULT_GEMINI_CAPABILITIES = ProviderCapabilities(
     max_images_per_request=16,
 )
 
+_RETRYABLE_STATUS_CODES = frozenset({408, 500, 502, 503, 504})
+_DEFAULT_MAX_ATTEMPTS = 3
+_DEFAULT_RETRY_BASE_SECONDS = 0.5
+
 
 class GeminiProvider:
     """Translate common requests to the Google Gen AI SDK and back again."""
@@ -55,11 +59,20 @@ class GeminiProvider:
         credential_source: CredentialSource | None = None,
         capabilities: ProviderCapabilities = DEFAULT_GEMINI_CAPABILITIES,
         cancellation_poll_seconds: float = 0.05,
+        max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+        retry_base_seconds: float = _DEFAULT_RETRY_BASE_SECONDS,
     ) -> None:
         if cancellation_poll_seconds <= 0.0:
             raise ValueError("cancellation_poll_seconds must be positive")
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+        if retry_base_seconds < 0.0:
+            raise ValueError("retry_base_seconds must not be negative")
         self._capabilities = capabilities
         self._cancellation_poll_seconds = cancellation_poll_seconds
+        self._max_attempts = max_attempts
+        self._retry_base_seconds = retry_base_seconds
+        self._thought_signatures: dict[str, bytes] = {}
         self._owns_client = client is None
         if client is None:
             source = credential_source or default_credential_source()
@@ -96,31 +109,45 @@ class GeminiProvider:
         if _cancelled(cancellation_token):
             raise ProviderCancelledError("Gemini request was cancelled")
 
-        contents, config = _build_gemini_request(request)
-        sdk_request = asyncio.create_task(
-            self._client.aio.models.generate_content(
-                model=request.model,
-                contents=contents,
-                config=config,
-            )
+        contents, config = _build_gemini_request(
+            request,
+            thought_signatures=self._thought_signatures,
         )
-        try:
-            while not sdk_request.done():
-                if _cancelled(cancellation_token):
-                    sdk_request.cancel()
-                    await _consume_cancellation(sdk_request)
-                    raise ProviderCancelledError("Gemini request was cancelled")
-                await asyncio.sleep(self._cancellation_poll_seconds)
-            raw_response = await sdk_request
-        except ProviderCancelledError:
-            raise
-        except asyncio.CancelledError:
-            sdk_request.cancel()
-            raise
-        except Exception as error:
-            raise _normalize_error(error) from error
+        for attempt in range(1, self._max_attempts + 1):
+            sdk_request = asyncio.create_task(
+                self._client.aio.models.generate_content(
+                    model=request.model,
+                    contents=contents,
+                    config=config,
+                )
+            )
+            try:
+                while not sdk_request.done():
+                    if _cancelled(cancellation_token):
+                        sdk_request.cancel()
+                        await _consume_cancellation(sdk_request)
+                        raise ProviderCancelledError("Gemini request was cancelled")
+                    await asyncio.sleep(self._cancellation_poll_seconds)
+                raw_response = await sdk_request
+                break
+            except ProviderCancelledError:
+                raise
+            except asyncio.CancelledError:
+                sdk_request.cancel()
+                raise
+            except Exception as error:
+                if attempt >= self._max_attempts or not _retryable(error):
+                    raise _normalize_error(error, attempts=attempt) from error
+                await _wait_for_retry(
+                    self._retry_base_seconds * (2 ** (attempt - 1)),
+                    cancellation_token,
+                    poll_seconds=self._cancellation_poll_seconds,
+                )
 
-        response = _parse_gemini_response(raw_response)
+        response = _parse_gemini_response(
+            raw_response,
+            thought_signatures=self._thought_signatures,
+        )
         validate_provider_response(response, self._capabilities)
         return response
 
@@ -134,7 +161,11 @@ class GeminiProvider:
             await close()
 
 
-def _build_gemini_request(request: ProviderRequest) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _build_gemini_request(
+    request: ProviderRequest,
+    *,
+    thought_signatures: Mapping[str, bytes] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     system_parts: list[str] = []
     contents: list[dict[str, Any]] = []
     for message in request.messages:
@@ -142,7 +173,7 @@ def _build_gemini_request(request: ProviderRequest) -> tuple[list[dict[str, Any]
             if message.text:
                 system_parts.append(message.text)
             continue
-        parts = _message_parts(message)
+        parts = _message_parts(message, thought_signatures=thought_signatures)
         if parts:
             contents.append({"role": _gemini_role(message.role), "parts": parts})
 
@@ -172,7 +203,11 @@ def _build_gemini_request(request: ProviderRequest) -> tuple[list[dict[str, Any]
     return contents, config
 
 
-def _message_parts(message: ProviderMessage) -> list[dict[str, Any]]:
+def _message_parts(
+    message: ProviderMessage,
+    *,
+    thought_signatures: Mapping[str, bytes] | None = None,
+) -> list[dict[str, Any]]:
     parts: list[dict[str, Any]] = []
     if message.text:
         parts.append({"text": message.text})
@@ -182,15 +217,23 @@ def _message_parts(message: ProviderMessage) -> list[dict[str, Any]]:
             {"inline_data": {"data": frame.data, "mime_type": frame.mime_type}}
         )
     for call in message.tool_calls:
-        parts.append(
-            {
-                "function_call": {
-                    "id": call.identifier,
-                    "name": call.name,
-                    "args": dict(call.arguments),
-                }
+        part = {
+            "function_call": {
+                "id": call.identifier,
+                "name": call.name,
+                "args": dict(call.arguments),
             }
+        }
+        signature = (
+            None
+            if thought_signatures is None
+            else thought_signatures.get(call.identifier)
         )
+        if signature:
+            # Gemini 3 strictly requires this opaque value to be returned on
+            # the exact function-call part where the model supplied it.
+            part["thought_signature"] = signature
+        parts.append(part)
     for result in message.tool_results:
         output = result.output if isinstance(result.output, Mapping) else {"result": result.output}
         response = dict(output)
@@ -219,7 +262,11 @@ def _gemini_role(role: MessageRole) -> str:
     return "user"
 
 
-def _parse_gemini_response(raw_response: Any) -> ProviderResponse:
+def _parse_gemini_response(
+    raw_response: Any,
+    *,
+    thought_signatures: dict[str, bytes] | None = None,
+) -> ProviderResponse:
     candidates = getattr(raw_response, "candidates", None) or ()
     if not candidates:
         raise ProviderResponseError("Gemini returned no response candidate")
@@ -243,6 +290,9 @@ def _parse_gemini_response(raw_response: Any) -> ProviderResponse:
         identifier = str(
             getattr(function_call, "id", "") or f"{response_id}-call-{index + 1}"
         )
+        signature = getattr(part, "thought_signature", None)
+        if thought_signatures is not None and signature:
+            thought_signatures[identifier] = bytes(signature)
         calls.append(ToolCall(identifier, name, dict(arguments)))
 
     if not texts and not calls:
@@ -277,17 +327,45 @@ def _nonnegative_int(value: Any) -> int:
         return 0
 
 
-def _normalize_error(error: Exception) -> ProviderError:
+def _error_status_code(error: Exception) -> int | None:
     code = getattr(error, "status_code", None) or getattr(error, "code", None)
     try:
-        code = int(code)
+        return int(code)
     except (TypeError, ValueError):
-        code = None
+        return None
+
+
+def _retryable(error: Exception) -> bool:
+    code = _error_status_code(error)
+    return code in _RETRYABLE_STATUS_CODES or (
+        code is None and type(error).__name__ == "ServerError"
+    )
+
+
+def _normalize_error(error: Exception, *, attempts: int = 1) -> ProviderError:
+    code = _error_status_code(error)
     if code in {401, 403}:
         return ProviderAuthenticationError("Gemini rejected the configured API key")
     if code == 429:
         return ProviderRateLimitError(
             "Gemini rate limit reached; wait before trying again"
+        )
+    if code == 400:
+        return ProviderError(
+            "Gemini rejected the request (HTTP 400 INVALID_ARGUMENT)"
+        )
+    if code == 404:
+        return ProviderConfigurationError(
+            "Gemini model was not found or is unavailable for this API key (HTTP 404)"
+        )
+    if code in _RETRYABLE_STATUS_CODES or type(error).__name__ == "ServerError":
+        status = f" (HTTP {code})" if code is not None else ""
+        attempt_text = (
+            f" after {attempts} attempts" if attempts > 1 else ""
+        )
+        return ProviderError(
+            f"Gemini service is temporarily unavailable{status}{attempt_text}; "
+            "try again in a moment"
         )
     # Avoid echoing provider exception messages because SDK errors may contain
     # request metadata. The exception type is sufficient for diagnostics.
@@ -303,3 +381,20 @@ async def _consume_cancellation(task: asyncio.Task[Any]) -> None:
         await task
     except asyncio.CancelledError:
         pass
+
+
+async def _wait_for_retry(
+    delay_seconds: float,
+    token: CancellationSignal | None,
+    *,
+    poll_seconds: float,
+) -> None:
+    remaining = delay_seconds
+    while remaining > 0.0:
+        if _cancelled(token):
+            raise ProviderCancelledError("Gemini request was cancelled")
+        interval = min(remaining, poll_seconds)
+        await asyncio.sleep(interval)
+        remaining -= interval
+    if _cancelled(token):
+        raise ProviderCancelledError("Gemini request was cancelled")

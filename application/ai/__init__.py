@@ -54,6 +54,16 @@ from application.ai.frame_capture import (
     FrameSamplingRequest,
     MotionFrameRenderer,
     capture_comparison_frames,
+    capture_motion_frames,
+)
+from application.ai.visual_critique import (
+    VISUAL_CRITIQUE_RESPONSE_SCHEMA,
+    VisualCritic,
+    VisualCritique,
+    VisualCritiqueError,
+    VisualCritiqueResult,
+    VisualObservation,
+    parse_visual_critique,
 )
 from application.ai.context import (
     AIContext,
@@ -149,7 +159,15 @@ __all__ = [
     "ToolValidationError",
     "TimestampMotionIdentityResolver",
     "Usage",
+    "VISUAL_CRITIQUE_RESPONSE_SCHEMA",
+    "VisualCritic",
+    "VisualCritique",
+    "VisualCritiqueError",
+    "VisualCritiqueResult",
+    "VisualObservation",
     "build_semantic_tool_registry",
     "capture_comparison_frames",
+    "capture_motion_frames",
+    "parse_visual_critique",
     "sample_working_preview_qpos",
 ]

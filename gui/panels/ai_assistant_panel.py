@@ -28,6 +28,7 @@ class AIAssistantPanel(QWidget):
     """Render AI workflow state and emit intent without owning motion state."""
 
     submit_requested = Signal(str)
+    critique_requested = Signal(str)
     refine_requested = Signal(str)
     preview_requested = Signal()
     accept_requested = Signal()
@@ -115,7 +116,14 @@ class AIAssistantPanel(QWidget):
         self.cancel_button = QPushButton("Cancel request")
         self.cancel_button.setObjectName("aiCancelButton")
         self.cancel_button.clicked.connect(self.cancel_requested.emit)
+        self.critique_button = QPushButton("Critique")
+        self.critique_button.setObjectName("aiCritiqueButton")
+        self.critique_button.setToolTip(
+            "Inspect timestamped rendered frames without changing the motion"
+        )
+        self.critique_button.clicked.connect(self._emit_critique)
         prompt_actions.addWidget(self.submit_button, stretch=1)
+        prompt_actions.addWidget(self.critique_button)
         prompt_actions.addWidget(self.cancel_button)
         layout.addLayout(prompt_actions)
 
@@ -141,28 +149,57 @@ class AIAssistantPanel(QWidget):
         self.submit_button.setVisible(not running)
         self.submit_button.setEnabled(not running)
         self.submit_button.setText("Refine" if staged else "Apply")
+        self.critique_button.setVisible(not running)
+        self.critique_button.setEnabled(not running)
         self.cancel_button.setVisible(running)
         self.preview_button.setEnabled(staged)
         self.accept_button.setEnabled(staged)
         self.reject_button.setEnabled(staged)
         self.refine_button.setEnabled(staged)
 
-    def begin_request(self, *, refinement: bool = False) -> None:
+    def begin_request(
+        self,
+        *,
+        refinement: bool = False,
+        critique: bool = False,
+    ) -> None:
         self.set_state(AIAssistantPanelState.RUNNING)
-        self.response_label.setText(
-            "Refining the staged working copy…"
-            if refinement
-            else "Creating a detached AI working copy…"
-        )
+        if critique:
+            self.response_label.setText("Inspecting timestamped rendered frames…")
+        elif refinement:
+            self.response_label.setText("Refining the staged working copy…")
+        else:
+            self.response_label.setText("Creating a detached AI working copy…")
 
     def show_proposal(self, response: str, changes: tuple[str, ...]) -> None:
         self.response_label.setText(response.strip() or "AI edit staged for review.")
+        self.proposal_heading.setText("Proposed changes")
         self.proposal_list.clear()
         self.proposal_list.addItems(list(changes) or ["Motion working copy updated"])
         self.proposal_heading.show()
         self.proposal_list.show()
         self.prompt_input.clear()
         self.set_state(AIAssistantPanelState.STAGED)
+
+    def show_critique(
+        self,
+        summary: str,
+        observations: tuple[str, ...],
+        *,
+        session_staged: bool = False,
+    ) -> None:
+        self.response_label.setText(summary.strip() or "Visual critique complete.")
+        self.proposal_heading.setText("Visual observations")
+        self.proposal_list.clear()
+        self.proposal_list.addItems(list(observations) or ["No visible issue reported"])
+        self.proposal_heading.show()
+        self.proposal_list.show()
+        self.prompt_input.clear()
+        self.set_state(
+            AIAssistantPanelState.STAGED
+            if session_staged
+            else AIAssistantPanelState.READY
+        )
 
     def show_error(self, message: str, *, session_staged: bool = False) -> None:
         self.response_label.setText(f"AI error: {message}")
@@ -211,3 +248,7 @@ class AIAssistantPanel(QWidget):
             self.prompt_input.setFocus()
             return
         self.refine_requested.emit(instruction)
+
+    def _emit_critique(self) -> None:
+        instruction = self._instruction() or "What is visually wrong with this motion?"
+        self.critique_requested.emit(instruction)

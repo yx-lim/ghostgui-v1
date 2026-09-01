@@ -59,6 +59,14 @@ class _Token:
 
 
 class GhostGUIAgentTests(unittest.IsolatedAsyncioTestCase):
+    def test_default_turn_budget_can_finish_the_full_tool_budget(self):
+        limits = AgentLimits()
+
+        self.assertGreaterEqual(
+            limits.max_provider_turns,
+            limits.max_tool_calls + 1,
+        )
+
     async def test_mock_tool_call_stages_validated_motion_without_committing(self):
         committed, _store, session, context, provider, agent = _setup([
             _tool_response(
@@ -162,6 +170,67 @@ class GhostGUIAgentTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(session.state, AIEditSessionState.STAGED)
         self.assertEqual(session.working_document.qpos_timeline.times(), [0.0, 1.0, 2.0])
+
+    async def test_progressing_workflow_can_exceed_old_eight_turn_limit(self):
+        responses = [
+            _tool_response(
+                f"keyframe-{index}",
+                "ensure_keyframe",
+                {"time_seconds": index / 10.0},
+            )
+            for index in range(1, 10)
+        ]
+        responses.append(ProviderResponse(text="Nine Keyframes staged."))
+        _committed, _store, session, context, _provider, agent = _setup(responses)
+
+        result = await agent.run(
+            "Add nine intermediate Keyframes.",
+            model="mock",
+            context=context,
+        )
+
+        self.assertEqual(result.provider_turns, 10)
+        self.assertEqual(len(result.tool_executions), 9)
+        self.assertTrue(session.has_changes)
+
+    async def test_repeated_failed_call_stops_as_no_progress(self):
+        repeated = _tool_response(
+            "bad-1",
+            "move_end_effector",
+            {
+                "end_effector": "right_hand",
+                "time_seconds": 0.0,
+                "delta_m": [0.0, "higher", 0.1],
+            },
+        )
+        repeated_again = _tool_response(
+            "bad-2",
+            "move_end_effector",
+            {
+                "end_effector": "right_hand",
+                "time_seconds": 0.0,
+                "delta_m": [0.0, "higher", 0.1],
+            },
+        )
+        _committed, _store, _session, context, provider, agent = _setup(
+            [repeated, repeated_again]
+        )
+
+        with self.assertRaisesRegex(AgentLimitError, "without progress"):
+            await agent.run("Move the hand higher.", model="mock", context=context)
+
+        self.assertEqual(len(provider.requests), 2)
+
+    async def test_prompt_requests_parallel_calls_and_automatic_validation(self):
+        _committed, _store, _session, context, provider, agent = _setup([
+            ProviderResponse(text="No edit needed."),
+        ])
+
+        await agent.run("Inspect the pose.", model="mock", context=context)
+
+        system_prompt = provider.requests[0].messages[0].text
+        self.assertIn("parallel tool calls", system_prompt)
+        self.assertIn("validates staged motion automatically", system_prompt)
 
     async def test_provider_failure_and_timeout_leave_session_usable(self):
         _committed, _store, session, context, _provider, agent = _setup([

@@ -65,6 +65,13 @@ and exact timestamp correspondence for original/candidate image pairs. The
 GUI capture adapter adds the same timestamp as an image overlay and must run
 on the GUI thread because it reads a `QOpenGLWidget` framebuffer.
 
+Critique-only parsing, provider capability checks, cancellation, timeouts, and
+the no-tool request boundary are covered by:
+
+```bash
+python3 -m unittest tests.test_ai_visual_critique -v
+```
+
 Gemini smoke tests are opt-in manual checks. Normal CI must not require a
 Gemini key or consume provider credits. Claude provider tests remain deferred
 until AnthropicProvider is implemented.

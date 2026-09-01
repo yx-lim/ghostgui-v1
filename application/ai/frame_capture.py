@@ -149,6 +149,34 @@ def capture_comparison_frames(
     return tuple(frames)
 
 
+def capture_motion_frames(
+    document: ProjectDocument,
+    plan: FrameSamplingPlan,
+    renderer: MotionFrameRenderer,
+    *,
+    variant: ImageVariant = ImageVariant.ORIGINAL,
+) -> tuple[MotionFrameImage, ...]:
+    """Render one timestamped view of a motion without implying a comparison."""
+
+    frames = []
+    for index, time_seconds in enumerate(plan.times_seconds, start=1):
+        comparison_id = f"frame_{index}"
+        rendered = renderer.render_frame(
+            _sample_qpos(document, time_seconds),
+            time_seconds=time_seconds,
+            variant=variant,
+        )
+        frames.append(MotionFrameImage(
+            data=rendered.data,
+            mime_type=rendered.mime_type,
+            time_seconds=time_seconds,
+            variant=variant,
+            comparison_id=comparison_id,
+            label=comparison_id,
+        ))
+    return tuple(frames)
+
+
 def _sample_qpos(document: ProjectDocument, time_seconds: float) -> Any:
     timeline = document.qpos_timeline
     if timeline is None or not hasattr(timeline, "sample_state"):
