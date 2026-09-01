@@ -126,15 +126,20 @@ class ProviderMessage:
     role: MessageRole
     text: str = ""
     motion_frames: tuple[MotionFrameImage, ...] = ()
+    tool_calls: tuple[ToolCall, ...] = ()
     tool_results: tuple[ToolResult, ...] = ()
 
     def __post_init__(self) -> None:
-        if not (self.text or self.motion_frames or self.tool_results):
-            raise ValueError("provider message must contain text, images, or tool results")
+        if not (self.text or self.motion_frames or self.tool_calls or self.tool_results):
+            raise ValueError(
+                "provider message must contain text, images, tool calls, or tool results"
+            )
         if self.motion_frames and self.role is not MessageRole.USER:
             raise ValueError("motion frame images are only valid on user messages")
         if self.tool_results and self.role is not MessageRole.TOOL:
             raise ValueError("tool results require the tool message role")
+        if self.tool_calls and self.role is not MessageRole.ASSISTANT:
+            raise ValueError("tool calls require the assistant message role")
         comparison_times: dict[str, float] = {}
         comparison_variants: set[tuple[str, ImageVariant]] = set()
         for frame in self.motion_frames:

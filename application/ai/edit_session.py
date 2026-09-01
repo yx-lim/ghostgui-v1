@@ -119,9 +119,24 @@ class AIEditSession:
         self._require_state(AIEditSessionState.STAGED)
         return self._apply(command, EditAuthor.USER, affected_entities)
 
-    def protect(self, reference: MotionEntityRef, protected: bool = True) -> None:
+    def protect(
+        self,
+        reference: MotionEntityRef,
+        protected: bool = True,
+        *,
+        author: EditAuthor = EditAuthor.USER,
+    ) -> bool:
         self._require_state(AIEditSessionState.READY, AIEditSessionState.STAGED)
-        self.metadata.set_protected(reference, protected)
+        if not self.metadata.set_protected(reference, protected):
+            return False
+        self._edits.append(SessionEditRecord(
+            author=author,
+            operation="protect_keyframe" if protected else "unprotect_keyframe",
+            affected_entities=(reference,),
+            working_revision=self.working_document.revision,
+        ))
+        self._state = AIEditSessionState.STAGED
+        return True
 
     def accept(self, committed_controller: EditorController) -> CommandResult:
         self._require_state(AIEditSessionState.STAGED)
@@ -134,10 +149,11 @@ class AIEditSession:
         if not self.has_changes:
             raise AIEditSessionError("cannot accept an AI session with no motion changes")
         result = committed_controller.execute(
-            ReplaceMotionState(capture_motion_state(self.working_document))
+            ReplaceMotionState(
+                capture_motion_state(self.working_document),
+                force_change=True,
+            )
         )
-        if not result.changed:
-            raise AIEditSessionError("working copy does not differ from committed motion")
         self._committed_metadata.replace(self.metadata.snapshot())
         self._state = AIEditSessionState.ACCEPTED
         return result

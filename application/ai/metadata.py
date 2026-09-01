@@ -23,14 +23,25 @@ class MotionIdentityResolver(Protocol):
     def reference_for_keyframe(self, frame: TargetFrame) -> MotionEntityRef:
         ...
 
+    def reference_for_qpos_keyframe(self, time_seconds: float) -> MotionEntityRef:
+        ...
+
 
 class TimestampMotionIdentityResolver:
     """MVP resolver isolated for later replacement by stable Keyframe IDs."""
 
     def reference_for_keyframe(self, frame: TargetFrame) -> MotionEntityRef:
-        legacy_key = f"{frame.frame_name}\0{round(float(frame.time), 6):.6f}"
-        digest = sha256(legacy_key.encode("utf-8")).hexdigest()
+        digest = self._digest(frame.frame_name, frame.time)
         return MotionEntityRef(f"legacy-keyframe-v1:{digest}")
+
+    def reference_for_qpos_keyframe(self, time_seconds: float) -> MotionEntityRef:
+        digest = self._digest("__qpos__", time_seconds)
+        return MotionEntityRef(f"legacy-qpos-keyframe-v1:{digest}")
+
+    @staticmethod
+    def _digest(kind: str, time_seconds: float) -> str:
+        legacy_key = f"{kind}\0{round(float(time_seconds), 6):.6f}"
+        return sha256(legacy_key.encode("utf-8")).hexdigest()
 
 
 class MotionMetadataStore(Protocol):
@@ -49,7 +60,7 @@ class MotionMetadataStore(Protocol):
     def record(self, reference: MotionEntityRef, author: EditAuthor) -> None:
         ...
 
-    def set_protected(self, reference: MotionEntityRef, protected: bool) -> None:
+    def set_protected(self, reference: MotionEntityRef, protected: bool) -> bool:
         ...
 
     def permits_ai_edit(
@@ -99,16 +110,20 @@ class InMemoryMotionMetadataStore:
             sequence=self._sequence,
         )
 
-    def set_protected(self, reference: MotionEntityRef, protected: bool) -> None:
+    def set_protected(self, reference: MotionEntityRef, protected: bool) -> bool:
         previous = self._values.get(reference)
         if previous is None:
             previous = MotionEditMetadata(EditAuthor.USER)
+        protected = bool(protected)
+        if previous.protected is protected:
+            return False
         self._sequence += 1
         self._values[reference] = replace(
             previous,
-            protected=bool(protected),
+            protected=protected,
             sequence=self._sequence,
         )
+        return True
 
     def permits_ai_edit(
         self,
@@ -140,3 +155,30 @@ class MotionMetadataService:
 
     def metadata_for_keyframe(self, frame: TargetFrame) -> MotionEditMetadata | None:
         return self.store.get(self.reference_for_keyframe(frame))
+
+    def reference_for_qpos_keyframe(self, time_seconds: float) -> MotionEntityRef:
+        return self.resolver.reference_for_qpos_keyframe(time_seconds)
+
+    def remap_keyframe(self, before: TargetFrame, after: TargetFrame) -> None:
+        self._remap(
+            self.reference_for_keyframe(before),
+            self.reference_for_keyframe(after),
+        )
+
+    def remap_qpos_keyframe(self, before_time: float, after_time: float) -> None:
+        self._remap(
+            self.reference_for_qpos_keyframe(before_time),
+            self.reference_for_qpos_keyframe(after_time),
+        )
+
+    def _remap(self, before: MotionEntityRef, after: MotionEntityRef) -> None:
+        if before == after:
+            return
+        values = dict(self.store.snapshot())
+        metadata = values.pop(before, None)
+        if metadata is None:
+            return
+        existing = values.get(after)
+        if existing is None or metadata.sequence >= existing.sequence:
+            values[after] = metadata
+        self.store.replace(values)

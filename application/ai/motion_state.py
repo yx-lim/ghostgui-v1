@@ -53,6 +53,7 @@ class ReplaceMotionState:
 
     state: MotionStateSnapshot
     operation: str = "replace_motion_state"
+    force_change: bool = False
 
     def execute(self, document: ProjectDocument) -> CommandResult:
         if self.state.model_key != document.model_key:
@@ -62,7 +63,7 @@ class ReplaceMotionState:
         previous = capture_motion_state(document)
         _restore_motion_state(document, self.state)
         return CommandResult(
-            changed=not _motion_states_equal(previous, self.state),
+            changed=self.force_change or not _motion_states_equal(previous, self.state),
             operation=self.operation,
             active_index=document.active_index,
             affected_count=len(document.trajectory.frames) + len(self.state.qpos_states),
