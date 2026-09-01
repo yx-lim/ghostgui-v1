@@ -28,6 +28,7 @@ class ImageVariant(str, Enum):
 
 
 class EditAuthor(str, Enum):
+    IMPORTED = "imported"
     AI = "ai"
     USER = "user"
 
