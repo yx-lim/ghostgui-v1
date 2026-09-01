@@ -1,0 +1,61 @@
+"""Provider-neutral contracts for GhostGUI's bounded AI editing workflow."""
+
+from application.ai.errors import (
+    AIError,
+    ProviderCancelledError,
+    ProviderCapabilityError,
+    ProviderError,
+    ToolExecutionError,
+    ToolNotFoundError,
+    ToolRegistrationError,
+    ToolValidationError,
+)
+from application.ai.schemas import (
+    EditAuthor,
+    ImageVariant,
+    MessageRole,
+    MotionEntityRef,
+    MotionFrameImage,
+    ProviderCapabilities,
+    ProviderMessage,
+    ProviderRequest,
+    ProviderResponse,
+    StopReason,
+    ToolCall,
+    ToolDefinition,
+    ToolResult,
+    Usage,
+)
+from application.ai.tool_registry import ToolCategory, ToolRegistry, ToolSpec
+from application.ai.providers import LLMProvider, MockProvider, MockStep
+
+__all__ = [
+    "AIError",
+    "EditAuthor",
+    "ImageVariant",
+    "MessageRole",
+    "LLMProvider",
+    "MockProvider",
+    "MockStep",
+    "MotionEntityRef",
+    "MotionFrameImage",
+    "ProviderCancelledError",
+    "ProviderCapabilityError",
+    "ProviderCapabilities",
+    "ProviderError",
+    "ProviderMessage",
+    "ProviderRequest",
+    "ProviderResponse",
+    "StopReason",
+    "ToolCall",
+    "ToolCategory",
+    "ToolDefinition",
+    "ToolExecutionError",
+    "ToolNotFoundError",
+    "ToolRegistrationError",
+    "ToolRegistry",
+    "ToolResult",
+    "ToolSpec",
+    "ToolValidationError",
+    "Usage",
+]
