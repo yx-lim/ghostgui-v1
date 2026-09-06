@@ -82,7 +82,7 @@ def motion_edit_plan_response_schema(registry: ToolRegistry) -> dict[str, Any]:
     receive complete ToolRegistry validation before execution.
     """
 
-    operation_schema = _planned_operation_response_schema(registry)
+    operation_schema = planned_operation_response_schema(registry)
     return {
         "type": "object",
         "properties": {
@@ -117,7 +117,7 @@ def motion_repair_response_schema(registry: ToolRegistry) -> dict[str, Any]:
         "properties": {
             "operations": {
                 "type": "array",
-                "items": _planned_operation_response_schema(registry),
+                "items": planned_operation_response_schema(registry),
                 "minItems": 1,
                 "maxItems": MAX_PLANNED_OPERATIONS,
             },
@@ -188,7 +188,9 @@ def parse_motion_repair_plan(text: str) -> MotionEditPlan:
         raise MotionPlanError(str(error)) from error
 
 
-def _planned_operation_response_schema(registry: ToolRegistry) -> dict[str, Any]:
+def planned_operation_response_schema(registry: ToolRegistry) -> dict[str, Any]:
+    """Return the strict wire schema for one allowlisted semantic operation."""
+
     definitions = editable_tool_definitions(registry)
     if not definitions:
         raise MotionPlanError("no semantic edit tools are registered")

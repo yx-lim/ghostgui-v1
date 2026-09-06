@@ -72,19 +72,24 @@ it available for Accept, Reject, or Refine.
 
 ## Visual Refinement
 
-After an edit is staged, choose **Visual refine** to compare the committed
-motion with the staged candidate at identical timestamps. GhostGUI separates
-each cycle into observation, a small semantic plan, and execution through the
-same strict motion tools used by ordinary AI edits. It never asks the provider
-for raw trajectory samples or executes provider-generated code.
+After an edit is staged, choose **Visual refine** to inspect 4--8 timestamped
+frames from the staged candidate. One multimodal provider request returns both
+structured observations and a complete semantic `MotionEditPlan`. GhostGUI
+then executes that plan locally through the same strict `PlanExecutor` used by
+ordinary AI edits and updates the Orange preview. It never sends the visual
+observations through a second language-model turn, asks the provider for raw
+trajectory samples, or executes provider-generated code.
 
-Automatic refinement is capped at two edit iterations. GhostGUI then performs
-one final read-only comparison and returns control for Orange preview review,
-Accept, Reject, or manual Refine. If the final comparison still finds an issue,
-the panel reports that the automatic limit was reached instead of continuing
-indefinitely. Any text entered before choosing **Visual refine** is treated as
-additional user direction and user-authored or protected Keyframes retain
-priority.
+Visual refinement does not automatically repeat. Any text entered before
+choosing **Visual refine** is treated as additional user direction, and
+user-authored or protected Keyframes retain priority.
+
+Choose **Verify visually** when a staged candidate should be compared with the
+committed motion. Verification sends original and candidate frames captured at
+identical timestamps in one separate, read-only request. It reports which view
+better satisfies the goal and any remaining timestamped observations, but
+cannot edit the working copy. Thus Visual refine normally uses one provider
+request; Visual refine followed by explicit verification uses two.
 
 ## Failures And Cancellation
 

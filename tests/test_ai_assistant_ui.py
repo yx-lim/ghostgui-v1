@@ -39,6 +39,7 @@ class AIAssistantPanelTests(unittest.TestCase):
         self.assertEqual(self.panel.state, AIAssistantPanelState.STAGED)
         self.assertTrue(self.panel.accept_button.isEnabled())
         self.assertTrue(self.panel.visual_refine_button.isEnabled())
+        self.assertTrue(self.panel.visual_verify_button.isEnabled())
         self.assertEqual(self.panel.proposal_list.item(0).text(), "Modified 2 Keyframes")
 
     def test_apply_and_refine_emit_trimmed_instructions(self):
@@ -86,6 +87,23 @@ class AIAssistantPanelTests(unittest.TestCase):
         self.panel.visual_refine_button.click()
 
         self.assertEqual(refinements, ["keep the feet planted"])
+
+    def test_visual_verification_is_an_explicit_staged_action(self):
+        verifications = []
+        self.panel.visual_verify_requested.connect(verifications.append)
+        self.assertFalse(self.panel.visual_verify_button.isEnabled())
+
+        self.panel.show_proposal("Done", ("Moved pelvis",))
+        self.panel.prompt_input.setPlainText("  check the original goal  ")
+        self.panel.visual_verify_button.click()
+
+        self.assertEqual(verifications, ["check the original goal"])
+        self.panel.show_verification(
+            "The candidate is improved.",
+            ("Around 1.80 s: torso is more upright",),
+        )
+        self.assertTrue(self.panel.accept_button.isEnabled())
+        self.assertEqual(self.panel.proposal_heading.text(), "Visual verification")
 
 
 @unittest.skipUnless(QApplication is not None, "PySide6 unavailable")

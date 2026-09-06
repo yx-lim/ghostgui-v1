@@ -30,6 +30,7 @@ class AIAssistantPanel(QWidget):
     submit_requested = Signal(str)
     critique_requested = Signal(str)
     visual_refine_requested = Signal(str)
+    visual_verify_requested = Signal(str)
     refine_requested = Signal(str)
     preview_requested = Signal()
     accept_requested = Signal()
@@ -99,16 +100,27 @@ class AIAssistantPanel(QWidget):
         self.visual_refine_button = QPushButton("Visual refine")
         self.visual_refine_button.setObjectName("aiVisualRefineButton")
         self.visual_refine_button.setToolTip(
-            "Compare original and staged frames, then apply bounded semantic refinements"
+            "Inspect staged frames and apply one semantic motion plan"
+        )
+        self.visual_verify_button = QPushButton("Verify visually")
+        self.visual_verify_button.setObjectName("aiVisualVerifyButton")
+        self.visual_verify_button.setToolTip(
+            "Compare original and staged frames without changing the motion"
         )
         self.accept_button.clicked.connect(self.accept_requested.emit)
         self.reject_button.clicked.connect(self.reject_requested.emit)
         self.refine_button.clicked.connect(self._emit_refine)
         self.visual_refine_button.clicked.connect(self._emit_visual_refine)
+        self.visual_verify_button.clicked.connect(self._emit_visual_verify)
         for button in (self.accept_button, self.reject_button, self.refine_button):
             decision_row.addWidget(button)
         layout.addLayout(decision_row)
-        layout.addWidget(self.visual_refine_button)
+        visual_row = QHBoxLayout()
+        visual_row.setContentsMargins(0, 0, 0, 0)
+        visual_row.setSpacing(4)
+        visual_row.addWidget(self.visual_refine_button)
+        visual_row.addWidget(self.visual_verify_button)
+        layout.addLayout(visual_row)
 
         self.prompt_input = QPlainTextEdit()
         self.prompt_input.setObjectName("aiPromptInput")
@@ -165,6 +177,7 @@ class AIAssistantPanel(QWidget):
         self.reject_button.setEnabled(staged)
         self.refine_button.setEnabled(staged)
         self.visual_refine_button.setEnabled(staged)
+        self.visual_verify_button.setEnabled(staged)
 
     def begin_request(
         self,
@@ -172,10 +185,13 @@ class AIAssistantPanel(QWidget):
         refinement: bool = False,
         critique: bool = False,
         visual_refinement: bool = False,
+        visual_verification: bool = False,
     ) -> None:
         self.set_state(AIAssistantPanelState.RUNNING)
-        if visual_refinement:
-            self.response_label.setText("Comparing and refining staged motion…")
+        if visual_verification:
+            self.response_label.setText("Comparing original and staged motion…")
+        elif visual_refinement:
+            self.response_label.setText("Inspecting and refining staged motion…")
         elif critique:
             self.response_label.setText("Inspecting timestamped rendered frames…")
         elif refinement:
@@ -212,6 +228,20 @@ class AIAssistantPanel(QWidget):
             if session_staged
             else AIAssistantPanelState.READY
         )
+
+    def show_verification(
+        self,
+        summary: str,
+        observations: tuple[str, ...],
+    ) -> None:
+        self.response_label.setText(summary.strip() or "Visual verification complete.")
+        self.proposal_heading.setText("Visual verification")
+        self.proposal_list.clear()
+        self.proposal_list.addItems(list(observations) or ["No visible issue reported"])
+        self.proposal_heading.show()
+        self.proposal_list.show()
+        self.prompt_input.clear()
+        self.set_state(AIAssistantPanelState.STAGED)
 
     def show_error(self, message: str, *, session_staged: bool = False) -> None:
         self.response_label.setText(f"AI error: {message}")
@@ -267,3 +297,6 @@ class AIAssistantPanel(QWidget):
 
     def _emit_visual_refine(self) -> None:
         self.visual_refine_requested.emit(self._instruction())
+
+    def _emit_visual_verify(self) -> None:
+        self.visual_verify_requested.emit(self._instruction())

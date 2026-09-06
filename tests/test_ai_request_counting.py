@@ -1,4 +1,4 @@
-"""Measured provider-request baseline for the pre-refactor AI workflows."""
+"""Measured historical and current provider-request workflow contracts."""
 
 from __future__ import annotations
 
@@ -35,15 +35,18 @@ from application.ai.semantic_tools import (
 )
 from application.ai.visual_critique import VisualCritic
 from application.ai.visual_refinement import (
-    VisualRefinementAction,
-    VisualRefinementLimits,
-    VisualRefinementProgress,
-    VisualRefinementStep,
+    VisualMotionWorkflow,
+    VisualVerifier,
 )
 from tests.test_ai_semantic_tools import FakeMotionService, _document
 from tests.test_ai_visual_critique import _frames as critique_frames
 from tests.test_ai_visual_critique import _response_payload as critique_payload
-from tests.test_ai_visual_refinement import _comparison_frames, _comparison_payload
+from tests.test_ai_visual_refinement import (
+    _comparison_frames,
+    _motion_frames,
+    _verification_payload,
+    _visual_plan_payload,
+)
 
 
 try:
@@ -52,13 +55,13 @@ except ImportError:
     AIAssistantController = None
 
 
-MEASURED_BASELINE = {
+EXPECTED_REQUEST_COUNTS = {
     "single semantic edit": 2,
     "four-operation generation": 2,
     "failed semantic tool plus recovery": 3,
     "critique-only": 1,
-    "one visual refinement iteration": 4,
-    "two visual refinement iterations": 7,
+    "visual refinement": 1,
+    "visual refinement plus verification": 2,
     "Test Connection": 1,
 }
 
@@ -111,59 +114,28 @@ def _logical_target_call(
     )
 
 
-def _visual_responses(edit_iterations: int):
-    responses = []
-    for index in range(edit_iterations):
-        responses.extend((
-            ProviderResponse(text=json.dumps(_comparison_payload())),
-            _tool_response(_logical_target_call(
-                f"visual-edit-{index + 1}",
-                time_seconds=1.8,
-                height=1.2 + (0.1 * index),
-            )),
-            ProviderResponse(text=f"Visual edit {index + 1} complete."),
-        ))
-    responses.append(ProviderResponse(
-        text=json.dumps(_comparison_payload(should_refine=False))
-    ))
-    return responses
-
-
-async def _measure_visual_iterations(edit_iterations: int) -> int:
-    provider, context, tools = _visual_scenario(
-        _visual_responses(edit_iterations)
-    )
-    limits = VisualRefinementLimits(max_edit_iterations=edit_iterations)
-    progress = VisualRefinementProgress(limits)
-    step = VisualRefinementStep(provider, tools, limits=limits)
-
-    for index in range(edit_iterations):
-        result = await step.run(
-            "Make the landing softer.",
-            model="mock",
-            motion_context={"iteration": index + 1},
-            comparison_frames=_comparison_frames(),
-            semantic_context=context,
-        )
-        expected = (
-            VisualRefinementAction.REFINE
-            if index + 1 < edit_iterations
-            else VisualRefinementAction.ASSESS_ONLY
-        )
-        if progress.after_step(result) is not expected:
-            raise AssertionError("visual refinement took an unexpected action")
-
-    final = await step.run(
+async def _measure_visual_refinement_and_verification() -> tuple[int, int]:
+    provider, context, tools = _visual_scenario([
+        ProviderResponse(text=json.dumps(_visual_plan_payload())),
+        ProviderResponse(text=json.dumps(_verification_payload())),
+    ])
+    result = await VisualMotionWorkflow(provider, tools).run(
         "Make the landing softer.",
         model="mock",
-        motion_context={"final_assessment": True},
-        comparison_frames=_comparison_frames(),
+        motion_context={"motion": {"working_copy": True}},
+        motion_frames=_motion_frames(),
         semantic_context=context,
-        allow_edit=False,
     )
-    if progress.after_step(final) is not VisualRefinementAction.COMPLETE:
-        raise AssertionError("visual refinement did not complete after assessment")
-    return provider.counter.counts.total
+    if not result.execution.changed_operations:
+        raise AssertionError("visual refinement did not stage its local operation")
+    refinement_count = provider.counter.counts.total
+    await VisualVerifier(provider).run(
+        "Make the landing softer.",
+        model="mock",
+        motion_context={"motion": {"working_copy": True}},
+        comparison_frames=_comparison_frames(),
+    )
+    return refinement_count, provider.counter.counts.total
 
 
 class RequestCountingProviderTests(unittest.IsolatedAsyncioTestCase):
@@ -204,7 +176,7 @@ class RequestCountingProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result.tool_executions), 1)
         self.assertEqual(
             provider.counter.counts.total,
-            MEASURED_BASELINE["single semantic edit"],
+            EXPECTED_REQUEST_COUNTS["single semantic edit"],
         )
 
         calls = tuple(
@@ -228,7 +200,7 @@ class RequestCountingProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result.tool_executions), 4)
         self.assertEqual(
             provider.counter.counts.total,
-            MEASURED_BASELINE["four-operation generation"],
+            EXPECTED_REQUEST_COUNTS["four-operation generation"],
         )
 
     async def test_failed_tool_recovery_and_critique_only(self):
@@ -267,7 +239,7 @@ class RequestCountingProviderTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             provider.counter.counts.total,
-            MEASURED_BASELINE["failed semantic tool plus recovery"],
+            EXPECTED_REQUEST_COUNTS["failed semantic tool plus recovery"],
         )
 
         provider = RequestCountingProvider(MockProvider([
@@ -281,17 +253,20 @@ class RequestCountingProviderTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             provider.counter.counts.total,
-            MEASURED_BASELINE["critique-only"],
+            EXPECTED_REQUEST_COUNTS["critique-only"],
         )
 
-    async def test_one_and_two_visual_refinement_iterations(self):
-        self.assertEqual(
-            await _measure_visual_iterations(1),
-            MEASURED_BASELINE["one visual refinement iteration"],
+    async def test_visual_refinement_and_optional_verification(self):
+        refinement, with_verification = (
+            await _measure_visual_refinement_and_verification()
         )
         self.assertEqual(
-            await _measure_visual_iterations(2),
-            MEASURED_BASELINE["two visual refinement iterations"],
+            refinement,
+            EXPECTED_REQUEST_COUNTS["visual refinement"],
+        )
+        self.assertEqual(
+            with_verification,
+            EXPECTED_REQUEST_COUNTS["visual refinement plus verification"],
         )
 
 
@@ -320,7 +295,7 @@ class ConnectionRequestCountingTests(unittest.TestCase):
         self.assertEqual(result, "OK")
         self.assertEqual(
             provider.counter.counts.total,
-            MEASURED_BASELINE["Test Connection"],
+            EXPECTED_REQUEST_COUNTS["Test Connection"],
         )
 
 

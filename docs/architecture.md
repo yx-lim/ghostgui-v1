@@ -188,7 +188,7 @@ but focused components now own the mechanics it previously embedded:
 | `gui/ai_assistant_controller.py` | Background provider/session orchestration and Orange preview adaptation |
 | `application/ai/frame_capture.py` | Qt-free representative timestamp selection and paired-image capture contract |
 | `application/ai/visual_critique.py` | Read-only structured multimodal observation request and validation |
-| `application/ai/visual_refinement.py` | Bounded visual comparison, semantic plan, and edit-step orchestration |
+| `application/ai/visual_refinement.py` | One-shot visual semantic planning and explicit read-only verification |
 | `application/ai/motion_plan.py` | Provider-neutral semantic plan values and strict response schemas |
 | `application/ai/text_planner.py` | One-request text planning and workflow orchestration |
 | `application/ai/repair_planner.py` | One optional compact replacement-operation request after local failure |
@@ -211,6 +211,18 @@ replacement-operation request using the already-updated working copy; local
 execution then stops whether the replacement set succeeds or fails. Earlier
 successful operations remain staged, and each failed operation is rolled back
 to its own checkpoint.
+
+The visual path shares that same local execution boundary:
+
+```text
+VisualMotionPlanner -> observations + MotionEditPlan -> PlanExecutor
+```
+
+Visual refine supplies 4--8 timestamped candidate frames and uses one
+structured multimodal request. It neither invokes `GhostGUIAgent` nor starts an
+automatic visual loop. **Verify visually** is a separate read-only request over
+original/candidate pairs captured at identical timestamps; it returns no edit
+operations.
 
 `RobotViewer3D` similarly retains its public API while delegating the advanced
 IK inspector builders to `gui/viewers/ik_panels.py` and playback math to the

@@ -123,8 +123,7 @@ credentials and can consume provider credits.
 ### Provider-request baseline
 
 `RequestCountingProvider` measures calls at GhostGUI's normalized provider
-boundary. The Phase 3 pre-refactor baseline is enforced by
-`tests.test_ai_request_counting`:
+boundary. The Phase 3 pre-refactor baseline was:
 
 | User action | Normalized provider requests |
 | --- | ---: |
@@ -138,10 +137,9 @@ boundary. The Phase 3 pre-refactor baseline is enforced by
 
 These are measured workflow calls to `LLMProvider.generate`, not estimates.
 Provider-SDK transport retries below that boundary are deliberately excluded.
-Each successful semantic edit iteration currently needs a tool-producing turn
-and a second completion-summary turn. Each visual iteration adds one structured
-comparison request, and the bounded workflow always ends with one read-only
-assessment request.
+At that baseline, each semantic edit needed a tool-producing turn and a second
+completion-summary turn. Each visual iteration added one structured comparison
+request, and the bounded workflow ended with one read-only assessment request.
 
 Phase 4 replaces the default text path with one structured planning request and
 local `PlanExecutor` execution. The historical table above remains the measured
@@ -170,6 +168,21 @@ The repair request contains compact failure and updated-context data rather
 than the complete conversation or raw trajectory. There is no third autonomous
 request. Partial successful work remains staged for human review when repair
 cannot resolve every operation.
+
+Phase 6 replaces the legacy visual compare/agent/summary loop with one
+structured `VisualMotionPlanner` request followed by local `PlanExecutor`
+execution:
+
+| Current Phase 6 visual action | Normalized provider requests |
+| --- | ---: |
+| Critique-only | 1 |
+| Visual refine | 1 |
+| Explicit Verify visually after Visual refine | 2 total |
+
+The Visual refine response contains timestamped observations and semantic
+operations together. Local validation, execution, and proposal summaries do not
+add requests. Verification uses identical-time original/candidate pairs and is
+read-only. No automatic visual refinement iteration or final assessment runs.
 
 The AI regression suite also checks local instruction, response, tool-result,
 output-token, and rendered-frame budgets. Comparison preflight failures must be

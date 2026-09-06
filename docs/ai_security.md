@@ -24,9 +24,10 @@ motion name can be present in the semantic context, so avoid sensitive names
 when using an external provider.
 
 Critique and Visual refine additionally send 4--8 rendered images from the
-current 3D camera. Every image has explicit time metadata, and before/after
-images use identical timestamps. Treat anything visible in those renders as
-data disclosed to the selected provider. GhostGUI does not upload video.
+current 3D camera. **Verify visually** sends 4--8 original/candidate image pairs.
+Every image has explicit time metadata, and each verification pair uses an
+identical timestamp. Treat anything visible in those renders as data disclosed
+to the selected provider. GhostGUI does not upload video.
 
 Provider handling, retention, and regional processing of submitted content are
 governed by the selected provider and account. Review those terms before using
@@ -54,9 +55,11 @@ network connection, or provider credential.
   one replacement-operation request, after which autonomous execution stops.
 - A rendered frame is limited to 8 MiB, and provider capability limits still
   constrain the total image count.
-- Critique and visual comparison requests receive no edit tools.
-- Automatic visual refinement permits at most two edit iterations by default
-  and always ends with a read-only assessment.
+- Critique, Visual refine, and visual verification receive no executable tool
+  declarations. Visual refine accepts semantic operation data through a strict
+  structured schema and executes it only through the local ToolRegistry.
+- Visual refine makes one multimodal planning request and does not automatically
+  repeat. **Verify visually** is an optional separate read-only request.
 - User-authored and protected Keyframes take priority over later AI edits.
 - Accept uses one atomic `ReplaceMotionState` command and rejects a session if
   the committed document changed after the working copy was created.

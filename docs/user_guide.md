@@ -198,7 +198,8 @@ The right sidebar contains a compact **Status** summary, the optional **Motion
 Assistant**, and **IK / Constraints** controls. Expand **Details** to inspect
 solver and operation diagnostics. Motion Assistant stages language edits on a
 detached working copy; use **Critique** for read-only visual observations, or
-**Visual refine** for a bounded before/after semantic refinement loop. Use
+**Visual refine** for a one-request visual semantic plan. Use **Verify visually**
+for an optional read-only comparison of the committed and staged motion. Use
 **Accept**, **Reject**, or **Refine** after reviewing its Orange preview. See
 [Motion Assistant](ai_assistant.md) for secure API-key
 setup and failure behavior.

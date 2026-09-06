@@ -21,11 +21,10 @@ from application.ai import (
     TextMotionWorkflow,
     VisualCritic,
     VisualCritiqueResult,
-    VisualRefinementAction,
-    VisualRefinementLimits,
-    VisualRefinementProgress,
-    VisualRefinementStep,
-    VisualRefinementStepResult,
+    VisualMotionRunResult,
+    VisualMotionWorkflow,
+    VisualVerificationResult,
+    VisualVerifier,
     build_semantic_tool_registry,
     capture_comparison_frames,
     capture_motion_frames,
@@ -79,8 +78,6 @@ class AIAssistantController:
         self._session_api_keys = {}
         self._settings_dialog = None
         self._session_goal = ""
-        self._visual_refinement_progress = None
-        self._visual_refinement_plan = None
         self._visual_refinement_goal = ""
 
         self.provider_name = str(
@@ -94,6 +91,7 @@ class AIAssistantController:
         self.panel.submit_requested.connect(self.start_edit)
         self.panel.critique_requested.connect(self.start_critique)
         self.panel.visual_refine_requested.connect(self.start_visual_refinement)
+        self.panel.visual_verify_requested.connect(self.start_visual_verification)
         self.panel.refine_requested.connect(self.refine)
         self.panel.preview_requested.connect(self.preview)
         self.panel.accept_requested.connect(self.accept)
@@ -140,72 +138,42 @@ class AIAssistantController:
             )
             return
         self._visual_refinement_goal = self._combined_goal(instruction)
-        self._visual_refinement_progress = VisualRefinementProgress(
-            VisualRefinementLimits(max_edit_iterations=2)
-        )
         try:
-            self._visual_refinement_plan = FrameSampler().plan(
+            plan = FrameSampler().plan(
                 self.session.working_document,
                 FrameSamplingRequest(
                     suspected_times=(float(self.host.viewer_3d.display_time),),
                 ),
             )
+            frames = capture_motion_frames(
+                self.session.working_document,
+                plan,
+                RobotViewerFrameRenderer(self.host.viewer_3d),
+                variant=ImageVariant.CANDIDATE,
+            )
+            motion_context = self._critique_context(self.session.working_document)
+            tools, semantic_context = self._semantic_edit_context()
         except Exception as error:
             self._clear_visual_refinement()
             self.panel.show_error(str(error), session_staged=True)
             return
         self.panel.begin_request(visual_refinement=True)
         self.host.set_ai_motion_controls_enabled(False)
-        self._submit_visual_refinement_step(allow_edit=True)
-
-    def _submit_visual_refinement_step(self, *, allow_edit: bool) -> None:
-        try:
-            renderer = RobotViewerFrameRenderer(self.host.viewer_3d)
-            frames = capture_comparison_frames(
-                self.host.document,
-                self.session.working_document,
-                self._visual_refinement_plan,
-                renderer,
-            )
-            motion_context = self._critique_context(self.session.working_document)
-            motion = GhostGUIMotionService(self.host.robot_model_3d)
-            tools = build_semantic_tool_registry(motion)
-            metadata = MotionMetadataService(
-                self.metadata_store,
-                self.identity_resolver,
-            )
-            semantic_context = SemanticToolContext(
-                session=self.session,
-                metadata=metadata,
-                selection=EditorSelectionContext(
-                    logical_frame=self.host.controls.frame_box.currentText(),
-                ),
-                motion_name=(
-                    None
-                    if self.host.current_project is None
-                    else self.host.current_project.project_name
-                ),
-            )
-        except Exception as error:
-            self._clear_visual_refinement()
-            self.panel.show_error(str(error), session_staged=True)
-            return
 
         def work(token):
-            return asyncio.run(self._run_visual_refinement_step(
+            return asyncio.run(self._run_visual_motion(
                 self._visual_refinement_goal,
                 motion_context,
                 frames,
                 tools,
                 semantic_context,
-                allow_edit,
                 token,
             ))
 
         self.active_handle = self.background_jobs.submit_cancellable(
             "AI visual refinement",
             work,
-            self._visual_refinement_step_succeeded,
+            self._visual_refinement_succeeded,
             self._request_failed,
             self._request_cancelled,
         )
@@ -216,91 +184,150 @@ class AIAssistantController:
                 session_staged=True,
             )
 
-    async def _run_visual_refinement_step(
+    async def _run_visual_motion(
         self,
         goal,
         motion_context,
         frames,
         tools,
         semantic_context,
-        allow_edit,
         token,
     ):
         provider = self._provider()
         try:
-            return await VisualRefinementStep(
-                provider,
-                tools,
-                limits=self._visual_refinement_progress.limits,
-            ).run(
+            return await VisualMotionWorkflow(provider, tools).run(
                 goal,
                 model=self.model,
                 motion_context=motion_context,
-                comparison_frames=frames,
+                motion_frames=frames,
                 semantic_context=semantic_context,
-                allow_edit=allow_edit,
                 cancellation_token=token,
             )
         finally:
             await provider.aclose()
 
-    def _visual_refinement_step_succeeded(
-        self,
-        result: VisualRefinementStepResult,
-    ) -> None:
+    def _visual_refinement_succeeded(self, result: VisualMotionRunResult) -> None:
         self.active_handle = None
-        try:
-            action = self._visual_refinement_progress.after_step(result)
-            self._update_visual_refinement_plan(result)
-        except Exception as error:
-            self._request_failed(error)
-            return
-        if action is VisualRefinementAction.REFINE:
-            self._submit_visual_refinement_step(allow_edit=True)
-            return
-        if action is VisualRefinementAction.ASSESS_ONLY:
-            self._submit_visual_refinement_step(allow_edit=False)
-            return
-        self._finish_visual_refinement(result)
-
-    def _update_visual_refinement_plan(self, result) -> None:
-        suspected = tuple(
-            observation.time_seconds
-            for observation in result.comparison_result.comparison.observations
-            if observation.time_seconds is not None
+        lines = result.proposal_lines + tuple(
+            self._format_observation(observation)
+            for observation in result.observations
         )
-        if not suspected:
-            return
-        self._visual_refinement_plan = FrameSampler().plan(
-            self.session.working_document,
-            FrameSamplingRequest(suspected_times=suspected),
-        )
-
-    def _finish_visual_refinement(self, result) -> None:
-        comparison = result.comparison_result.comparison
-        edit_count = self._visual_refinement_progress.completed_edit_iterations
-        lines = tuple(comparison.reasons)
-        lines += tuple(
-            self._format_observation(value)
-            for value in comparison.observations
-        )
-        if edit_count:
-            lines += (f"Visual semantic refinement iterations: {edit_count}",)
-        if comparison.should_refine and (
-            edit_count >= self._visual_refinement_progress.limits.max_edit_iterations
-        ):
-            lines += ("Automatic refinement limit reached; review remaining issues",)
         self.panel.show_proposal(
-            comparison.summary,
-            lines or ("No additional visual refinement was needed",),
+            result.text,
+            lines or ("No visual motion change was needed",),
         )
         self._session_goal = self._visual_refinement_goal
         self._clear_visual_refinement()
         self.preview()
 
+    def start_visual_verification(self, instruction: str = "") -> None:
+        if not self.session_staged or self.active_handle is not None:
+            return
+        if self.host.robot_model_3d is None:
+            self.panel.show_error(
+                "No robot model is available for visual verification.",
+                session_staged=True,
+            )
+            return
+        goal = self._combined_goal(instruction)
+        try:
+            plan = FrameSampler().plan(
+                self.session.working_document,
+                FrameSamplingRequest(
+                    suspected_times=(float(self.host.viewer_3d.display_time),),
+                ),
+            )
+            frames = capture_comparison_frames(
+                self.host.document,
+                self.session.working_document,
+                plan,
+                RobotViewerFrameRenderer(self.host.viewer_3d),
+            )
+            motion_context = self._critique_context(self.session.working_document)
+        except Exception as error:
+            self.panel.show_error(str(error), session_staged=True)
+            return
+        self.panel.begin_request(visual_verification=True)
+        self.host.set_ai_motion_controls_enabled(False)
+
+        def work(token):
+            return asyncio.run(self._run_visual_verification(
+                goal,
+                motion_context,
+                frames,
+                token,
+            ))
+
+        self.active_handle = self.background_jobs.submit_cancellable(
+            "AI visual verification",
+            work,
+            self._visual_verification_succeeded,
+            self._request_failed,
+            self._request_cancelled,
+        )
+        if self.active_handle is None:
+            self.panel.show_error(
+                "The background worker is shutting down.",
+                session_staged=True,
+            )
+
+    async def _run_visual_verification(
+        self,
+        goal,
+        motion_context,
+        frames,
+        token,
+    ):
+        provider = self._provider()
+        try:
+            return await VisualVerifier(provider).run(
+                goal,
+                model=self.model,
+                motion_context=motion_context,
+                comparison_frames=frames,
+                cancellation_token=token,
+            )
+        finally:
+            await provider.aclose()
+
+    def _visual_verification_succeeded(
+        self,
+        result: VisualVerificationResult,
+    ) -> None:
+        self.active_handle = None
+        verification = result.verification
+        lines = verification.reasons + tuple(
+            self._format_observation(observation)
+            for observation in verification.observations
+        )
+        self.panel.show_verification(
+            verification.summary,
+            lines or ("No visible issue reported",),
+        )
+        self.preview()
+
+    def _semantic_edit_context(self):
+        motion = GhostGUIMotionService(self.host.robot_model_3d)
+        tools = build_semantic_tool_registry(motion)
+        metadata = MotionMetadataService(
+            self.metadata_store,
+            self.identity_resolver,
+        )
+        context = SemanticToolContext(
+            session=self.session,
+            metadata=metadata,
+            selection=EditorSelectionContext(
+                logical_frame=self.host.controls.frame_box.currentText(),
+            ),
+            motion_name=(
+                None
+                if self.host.current_project is None
+                else self.host.current_project.project_name
+            ),
+        )
+        return tools, context
+
     def _clear_visual_refinement(self) -> None:
-        self._visual_refinement_progress = None
-        self._visual_refinement_plan = None
         self._visual_refinement_goal = ""
 
     def _combined_goal(self, instruction: str) -> str:

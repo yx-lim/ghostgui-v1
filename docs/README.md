@@ -17,8 +17,8 @@ GhostGUI.
 - [Motion Math](motion_math.md) explains interpolation, Jacobian IK, posture
   projection, and trajectory validation.
 - [Motion Assistant](ai_assistant.md) explains secure Gemini/Claude setup and the
-  staged Apply, Preview, Critique, Visual refine, Accept, Reject, and Refine
-  workflow.
+  staged Apply, Preview, Critique, Visual refine, Verify visually, Accept,
+  Reject, and Refine workflow.
 - [Motion Assistant Security](ai_security.md) defines provider trust, disclosed
   data, local limits, credentials, failure isolation, and safety exclusions.
 - [Models](models.md) describes bundled models, assets, and runtime caching.
