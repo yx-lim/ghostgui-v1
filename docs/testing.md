@@ -120,6 +120,29 @@ operational differences, not semantic quality. Live Gemini-versus-Claude runs
 remain an explicit manual smoke test because they require both local SDKs and
 credentials and can consume provider credits.
 
+### Provider-request baseline
+
+`RequestCountingProvider` measures calls at GhostGUI's normalized provider
+boundary. The Phase 3 pre-refactor baseline is enforced by
+`tests.test_ai_request_counting`:
+
+| User action | Normalized provider requests |
+| --- | ---: |
+| One semantic edit | 2 |
+| Four-operation generation (one parallel tool batch) | 2 |
+| Failed semantic tool followed by recovery | 3 |
+| Critique-only | 1 |
+| One visual refinement iteration plus final assessment | 4 |
+| Two visual refinement iterations plus final assessment | 7 |
+| Test Connection | 1 |
+
+These are measured workflow calls to `LLMProvider.generate`, not estimates.
+Provider-SDK transport retries below that boundary are deliberately excluded.
+Each successful semantic edit iteration currently needs a tool-producing turn
+and a second completion-summary turn. Each visual iteration adds one structured
+comparison request, and the bounded workflow always ends with one read-only
+assessment request.
+
 The AI regression suite also checks local instruction, response, tool-result,
 output-token, and rendered-frame budgets. Comparison preflight failures must be
 detected before any provider callback is invoked.
