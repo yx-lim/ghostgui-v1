@@ -18,7 +18,10 @@ official `GOOGLE_API_KEY`, `GEMINI_API_KEY`, and `ANTHROPIC_API_KEY`
 environment variables remain supported. Session-only keys are kept separately
 per provider so switching providers cannot reuse a key with the wrong service.
 **Test Connection** performs a small provider request without changing the
-motion.
+motion. A successful result is cached for the current provider, model, and API
+key identity during this GhostGUI process. Repeating the identical test uses
+the cached result; changing any of those settings invalidates it. GhostGUI does
+not test the connection automatically at startup.
 
 ## Edit And Review
 
@@ -97,6 +100,11 @@ Use **Cancel request** to stop a running provider call. Missing credentials,
 authentication failure, rate limits, timeouts, network failure, and malformed
 responses are shown inside the assistant. These failures leave committed
 motion unchanged and do not stop standard GhostGUI workflows.
+
+Gemini uses one outbound SDK attempt by default so a transient failure cannot
+silently consume extra free-tier requests. Developers may explicitly configure
+a small retry count for transient server failures. Quota exhaustion and HTTP
+429 responses are never retried automatically.
 
 The assistant can call only GhostGUI's registered semantic motion tools. It
 cannot execute arbitrary code or generate an unrestricted raw qpos trajectory.

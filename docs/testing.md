@@ -72,15 +72,25 @@ the no-tool request boundary are covered by:
 python3 -m unittest tests.test_ai_visual_critique -v
 ```
 
-The bounded visual Observe/Plan/Edit contract is covered by:
+The one-shot visual planning and explicit verification contracts are covered by:
 
 ```bash
 python3 -m unittest tests.test_ai_visual_refinement -v
 ```
 
-These tests verify complete timestamp-matched image pairs, comparison-only
-provider turns, semantic ToolRegistry execution, unchanged committed motion,
-the two-edit default, and the mandatory final read-only assessment.
+These tests verify timestamped candidate frames, identical-time verification
+pairs, a single combined observation/operation response, semantic ToolRegistry
+execution, unchanged committed motion, and the absence of an automatic visual
+loop.
+
+Quota-control and development replay contracts are covered by:
+
+```bash
+python3 -m unittest tests.test_ai_gemini_provider -v
+python3 -m unittest tests.test_ai_connection_cache -v
+python3 -m unittest tests.test_ai_connection_probe -v
+python3 -m unittest tests.test_ai_provider_replay -v
+```
 
 Gemini and Claude live contract smoke tests are opt-in and perform four provider
 requests: text, structured output, a non-executed tool request, and a tiny
@@ -183,6 +193,22 @@ The Visual refine response contains timestamped observations and semantic
 operations together. Local validation, execution, and proposal summaries do not
 add requests. Verification uses identical-time original/candidate pairs and is
 read-only. No automatic visual refinement iteration or final assessment runs.
+
+Phase 7 reduces accidental development quota use:
+
+| Phase 7 action | Outbound/provider requests |
+| --- | ---: |
+| Gemini request with default retry settings | 1 outbound attempt |
+| First successful Test Connection | 1 provider request |
+| Repeated identical successful Test Connection | 0 provider requests |
+| Test after provider, model, or API key change | 1 provider request |
+
+Gemini transient-server retries remain available only through an explicit
+`max_attempts` value; HTTP 429 never retries. Record/replay tests use synthetic
+content and a temporary JSON store. They verify that files contain a
+deterministic request fingerprint and caller-sanitized normalized response but
+not prompt text, image bytes, credentials, or unsanitized response content.
+Replay misses and corrupt recordings fail without a live fallback.
 
 The AI regression suite also checks local instruction, response, tool-result,
 output-token, and rendered-frame budgets. Comparison preflight failures must be

@@ -7,6 +7,7 @@ import asyncio
 from application.ai import (
     AIEditSession,
     AIEditSessionState,
+    ConnectionTestCache,
     ContextBuilder,
     EditorSelectionContext,
     FrameSampler,
@@ -29,10 +30,12 @@ from application.ai import (
     capture_comparison_frames,
     capture_motion_frames,
     sample_working_preview_qpos,
+    connection_test_identity,
 )
 from application.ai.credentials import (
     CredentialStorageError,
     SystemKeyringCredentialStore,
+    default_credential_source,
 )
 from application.ai.errors import ProviderCancelledError
 from application.ai.providers.gemini import (
@@ -76,6 +79,7 @@ class AIAssistantController:
         self.session = None
         self.active_handle = None
         self._session_api_keys = {}
+        self._connection_test_cache = ConnectionTestCache()
         self._settings_dialog = None
         self._session_goal = ""
         self._visual_refinement_goal = ""
@@ -670,6 +674,12 @@ class AIAssistantController:
         accepted = bool(dialog.exec())
         if accepted:
             values = dialog.values()
+            if (
+                values.provider != self.provider_name
+                or values.model != self.model
+                or bool(values.api_key)
+            ):
+                self._connection_test_cache.invalidate()
             try:
                 if values.api_key and values.store_securely:
                     self.credential_store.set_secret(
@@ -693,18 +703,38 @@ class AIAssistantController:
         dialog = self._settings_dialog
         if dialog is None:
             return
+        effective_key, configuration = self._effective_connection_credential(
+            provider_name,
+            api_key,
+        )
+        identity = connection_test_identity(
+            provider_name,
+            model,
+            effective_key,
+            configuration=configuration,
+        )
+        if self._connection_test_cache.has_success(identity):
+            dialog.set_test_result(
+                True,
+                "Cached for this provider, model, and API key.",
+            )
+            return
 
         def work(token):
             if token.cancellation_requested:
                 raise ProviderCancelledError("Connection test cancelled")
             return asyncio.run(
-                self._run_connection_test(provider_name, model, api_key)
+                self._run_connection_test(provider_name, model, effective_key)
             )
 
         handle = self.background_jobs.submit_cancellable(
             "test AI connection",
             work,
-            lambda response: self._connection_test_finished(True, response),
+            lambda response: self._connection_test_finished(
+                True,
+                response,
+                identity=identity,
+            ),
             lambda error: self._connection_test_finished(False, str(error)),
             lambda: self._connection_test_finished(False, "cancelled"),
         )
@@ -735,9 +765,28 @@ class AIAssistantController:
         finally:
             await provider.aclose()
 
-    def _connection_test_finished(self, succeeded: bool, message: str) -> None:
+    def _connection_test_finished(
+        self,
+        succeeded: bool,
+        message: str,
+        *,
+        identity=None,
+    ) -> None:
+        if succeeded and identity is not None:
+            self._connection_test_cache.record_success(identity)
         if self._settings_dialog is not None:
             self._settings_dialog.set_test_result(succeeded, message)
+
+    def _effective_connection_credential(self, provider_name, api_key):
+        if api_key:
+            return api_key, "settings-dialog"
+        session_key = self._session_api_keys.get(provider_name)
+        if session_key:
+            return session_key, "session-memory"
+        return (
+            default_credential_source().get_secret(provider_name),
+            "keyring-or-environment",
+        )
 
     def _clear_stored_key(self, provider_name: str) -> None:
         if self._settings_dialog is None:
@@ -747,6 +796,7 @@ class AIAssistantController:
         except CredentialStorageError as error:
             self._settings_dialog.set_test_result(False, str(error))
             return
+        self._connection_test_cache.invalidate()
         self._settings_dialog.mark_stored_key_removed(removed)
 
     @staticmethod

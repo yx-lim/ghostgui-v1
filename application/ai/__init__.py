@@ -37,9 +37,16 @@ from application.ai.providers import (
     LLMProvider,
     MockProvider,
     MockStep,
+    InMemoryRecordingStore,
+    JsonRecordingStore,
+    ProviderRecordingError,
+    ProviderRecordingStore,
     ProviderRequestCounter,
     ProviderRequestCounts,
     RequestCountingProvider,
+    RecordedProvider,
+    ReplayProvider,
+    provider_request_fingerprint,
 )
 from application.ai.edit_session import (
     AIEditSession,
@@ -55,6 +62,11 @@ from application.ai.metadata import (
     TimestampMotionIdentityResolver,
 )
 from application.ai.motion_state import MotionStateSnapshot, ReplaceMotionState
+from application.ai.connection_cache import (
+    ConnectionTestCache,
+    ConnectionTestIdentity,
+    connection_test_identity,
+)
 from application.ai.motion_plan import (
     MAX_PLANNED_OPERATIONS,
     MotionEditPlan,
@@ -181,6 +193,8 @@ __all__ = [
     "AIContext",
     "AnthropicProvider",
     "ContextBuilder",
+    "ConnectionTestCache",
+    "ConnectionTestIdentity",
     "EditAuthor",
     "EncodedFrame",
     "EditorSelectionContext",
@@ -192,6 +206,8 @@ __all__ = [
     "FrameSamplingPlan",
     "FrameSamplingRequest",
     "InMemoryMotionMetadataStore",
+    "InMemoryRecordingStore",
+    "JsonRecordingStore",
     "MessageRole",
     "LLMProvider",
     "GeminiProvider",
@@ -217,6 +233,8 @@ __all__ = [
     "ProviderConfigurationError",
     "ProviderCapabilities",
     "ProviderError",
+    "ProviderRecordingError",
+    "ProviderRecordingStore",
     "ProviderRateLimitError",
     "ProviderResponseError",
     "ProviderMessage",
@@ -235,6 +253,8 @@ __all__ = [
     "PlannedOperationResult",
     "ReplaceMotionState",
     "RequestCountingProvider",
+    "RecordedProvider",
+    "ReplayProvider",
     "RobotCapabilityContext",
     "SemanticMotionError",
     "SemanticToolObservation",
@@ -283,6 +303,7 @@ __all__ = [
     "build_semantic_tool_registry",
     "capture_comparison_frames",
     "capture_motion_frames",
+    "connection_test_identity",
     "compare_provider_agents",
     "editable_tool_definitions",
     "bounded_repair_error",
@@ -299,6 +320,7 @@ __all__ = [
     "parse_visual_critique",
     "parse_visual_motion_plan",
     "parse_visual_verification",
+    "provider_request_fingerprint",
     "sample_working_preview_qpos",
     "visual_motion_plan_response_schema",
 ]

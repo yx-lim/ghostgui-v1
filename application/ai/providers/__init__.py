@@ -14,6 +14,15 @@ from application.ai.providers.counting import (
     ProviderRequestCounts,
     RequestCountingProvider,
 )
+from application.ai.providers.replay import (
+    InMemoryRecordingStore,
+    JsonRecordingStore,
+    ProviderRecordingError,
+    ProviderRecordingStore,
+    RecordedProvider,
+    ReplayProvider,
+    provider_request_fingerprint,
+)
 
 __all__ = [
     "CancellationSignal",
@@ -22,9 +31,16 @@ __all__ = [
     "AnthropicProvider",
     "MockProvider",
     "MockStep",
+    "InMemoryRecordingStore",
+    "JsonRecordingStore",
+    "ProviderRecordingError",
+    "ProviderRecordingStore",
     "ProviderRequestCounter",
     "ProviderRequestCounts",
     "RequestCountingProvider",
+    "RecordedProvider",
+    "ReplayProvider",
+    "provider_request_fingerprint",
     "validate_provider_request",
     "validate_provider_response",
 ]

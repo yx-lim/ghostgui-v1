@@ -193,9 +193,10 @@ but focused components now own the mechanics it previously embedded:
 | `application/ai/text_planner.py` | One-request text planning and workflow orchestration |
 | `application/ai/repair_planner.py` | One optional compact replacement-operation request after local failure |
 | `application/ai/plan_executor.py` | Allowlisted local plan execution, operation rollback, validation, and summaries |
+| `application/ai/connection_cache.py` | Session-only successful connection-test identity cache |
 | `application/ai/provider_comparison.py` | Provider-neutral comparison of validated tool and detached motion outcomes; provider prose is excluded |
 | `application/ai/limits.py` | Shared local instruction, response, tool-result, output-token, and image budgets |
-| `application/ai/providers/` | Provider-neutral protocol plus isolated Mock, Gemini, and Anthropic adapters |
+| `application/ai/providers/` | Provider-neutral protocol plus isolated Mock, Gemini, Anthropic, and development record/replay adapters |
 | `gui/ai_frame_capture.py` | GUI-thread OpenGL capture, timestamp overlay, and editor-state restoration |
 | `gui/visualization/` | Main-window display/tool/panel adapters |
 
@@ -223,6 +224,20 @@ structured multimodal request. It neither invokes `GhostGUIAgent` nor starts an
 automatic visual loop. **Verify visually** is a separate read-only request over
 original/candidate pairs captured at identical timestamps; it returns no edit
 operations.
+
+Gemini defaults to one SDK outbound attempt. A caller must explicitly raise its
+small transient-server retry budget, and HTTP 429 is never retryable. The
+settings controller checks an application-layer cache before **Test Connection**;
+that cache retains one successful provider/model/credential fingerprint for the
+process and is invalidated by a configuration mismatch.
+
+Development recording wraps a normal provider only when explicitly enabled and
+requires a response sanitizer. `provider_request_fingerprint` hashes the
+provider, model, normalized messages and context, image content digests, output
+schema, and semantic tool schemas. The optional JSON store writes that digest
+and sanitized `ProviderResponse`, not the request material. `ReplayProvider`
+uses the same fingerprint and fails on a miss rather than falling back to a live
+request.
 
 `RobotViewer3D` similarly retains its public API while delegating the advanced
 IK inspector builders to `gui/viewers/ik_panels.py` and playback math to the

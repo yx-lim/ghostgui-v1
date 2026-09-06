@@ -299,6 +299,7 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
         provider = GeminiProvider(
             client=client,
             cancellation_poll_seconds=0.001,
+            max_attempts=3,
             retry_base_seconds=0.001,
         )
 
@@ -333,6 +334,7 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
         provider = GeminiProvider(
             client=client,
             cancellation_poll_seconds=0.001,
+            max_attempts=2,
             retry_base_seconds=1.0,
         )
         token = _Token()
@@ -345,6 +347,31 @@ class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
             await task
 
         self.assertEqual(len(client.models.calls), 1)
+
+    async def test_default_is_one_attempt_and_rate_limits_are_never_retried(self):
+        for error in (_StatusError(503), _StatusError(429)):
+            with self.subTest(code=error.status_code):
+                client = _FakeClient(error)
+                provider = GeminiProvider(
+                    client=client,
+                    cancellation_poll_seconds=0.001,
+                )
+
+                with self.assertRaises(ProviderError):
+                    await provider.generate(_request())
+
+                self.assertEqual(len(client.models.calls), 1)
+
+        rate_limited = _FakeClient(_StatusError(429))
+        provider = GeminiProvider(
+            client=rate_limited,
+            cancellation_poll_seconds=0.001,
+            max_attempts=2,
+            retry_base_seconds=0.001,
+        )
+        with self.assertRaises(ProviderRateLimitError):
+            await provider.generate(_request())
+        self.assertEqual(len(rate_limited.models.calls), 1)
 
     async def test_cancels_an_active_sdk_request(self):
         gate = asyncio.Event()

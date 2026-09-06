@@ -41,6 +41,11 @@ Official provider environment variables are also supported. Keys are never
 written to a GhostGUI project or plain UI preferences, included in prompts, or
 placed in comparison reports.
 
+The session connection-test cache stores only provider/model strings and a
+SHA-256 fingerprint of the effective credential and its configuration source.
+It never retains the plaintext key, is not persisted, and disappears when the
+application exits.
+
 Standard editing, playback, import, and export do not require an AI package,
 network connection, or provider credential.
 
@@ -60,6 +65,8 @@ network connection, or provider credential.
   structured schema and executes it only through the local ToolRegistry.
 - Visual refine makes one multimodal planning request and does not automatically
   repeat. **Verify visually** is an optional separate read-only request.
+- Gemini makes one outbound attempt by default. Explicit transient-server retry
+  settings never make quota-exhaustion or HTTP 429 responses retryable.
 - User-authored and protected Keyframes take priority over later AI edits.
 - Accept uses one atomic `ReplaceMotionState` command and rejects a session if
   the committed document changed after the working copy was created.
@@ -68,6 +75,14 @@ Provider comparison performs all fairness checks before making a provider
 request. Every candidate must start with an identical committed motion and a
 fresh, separate detached session. Reports compare validated semantic calls and
 motion digests, not provider prose, raw motion values, or provider-native IDs.
+
+Development record/replay is not exposed by the production UI. `RecordedProvider`
+requires explicit development mode and a caller-supplied response sanitizer.
+Its JSON store persists only the deterministic request fingerprint and the
+sanitized normalized response; request prompts, context text, rendered image
+bytes, and credentials are not written. Use synthetic inputs and keep recording
+files outside the repository. `ReplayProvider` fails closed when the provider,
+model, normalized prompt/context, image digest, or semantic schema differs.
 
 ## Failure And Cancellation
 
