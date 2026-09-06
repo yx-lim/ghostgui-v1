@@ -1,0 +1,49 @@
+name: Live AI Provider Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Provider contract to test
+        required: true
+        default: gemini
+        type: choice
+        options:
+          - gemini
+          - anthropic
+      model:
+        description: Optional model override
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  live-provider-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      AI_SMOKE_PROVIDER: ${{ inputs.provider }}
+      AI_SMOKE_MODEL: ${{ inputs.model }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install AI provider adapters
+        run: python -m pip install '.[ai]'
+
+      - name: Run four-request live contract smoke
+        shell: bash
+        run: |
+          arguments=("$AI_SMOKE_PROVIDER")
+          if [[ -n "$AI_SMOKE_MODEL" ]]; then
+            arguments+=(--model "$AI_SMOKE_MODEL")
+          fi
+          python scripts/smoke_ai_provider.py "${arguments[@]}"

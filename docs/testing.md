@@ -82,9 +82,23 @@ These tests verify complete timestamp-matched image pairs, comparison-only
 provider turns, semantic ToolRegistry execution, unchanged committed motion,
 the two-edit default, and the mandatory final read-only assessment.
 
-Gemini and Claude smoke tests are opt-in manual checks. Normal CI must not
-require either provider key or consume provider credits. Anthropic request and
-response conversion is covered without network access by:
+Gemini and Claude live contract smoke tests are opt-in and perform four provider
+requests: text, structured output, a non-executed tool request, and a tiny
+generated-image vision check. They use GhostGUI's normal keychain/environment
+credential lookup, print provider/model/SDK compatibility details, and never
+print keys or raw provider responses:
+
+```bash
+python3 scripts/smoke_ai_provider.py gemini
+python3 scripts/smoke_ai_provider.py anthropic
+```
+
+Pass `--model MODEL_ID` to check a different model. These commands consume live
+provider quota. The **Live AI Provider Smoke** GitHub Actions workflow is also
+available through `workflow_dispatch`; it is never triggered by a push, pull
+request, or schedule. Normal CI does not require either provider key or consume
+provider credits. Anthropic request and response conversion is covered without
+network access by:
 
 ```bash
 python3 -m unittest tests.test_ai_anthropic_provider -v
