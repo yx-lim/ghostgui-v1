@@ -35,6 +35,14 @@ committed motion and creates one history entry. **Reject** discards the complete
 working copy. **Refine** continues from the staged copy rather than restarting
 from committed motion.
 
+Each normal **Apply** or **Refine** action asks the provider once for a complete,
+structured semantic plan. GhostGUI then validates and executes every operation
+locally through its strict tool registry, validates the resulting working copy,
+and builds the proposal summary from recorded local results. Plans containing
+one operation or many operations therefore use the same single provider
+request; GhostGUI does not send a second request merely to obtain a “done”
+message.
+
 Motion-mutating direct controls are temporarily disabled while the current UI
 owns an unresolved AI session. This prevents them from editing the committed
 document by accident. The underlying session already distinguishes user and AI

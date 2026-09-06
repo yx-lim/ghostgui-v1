@@ -3,23 +3,22 @@
 from __future__ import annotations
 
 import asyncio
-from collections import Counter
 
 from application.ai import (
     AIEditSession,
     AIEditSessionState,
-    AgentRunResult,
     ContextBuilder,
     EditorSelectionContext,
     FrameSampler,
     FrameSamplingRequest,
-    GhostGUIAgent,
     GhostGUIMotionService,
     InMemoryMotionMetadataStore,
     MotionMetadataService,
     RobotCapabilityContext,
     SemanticToolContext,
     TimestampMotionIdentityResolver,
+    TextMotionRunResult,
+    TextMotionWorkflow,
     VisualCritic,
     VisualCritiqueResult,
     VisualRefinementAction,
@@ -478,7 +477,7 @@ class AIAssistantController:
 
         def work(token):
             return asyncio.run(
-                self._run_agent(instruction, tools, context, token)
+                self._run_text_motion(instruction, tools, context, token)
             )
 
         self.active_handle = self.background_jobs.submit_cancellable(
@@ -496,10 +495,10 @@ class AIAssistantController:
             if not self.session_staged:
                 self.host.set_ai_motion_controls_enabled(True)
 
-    async def _run_agent(self, instruction, tools, context, token):
+    async def _run_text_motion(self, instruction, tools, context, token):
         provider = self._provider()
         try:
-            return await GhostGUIAgent(provider, tools).run(
+            return await TextMotionWorkflow(provider, tools).run(
                 instruction,
                 model=self.model,
                 context=context,
@@ -516,7 +515,7 @@ class AIAssistantController:
             return AnthropicProvider(api_key=key)
         raise ValueError(f"Unsupported AI provider: {self.provider_name}")
 
-    def _request_succeeded(self, result: AgentRunResult) -> None:
+    def _request_succeeded(self, result: TextMotionRunResult) -> None:
         self.active_handle = None
         changes = self._proposal_lines(result)
         if self.session_staged:
@@ -735,16 +734,5 @@ class AIAssistantController:
         self.cancel_request()
 
     @staticmethod
-    def _proposal_lines(result: AgentRunResult) -> tuple[str, ...]:
-        successful = Counter(
-            record.name.replace("_", " ")
-            for record in result.tool_executions
-            if record.succeeded and record.name != "inspect_motion"
-        )
-        lines = tuple(
-            f"{name.title()}" + (f" ×{count}" if count > 1 else "")
-            for name, count in successful.items()
-        )
-        if result.validation is not None:
-            lines += ("Validated staged motion",)
-        return lines or ("No semantic motion change was reported",)
+    def _proposal_lines(result: TextMotionRunResult) -> tuple[str, ...]:
+        return result.proposal_lines

@@ -143,6 +143,21 @@ and a second completion-summary turn. Each visual iteration adds one structured
 comparison request, and the bounded workflow always ends with one read-only
 assessment request.
 
+Phase 4 replaces the default text path with one structured planning request and
+local `PlanExecutor` execution. The historical table above remains the measured
+pre-refactor comparison point. Current default text counts are enforced for
+plans containing 1, 4, and 12 operations:
+
+| Current Phase 4 text action | Normalized provider requests |
+| --- | ---: |
+| One-operation semantic edit | 1 |
+| Four-operation motion generation | 1 |
+| Twelve-operation motion generation | 1 |
+
+Operation validation, execution, rollback, motion validation, and the proposal
+summary are local work and add no provider request. Phase 4 deliberately does
+not add an automatic repair call; that bounded behavior belongs to Phase 5.
+
 The AI regression suite also checks local instruction, response, tool-result,
 output-token, and rendered-frame budgets. Comparison preflight failures must be
 detected before any provider callback is invoked.

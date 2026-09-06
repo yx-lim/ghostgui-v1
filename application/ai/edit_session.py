@@ -7,9 +7,11 @@ from enum import Enum
 
 from application.ai.metadata import (
     InMemoryMotionMetadataStore,
+    MotionEditMetadata,
     MotionMetadataStore,
 )
 from application.ai.motion_state import (
+    MotionStateSnapshot,
     ReplaceMotionState,
     capture_motion_state,
     detached_document,
@@ -40,6 +42,17 @@ class SessionEditRecord:
     working_revision: int
 
 
+@dataclass(frozen=True)
+class AIEditSessionCheckpoint:
+    """Detached operation boundary used for local execution rollback."""
+
+    motion_state: MotionStateSnapshot
+    metadata: dict[MotionEntityRef, MotionEditMetadata]
+    edits: tuple[SessionEditRecord, ...]
+    state: AIEditSessionState
+    owner_token: object
+
+
 class AIEditSession:
     """Own a detached working copy across AI, manual, and refine turns."""
 
@@ -58,6 +71,7 @@ class AIEditSession:
         self._state = AIEditSessionState.READY
         self._state_before_request = AIEditSessionState.READY
         self._edits: list[SessionEditRecord] = []
+        self._checkpoint_token = object()
 
     @property
     def state(self) -> AIEditSessionState:
@@ -74,6 +88,32 @@ class AIEditSession:
     @property
     def provider_request_active(self) -> bool:
         return self._state is AIEditSessionState.REQUESTING
+
+    def checkpoint(self) -> AIEditSessionCheckpoint:
+        """Capture the working copy without exposing its identity strategy."""
+
+        self._require_state(AIEditSessionState.READY, AIEditSessionState.STAGED)
+        return AIEditSessionCheckpoint(
+            motion_state=capture_motion_state(self.working_document),
+            metadata=dict(self.metadata.snapshot()),
+            edits=tuple(self._edits),
+            state=self._state,
+            owner_token=self._checkpoint_token,
+        )
+
+    def restore_checkpoint(self, checkpoint: AIEditSessionCheckpoint) -> None:
+        """Roll back one local operation while retaining earlier session work."""
+
+        if (
+            not isinstance(checkpoint, AIEditSessionCheckpoint)
+            or checkpoint.owner_token is not self._checkpoint_token
+        ):
+            raise TypeError("checkpoint must belong to an AI edit session")
+        self._require_state(AIEditSessionState.READY, AIEditSessionState.STAGED)
+        self.controller.execute(ReplaceMotionState(checkpoint.motion_state))
+        self.metadata.replace(checkpoint.metadata)
+        self._edits = list(checkpoint.edits)
+        self._state = checkpoint.state
 
     def begin_provider_request(self) -> None:
         self._require_state(AIEditSessionState.READY, AIEditSessionState.STAGED)

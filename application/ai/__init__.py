@@ -43,6 +43,7 @@ from application.ai.providers import (
 )
 from application.ai.edit_session import (
     AIEditSession,
+    AIEditSessionCheckpoint,
     AIEditSessionError,
     AIEditSessionState,
     SessionEditRecord,
@@ -54,6 +55,22 @@ from application.ai.metadata import (
     TimestampMotionIdentityResolver,
 )
 from application.ai.motion_state import MotionStateSnapshot, ReplaceMotionState
+from application.ai.motion_plan import (
+    MAX_PLANNED_OPERATIONS,
+    MotionEditPlan,
+    MotionPlanError,
+    PlannedOperation,
+    editable_tool_definitions,
+    motion_edit_plan_response_schema,
+    parse_motion_edit_plan,
+)
+from application.ai.plan_executor import (
+    PlanExecutionError,
+    PlanExecutionResult,
+    PlanExecutor,
+    PlannedOperationResult,
+    local_proposal,
+)
 from application.ai.preview import sample_working_preview_qpos
 from application.ai.frame_capture import (
     EncodedFrame,
@@ -113,6 +130,15 @@ from application.ai.agent import (
     GhostGUIAgent,
     ToolExecutionRecord,
 )
+from application.ai.text_planner import (
+    TEXT_MOTION_PLANNER_SYSTEM_PROMPT,
+    TextMotionPlanner,
+    TextMotionPlannerError,
+    TextMotionPlannerLimits,
+    TextMotionPlanningResult,
+    TextMotionRunResult,
+    TextMotionWorkflow,
+)
 from application.ai.provider_comparison import (
     ProviderBehaviorComparison,
     ProviderBehaviorSnapshot,
@@ -131,6 +157,7 @@ __all__ = [
     "AgentTimeoutError",
     "AgentValidationError",
     "AIEditSession",
+    "AIEditSessionCheckpoint",
     "AIEditSessionError",
     "AIEditSessionState",
     "AIContext",
@@ -154,10 +181,12 @@ __all__ = [
     "MockProvider",
     "MockStep",
     "MotionEditMetadata",
+    "MotionEditPlan",
     "MotionEntityRef",
     "MotionFrameImage",
     "MotionFrameRenderer",
     "MotionMetadataService",
+    "MotionPlanError",
     "MotionStateSnapshot",
     "MotionValidationReport",
     "ProviderCancelledError",
@@ -177,6 +206,11 @@ __all__ = [
     "ProviderBehaviorSnapshot",
     "ProviderComparisonCase",
     "ProviderRunStatus",
+    "PlanExecutionError",
+    "PlanExecutionResult",
+    "PlanExecutor",
+    "PlannedOperation",
+    "PlannedOperationResult",
     "ReplaceMotionState",
     "RequestCountingProvider",
     "RobotCapabilityContext",
@@ -196,6 +230,13 @@ __all__ = [
     "ToolResult",
     "ToolSpec",
     "ToolValidationError",
+    "TEXT_MOTION_PLANNER_SYSTEM_PROMPT",
+    "TextMotionPlanner",
+    "TextMotionPlannerError",
+    "TextMotionPlannerLimits",
+    "TextMotionPlanningResult",
+    "TextMotionRunResult",
+    "TextMotionWorkflow",
     "TimestampMotionIdentityResolver",
     "Usage",
     "VISUAL_CRITIQUE_RESPONSE_SCHEMA",
@@ -218,6 +259,11 @@ __all__ = [
     "capture_comparison_frames",
     "capture_motion_frames",
     "compare_provider_agents",
+    "editable_tool_definitions",
+    "local_proposal",
+    "MAX_PLANNED_OPERATIONS",
+    "motion_edit_plan_response_schema",
+    "parse_motion_edit_plan",
     "parse_visual_critique",
     "parse_visual_comparison",
     "sample_working_preview_qpos",
