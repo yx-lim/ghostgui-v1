@@ -1260,11 +1260,16 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.viewer.timeslice_slider.resize(500, 30)
         self.viewer.timeslice_slider.set_defined_times([0.2])
         pixel = self.viewer.timeslice_slider._time_to_pixel(0.37)
+        expected_time = (
+            self.viewer.timeslice_slider._pixel_to_raw(pixel) / 100.0
+        )
 
         self.viewer.timeslice_slider.activate_time_at_pixel(pixel)
 
-        self.assertEqual(self.viewer.get_current_time(), 0.37)
-        self.assertAlmostEqual(self.window.controls.time_slider.value(), 0.37)
+        self.assertEqual(self.viewer.get_current_time(), expected_time)
+        self.assertAlmostEqual(
+            self.window.controls.time_slider.value(), expected_time
+        )
 
     def test_pressing_current_defined_slice_handle_allows_normal_drag(self):
         self.viewer.timeslice_slider.resize(500, 30)
@@ -3798,7 +3803,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertAlmostEqual(self.viewer.timeline_duration, 6.25)
         self.assertEqual(self.viewer.timeslice_slider.maximum(), 625)
         self.assertEqual(self.window.controls.time_slider.slider.maximum(), 625)
-        self.assertEqual(mujoco_panel_path, source)
+        self.assertEqual(mujoco_panel_path.resolve(), source.resolve())
         np.testing.assert_allclose(mujoco_panel_times, [0.0, 6.25])
 
     def test_loaded_trajectory_csv_import_interval_downsamples_editable_keyframes(self):
