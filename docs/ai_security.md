@@ -14,7 +14,9 @@ A text edit can send:
 - a compact semantic summary containing the robot model, logical-frame, End
   Effector, Joint Angle, selection, Keyframe-time, and protection context;
 - the strict semantic tool names and argument schemas; and
-- bounded semantic tool results needed to continue the current agent turn.
+- after a local operation failure, at most one compact repair payload containing
+  the failed operations and reasons, successful operations already applied,
+  updated semantic context, and important user constraints.
 
 The compact context intentionally excludes raw qpos values, project file paths,
 terminal logs, credentials, and unrestricted application state. A project or
@@ -48,6 +50,8 @@ network connection, or provider credential.
   hardware, or DSMS tool.
 - Agent provider turns, tool calls, request time, instruction size, response
   size, tool-result size, and requested output tokens are locally bounded.
+- Normal text edits use one planning request. A local operation failure may use
+  one replacement-operation request, after which autonomous execution stops.
 - A rendered frame is limited to 8 MiB, and provider capability limits still
   constrain the total image count.
 - Critique and visual comparison requests receive no edit tools.

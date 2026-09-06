@@ -66,6 +66,10 @@ def _payload(operations=(), *, summary="Provider-authored plan summary"):
     }
 
 
+def _repair_payload(operations):
+    return {"operations": _payload(operations)["operations"]}
+
+
 def _ensure_operation(time_seconds: float):
     return {
         "tool": "ensure_keyframe",
@@ -294,11 +298,13 @@ class TextMotionWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(session.has_changes)
                 delegate.assert_exhausted()
 
-    async def test_failed_local_operation_does_not_trigger_implicit_repair(self):
-        response = ProviderResponse(text=json.dumps(_payload([
+    async def test_failed_local_operation_uses_one_repair_request(self):
+        responses = [ProviderResponse(text=json.dumps(_payload([
             {"tool": "run_code", "arguments": {"code": "unsafe"}},
-        ])))
-        _committed, session, context, tools, delegate, provider = _setup([response])
+        ]))), ProviderResponse(text=json.dumps(_repair_payload([
+            _ensure_operation(1.0),
+        ])))]
+        _committed, session, context, tools, delegate, provider = _setup(responses)
 
         result = await TextMotionWorkflow(provider, tools).run(
             "Run arbitrary code.",
@@ -306,10 +312,11 @@ class TextMotionWorkflowTests(unittest.IsolatedAsyncioTestCase):
             context=context,
         )
 
-        self.assertEqual(provider.counter.counts.total, 1)
+        self.assertEqual(provider.counter.counts.total, 2)
         self.assertEqual(len(result.execution.failed_operations), 1)
-        self.assertIn("local execution failed", result.text)
-        self.assertFalse(session.has_changes)
+        self.assertEqual(len(result.unresolved_operations), 0)
+        self.assertIn("resolved the failed operation set", result.text)
+        self.assertTrue(session.has_changes)
         delegate.assert_exhausted()
 
     async def test_clarification_uses_one_request_and_makes_no_change(self):

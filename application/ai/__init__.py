@@ -62,7 +62,9 @@ from application.ai.motion_plan import (
     PlannedOperation,
     editable_tool_definitions,
     motion_edit_plan_response_schema,
+    motion_repair_response_schema,
     parse_motion_edit_plan,
+    parse_motion_repair_plan,
 )
 from application.ai.plan_executor import (
     PlanExecutionError,
@@ -70,6 +72,17 @@ from application.ai.plan_executor import (
     PlanExecutor,
     PlannedOperationResult,
     local_proposal,
+    local_repair_proposal,
+)
+from application.ai.repair_planner import (
+    MAX_REPAIR_FAILURE_REASON_CHARACTERS,
+    MAX_REPAIR_PROMPT_CHARACTERS,
+    MOTION_REPAIR_SYSTEM_PROMPT,
+    MotionRepairPlanner,
+    MotionRepairPlannerError,
+    MotionRepairPlannerLimits,
+    MotionRepairPlanningResult,
+    bounded_repair_error,
 )
 from application.ai.preview import sample_working_preview_qpos
 from application.ai.frame_capture import (
@@ -187,6 +200,10 @@ __all__ = [
     "MotionFrameRenderer",
     "MotionMetadataService",
     "MotionPlanError",
+    "MotionRepairPlanner",
+    "MotionRepairPlannerError",
+    "MotionRepairPlannerLimits",
+    "MotionRepairPlanningResult",
     "MotionStateSnapshot",
     "MotionValidationReport",
     "ProviderCancelledError",
@@ -231,6 +248,7 @@ __all__ = [
     "ToolSpec",
     "ToolValidationError",
     "TEXT_MOTION_PLANNER_SYSTEM_PROMPT",
+    "MOTION_REPAIR_SYSTEM_PROMPT",
     "TextMotionPlanner",
     "TextMotionPlannerError",
     "TextMotionPlannerLimits",
@@ -260,10 +278,16 @@ __all__ = [
     "capture_motion_frames",
     "compare_provider_agents",
     "editable_tool_definitions",
+    "bounded_repair_error",
     "local_proposal",
+    "local_repair_proposal",
     "MAX_PLANNED_OPERATIONS",
+    "MAX_REPAIR_FAILURE_REASON_CHARACTERS",
+    "MAX_REPAIR_PROMPT_CHARACTERS",
     "motion_edit_plan_response_schema",
+    "motion_repair_response_schema",
     "parse_motion_edit_plan",
+    "parse_motion_repair_plan",
     "parse_visual_critique",
     "parse_visual_comparison",
     "sample_working_preview_qpos",

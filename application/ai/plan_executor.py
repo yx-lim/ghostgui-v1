@@ -16,6 +16,10 @@ from application.ai.semantic_tools import SemanticToolContext
 from application.ai.tool_registry import ToolRegistry
 
 
+MAX_PROPOSAL_FAILURE_DETAILS = 4
+MAX_PROPOSAL_FAILURE_CHARACTERS = 240
+
+
 class PlanExecutionError(RuntimeError):
     """Local plan execution or validation could not complete safely."""
 
@@ -176,6 +180,55 @@ def local_proposal(result: PlanExecutionResult) -> tuple[str, tuple[str, ...]]:
     return summary, lines or ("No semantic motion change was reported",)
 
 
+def local_repair_proposal(
+    initial: PlanExecutionResult,
+    repair: PlanExecutionResult | None,
+    *,
+    repair_error: str | None = None,
+) -> tuple[str, tuple[str, ...]]:
+    """Summarize one bounded repair attempt and any partial staged result."""
+
+    initial_successes = tuple(
+        result for result in initial.operations if result.succeeded
+    )
+    if repair is None:
+        final_operations = initial.operations
+        validation = initial.validation
+        unresolved = initial.failed_operations
+    else:
+        final_operations = initial_successes + repair.operations
+        validation = repair.validation
+        unresolved = repair.failed_operations
+    combined = PlanExecutionResult(
+        plan=initial.plan,
+        operations=final_operations,
+        validation=validation,
+    )
+    summary, lines = local_proposal(combined)
+
+    if repair_error is not None:
+        summary += " The single repair request could not produce replacements."
+        lines += (f"Repair request stopped: {_short_failure(repair_error)}",)
+    elif unresolved:
+        count = len(unresolved)
+        summary += (
+            f" One repair attempt stopped with {count} unresolved "
+            f"operation{'s' if count != 1 else ''}."
+        )
+        lines += ("Repair stopped after the single allowed attempt",)
+    else:
+        summary += " One repair request resolved the failed operation set."
+        lines += ("Replacement operations completed",)
+
+    for result in unresolved[:MAX_PROPOSAL_FAILURE_DETAILS]:
+        tool = result.operation.tool.replace("_", " ").title()
+        lines += (f"Unresolved {tool}: {_short_failure(result.error or '')}",)
+    if len(unresolved) > MAX_PROPOSAL_FAILURE_DETAILS:
+        remaining = len(unresolved) - MAX_PROPOSAL_FAILURE_DETAILS
+        lines += (f"{remaining} additional unresolved operation(s)",)
+    return summary, lines
+
+
 def _proposal_group(operation: PlannedOperation) -> tuple[str, str | None]:
     arguments = operation.arguments
     target_keys = {
@@ -224,6 +277,13 @@ def _bounded_error(error: Exception, max_characters: int) -> str:
     if len(message) > max_characters:
         return "planned operation failed with an oversized error message"
     return message
+
+
+def _short_failure(message: str) -> str:
+    value = message.strip() or "operation failed"
+    if len(value) <= MAX_PROPOSAL_FAILURE_CHARACTERS:
+        return value
+    return value[: MAX_PROPOSAL_FAILURE_CHARACTERS - 1] + "…"
 
 
 def _raise_if_cancelled(token: CancellationSignal | None) -> None:

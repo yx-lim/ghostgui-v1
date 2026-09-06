@@ -191,6 +191,7 @@ but focused components now own the mechanics it previously embedded:
 | `application/ai/visual_refinement.py` | Bounded visual comparison, semantic plan, and edit-step orchestration |
 | `application/ai/motion_plan.py` | Provider-neutral semantic plan values and strict response schemas |
 | `application/ai/text_planner.py` | One-request text planning and workflow orchestration |
+| `application/ai/repair_planner.py` | One optional compact replacement-operation request after local failure |
 | `application/ai/plan_executor.py` | Allowlisted local plan execution, operation rollback, validation, and summaries |
 | `application/ai/provider_comparison.py` | Provider-neutral comparison of validated tool and detached motion outcomes; provider prose is excluded |
 | `application/ai/limits.py` | Shared local instruction, response, tool-result, output-token, and image budgets |
@@ -203,6 +204,13 @@ as compact JSON object text. `motion_plan.py` decodes that text into the normal
 `PlannedOperation.arguments` mapping, and `PlanExecutor` validates the selected
 tool name and its complete argument schema through `ToolRegistry` before any
 handler runs. The encoded text is never evaluated as code.
+
+The default text path has no autonomous provider loop. A successful initial
+plan uses one provider request. Failed operations may trigger one compact
+replacement-operation request using the already-updated working copy; local
+execution then stops whether the replacement set succeeds or fails. Earlier
+successful operations remain staged, and each failed operation is rolled back
+to its own checkpoint.
 
 `RobotViewer3D` similarly retains its public API while delegating the advanced
 IK inspector builders to `gui/viewers/ik_panels.py` and playback math to the

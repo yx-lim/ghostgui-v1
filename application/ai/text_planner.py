@@ -27,9 +27,16 @@ from application.ai.plan_executor import (
     PlanExecutionError,
     PlanExecutionResult,
     PlanExecutor,
+    PlannedOperationResult,
     local_proposal,
+    local_repair_proposal,
 )
 from application.ai.providers.base import CancellationSignal, LLMProvider
+from application.ai.repair_planner import (
+    MotionRepairPlanner,
+    MotionRepairPlannerLimits,
+    bounded_repair_error,
+)
 from application.ai.schemas import (
     MessageRole,
     ProviderMessage,
@@ -87,6 +94,8 @@ class TextMotionPlanningResult:
 class TextMotionRunResult:
     plan: MotionEditPlan
     execution: PlanExecutionResult
+    repair_execution: PlanExecutionResult | None
+    repair_error: str | None
     text: str
     proposal_lines: tuple[str, ...]
     provider_requests: int
@@ -94,12 +103,34 @@ class TextMotionRunResult:
     transcript: tuple[ProviderMessage, ...]
 
     def __post_init__(self) -> None:
-        if self.provider_requests != 1:
-            raise ValueError("text motion workflow must use exactly one provider request")
+        if self.provider_requests not in {1, 2}:
+            raise ValueError("text motion workflow must use one or two provider requests")
+        if self.provider_requests == 2 and not self.execution.failed_operations:
+            raise ValueError("second provider request requires an operation failure")
+        if self.repair_execution is not None and self.provider_requests != 2:
+            raise ValueError("repair execution requires a second provider request")
+        if self.repair_execution is not None and self.repair_error is not None:
+            raise ValueError("repair execution and repair error are mutually exclusive")
+        if self.repair_error is not None and not self.execution.failed_operations:
+            raise ValueError("repair error requires an initially failed operation")
 
     @property
     def validation(self) -> dict | None:
+        if self.repair_execution is not None:
+            return self.repair_execution.validation
         return self.execution.validation
+
+    @property
+    def repair_attempted(self) -> bool:
+        return self.provider_requests == 2
+
+    @property
+    def unresolved_operations(self) -> tuple[PlannedOperationResult, ...]:
+        if self.repair_execution is not None:
+            return self.repair_execution.failed_operations
+        if self.repair_error is not None:
+            return self.execution.failed_operations
+        return ()
 
 
 class TextMotionPlanner:
@@ -214,11 +245,17 @@ class TextMotionWorkflow:
         tools: ToolRegistry,
         *,
         planner_limits: TextMotionPlannerLimits | None = None,
+        repair_limits: MotionRepairPlannerLimits | None = None,
     ) -> None:
         self.planner = TextMotionPlanner(
             provider,
             tools,
             limits=planner_limits,
+        )
+        self.repairer = MotionRepairPlanner(
+            provider,
+            tools,
+            limits=repair_limits,
         )
         self.executor = PlanExecutor(tools)
 
@@ -241,21 +278,62 @@ class TextMotionWorkflow:
             context=context,
             cancellation_token=cancellation_token,
         )
-        if execution.validation_passed is False:
-            issues = execution.validation.get("issues", [])
+        repair_execution = None
+        repair_error = None
+        usage = planning.usage
+        transcript = planning.transcript
+        if execution.failed_operations:
+            try:
+                repair = await self.repairer.repair(
+                    instruction,
+                    execution,
+                    model=model,
+                    context=context,
+                    cancellation_token=cancellation_token,
+                )
+            except ProviderCancelledError:
+                raise
+            except Exception as error:
+                repair_error = bounded_repair_error(error)
+            else:
+                repair_execution = self.executor.execute(
+                    repair.plan,
+                    context=context,
+                    cancellation_token=cancellation_token,
+                )
+                usage = Usage(
+                    input_tokens=usage.input_tokens + repair.usage.input_tokens,
+                    output_tokens=usage.output_tokens + repair.usage.output_tokens,
+                )
+                transcript += repair.transcript
+
+        final_execution = repair_execution or execution
+        if final_execution.validation_passed is False:
+            issues = final_execution.validation.get("issues", [])
             detail = "; ".join(str(issue) for issue in issues) or "unknown issue"
             raise PlanExecutionError(
                 f"staged motion validation failed: {detail}"
             )
-        text, lines = local_proposal(execution)
+        if execution.failed_operations:
+            text, lines = local_repair_proposal(
+                execution,
+                repair_execution,
+                repair_error=repair_error,
+            )
+        else:
+            text, lines = local_proposal(execution)
         return TextMotionRunResult(
             plan=planning.plan,
             execution=execution,
+            repair_execution=repair_execution,
+            repair_error=repair_error,
             text=text,
             proposal_lines=lines,
-            provider_requests=1,
-            usage=planning.usage,
-            transcript=planning.transcript,
+            provider_requests=(
+                2 if self.repairer.last_request_started else 1
+            ),
+            usage=usage,
+            transcript=transcript,
         )
 
 

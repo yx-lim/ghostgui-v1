@@ -155,8 +155,21 @@ plans containing 1, 4, and 12 operations:
 | Twelve-operation motion generation | 1 |
 
 Operation validation, execution, rollback, motion validation, and the proposal
-summary are local work and add no provider request. Phase 4 deliberately does
-not add an automatic repair call; that bounded behavior belongs to Phase 5.
+summary are local work and add no provider request.
+
+Phase 5 adds one optional replacement-operation request after one or more local
+operation failures:
+
+| Current Phase 5 text action | Normalized provider requests |
+| --- | ---: |
+| Successful initial plan | 1 |
+| Failed operation, successful repair | 2 |
+| Failed operation, failed or malformed repair | 2 maximum |
+
+The repair request contains compact failure and updated-context data rather
+than the complete conversation or raw trajectory. There is no third autonomous
+request. Partial successful work remains staged for human review when repair
+cannot resolve every operation.
 
 The AI regression suite also checks local instruction, response, tool-result,
 output-token, and rendered-frame budgets. Comparison preflight failures must be

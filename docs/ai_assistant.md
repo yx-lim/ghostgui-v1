@@ -43,6 +43,14 @@ one operation or many operations therefore use the same single provider
 request; GhostGUI does not send a second request merely to obtain a “done”
 message.
 
+If a planned operation fails local validation or execution, GhostGUI may make
+one additional repair request. That request contains the original intent,
+compact failure information, successful operations already applied, the
+updated semantic motion context, and important user constraints. It requests
+replacement operations only. If those replacements also fail, GhostGUI stops
+without a third request and presents the partial working copy plus unresolved
+failure information for human review.
+
 Motion-mutating direct controls are temporarily disabled while the current UI
 owns an unresolved AI session. This prevents them from editing the committed
 document by accident. The underlying session already distinguishes user and AI

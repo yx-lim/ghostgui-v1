@@ -82,9 +82,7 @@ def motion_edit_plan_response_schema(registry: ToolRegistry) -> dict[str, Any]:
     receive complete ToolRegistry validation before execution.
     """
 
-    definitions = editable_tool_definitions(registry)
-    if not definitions:
-        raise MotionPlanError("no semantic edit tools are registered")
+    operation_schema = _planned_operation_response_schema(registry)
     return {
         "type": "object",
         "properties": {
@@ -97,24 +95,7 @@ def motion_edit_plan_response_schema(registry: ToolRegistry) -> dict[str, Any]:
             "clarification_question": {"type": "string"},
             "operations": {
                 "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "tool": {
-                            "type": "string",
-                            "enum": [definition.name for definition in definitions],
-                        },
-                        "arguments": {
-                            "type": "string",
-                            "description": (
-                                "Compact JSON object matching the selected "
-                                "semantic operation's argument schema."
-                            ),
-                        },
-                    },
-                    "required": ["tool", "arguments"],
-                    "additionalProperties": False,
-                },
+                "items": operation_schema,
                 "maxItems": MAX_PLANNED_OPERATIONS,
             },
         },
@@ -124,6 +105,24 @@ def motion_edit_plan_response_schema(registry: ToolRegistry) -> dict[str, Any]:
             "clarification_question",
             "operations",
         ],
+        "additionalProperties": False,
+    }
+
+
+def motion_repair_response_schema(registry: ToolRegistry) -> dict[str, Any]:
+    """Return the replacement-operations-only repair response contract."""
+
+    return {
+        "type": "object",
+        "properties": {
+            "operations": {
+                "type": "array",
+                "items": _planned_operation_response_schema(registry),
+                "minItems": 1,
+                "maxItems": MAX_PLANNED_OPERATIONS,
+            },
+        },
+        "required": ["operations"],
         "additionalProperties": False,
     }
 
@@ -153,8 +152,69 @@ def parse_motion_edit_plan(text: str) -> MotionEditPlan:
     if not isinstance(payload["operations"], list):
         raise MotionPlanError("motion edit plan operations must be a list")
 
+    operations = _parse_wire_operations(payload["operations"])
+    try:
+        return MotionEditPlan(
+            summary=payload["summary"],
+            needs_clarification=payload["needs_clarification"],
+            clarification_question=payload["clarification_question"],
+            operations=tuple(operations),
+        )
+    except (TypeError, ValueError) as error:
+        raise MotionPlanError(str(error)) from error
+
+
+def parse_motion_repair_plan(text: str) -> MotionEditPlan:
+    """Normalize a replacement-only provider response for PlanExecutor."""
+
+    try:
+        payload = json.loads(text)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise MotionPlanError("provider returned malformed motion-repair JSON") from error
+    if not isinstance(payload, dict) or set(payload) != {"operations"}:
+        raise MotionPlanError("motion repair has invalid fields")
+    values = payload["operations"]
+    if not isinstance(values, list) or not values:
+        raise MotionPlanError("motion repair requires replacement operations")
+    operations = _parse_wire_operations(values)
+    try:
+        return MotionEditPlan(
+            summary="Replacement operations",
+            needs_clarification=False,
+            clarification_question=None,
+            operations=operations,
+        )
+    except (TypeError, ValueError) as error:
+        raise MotionPlanError(str(error)) from error
+
+
+def _planned_operation_response_schema(registry: ToolRegistry) -> dict[str, Any]:
+    definitions = editable_tool_definitions(registry)
+    if not definitions:
+        raise MotionPlanError("no semantic edit tools are registered")
+    return {
+        "type": "object",
+        "properties": {
+            "tool": {
+                "type": "string",
+                "enum": [definition.name for definition in definitions],
+            },
+            "arguments": {
+                "type": "string",
+                "description": (
+                    "Compact JSON object matching the selected semantic "
+                    "operation's argument schema."
+                ),
+            },
+        },
+        "required": ["tool", "arguments"],
+        "additionalProperties": False,
+    }
+
+
+def _parse_wire_operations(values: list) -> tuple[PlannedOperation, ...]:
     operations = []
-    for value in payload["operations"]:
+    for value in values:
         if not isinstance(value, dict) or set(value) != {"tool", "arguments"}:
             raise MotionPlanError("planned operation has invalid fields")
         if not isinstance(value["tool"], str):
@@ -169,14 +229,10 @@ def parse_motion_edit_plan(text: str) -> MotionEditPlan:
                 "planned operation arguments contain malformed JSON"
             ) from error
         if not isinstance(arguments, Mapping):
-            raise MotionPlanError("planned operation arguments must decode to an object")
+            raise MotionPlanError(
+                "planned operation arguments must decode to an object"
+            )
         operations.append(PlannedOperation(value["tool"], arguments))
-    try:
-        return MotionEditPlan(
-            summary=payload["summary"],
-            needs_clarification=payload["needs_clarification"],
-            clarification_question=payload["clarification_question"],
-            operations=tuple(operations),
-        )
-    except (TypeError, ValueError) as error:
-        raise MotionPlanError(str(error)) from error
+    if len(operations) > MAX_PLANNED_OPERATIONS:
+        raise MotionPlanError("motion plan exceeds the operation limit")
+    return tuple(operations)
