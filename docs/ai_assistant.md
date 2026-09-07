@@ -25,7 +25,9 @@ not test the connection automatically at startup.
 
 ## Edit And Review
 
-1. Select the relevant logical frame and active time.
+1. Select the relevant logical frame and active time. To target an interval,
+   select Keyframe-table rows at both ends of the range with Shift or the
+   platform multi-select modifier.
 2. Describe one focused motion edit and choose **Apply**.
 3. Continue inspecting the camera and timeline while the request runs.
 4. Review the proposed changes and Orange preview.
@@ -45,6 +47,17 @@ and builds the proposal summary from recorded local results. Plans containing
 one operation or many operations therefore use the same single provider
 request; GhostGUI does not send a second request merely to obtain a “done”
 message.
+
+At request time, the controller takes one snapshot from the editor's existing
+authoritative controls. It includes the current timeline time, a multi-row
+Keyframe interval, active Keyframe, selected logical frame or End Effector,
+recently manipulated Joint Angle while Joint Angles mode is active, an
+unambiguous model-defined joint group, edit mode, active view and 3D camera,
+current robot capabilities, and protected or user-owned Keyframes. The same
+snapshot path is used by Apply, Refine, Critique, Visual refine, and Verify
+visually. Selecting the right hand therefore gives “this” the semantic context
+`right_hand`; selecting rows at 2.0 s and 3.0 s gives “this section” the interval
+`[2.0, 3.0]`.
 
 If a planned operation fails local validation or execution, GhostGUI may make
 one additional repair request. That request contains the original intent,

@@ -12,7 +12,8 @@ A text edit can send:
 
 - the user's instruction;
 - a compact semantic summary containing the robot model, logical-frame, End
-  Effector, Joint Angle, selection, Keyframe-time, and protection context;
+  Effector, Joint Angle, selection, current timeline time, selected Keyframe
+  interval, active view/3D camera, Keyframe-time, and protection context;
 - the strict semantic tool names and argument schemas; and
 - after a local operation failure, at most one compact repair payload containing
   the failed operations and reasons, successful operations already applied,
@@ -22,6 +23,11 @@ The compact context intentionally excludes raw qpos values, project file paths,
 terminal logs, credentials, and unrestricted application state. A project or
 motion name can be present in the semantic context, so avoid sensitive names
 when using an external provider.
+
+Selection and camera details are captured from existing GUI owners when the
+request begins; the Motion Assistant does not maintain a second document,
+timeline, or camera selection model. A time interval is disclosed only when at
+least two distinct Keyframe times are selected.
 
 Critique and Visual refine additionally send 4--8 rendered images from the
 current 3D camera. **Verify visually** sends 4--8 original/candidate image pairs.

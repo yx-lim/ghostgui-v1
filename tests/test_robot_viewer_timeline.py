@@ -1,7 +1,10 @@
+import asyncio
+import json
 import os
 from dataclasses import replace
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -9,7 +12,14 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt
+from PySide6.QtCore import (
+    QEvent,
+    QItemSelectionModel,
+    QPoint,
+    QPointF,
+    QRect,
+    Qt,
+)
 from PySide6.QtGui import QColor, QCloseEvent, QMouseEvent, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
@@ -28,6 +38,13 @@ from PySide6.QtWidgets import (
 )
 
 from core.ik import Collision
+from application.ai import (
+    AIEditSession,
+    GhostGUIMotionService,
+    TextMotionWorkflow,
+)
+from application.ai.providers import MockProvider
+from application.ai.schemas import ProviderResponse
 from application.backend_interface import PythonRobotConfiguration
 from application.ai.schemas import EditAuthor
 from application.editor_commands import UpdateKeyframe
@@ -2960,6 +2977,80 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.assertEqual(corrected.author, EditAuthor.USER)
             self.assertTrue(corrected.protected)
             self.window.current_project = None
+
+    def test_motion_assistant_provider_receives_live_editor_selection(self):
+        self.window.trajectory.clear()
+        for time in (2.0, 3.0):
+            frame = self.window.controls.current_frame()
+            frame.time = time
+            self.window.trajectory.add_frame(frame)
+        self.window.on_keyframe_selected(1)
+        self.window.on_viewer_timeslice_time_changed(2.5)
+
+        table = self.window.controls.table
+        table.clearSelection()
+        flags = (
+            QItemSelectionModel.SelectionFlag.Select
+            | QItemSelectionModel.SelectionFlag.Rows
+        )
+        for row in (0, 1):
+            table.selectionModel().select(table.model().index(row, 0), flags)
+
+        kind, name = self.viewer.frame_bindings["right_hand"]
+        self.assertTrue(self.viewer.select_target(kind, name, emit=False))
+        canvas = self.viewer.canvas
+        canvas.camera_yaw = 17.0
+        canvas.camera_pitch = -9.0
+
+        controller = self.window.ai_assistant_controller
+        controller.session = AIEditSession(
+            self.window.document,
+            metadata_store=controller.metadata_store,
+        )
+        tools, semantic_context = controller._semantic_edit_context()
+        provider = MockProvider([ProviderResponse(text=json.dumps({
+            "summary": "The request is understood from the selection.",
+            "needs_clarification": True,
+            "clarification_question": "How far should it move?",
+            "operations": [],
+        }))])
+
+        result = asyncio.run(TextMotionWorkflow(provider, tools).run(
+            "Move this higher during this section.",
+            model="mock",
+            context=semantic_context,
+        ))
+
+        self.assertEqual(result.provider_requests, 1)
+        prompt = provider.requests[0].messages[-1].text
+        self.assertIn('"time_interval_seconds":[2.0,3.0]', prompt)
+        self.assertIn('"logical_frame":"right_hand"', prompt)
+        self.assertIn('"end_effector":"right_hand"', prompt)
+        self.assertIn('"current_time_seconds":2.5', prompt)
+        self.assertIn('"model_key":"g1"', prompt)
+        self.assertIn('"active_keyframe":{', prompt)
+        self.assertIn('"author":"user"', prompt)
+        self.assertIn('"camera_view":"3D Pose; yaw=17.00 deg;', prompt)
+
+    def test_motion_assistant_reports_last_joint_only_in_joint_angle_mode(self):
+        controller = self.window.ai_assistant_controller
+        live_motion = GhostGUIMotionService(self.window.robot_model_3d)
+        joint_name = next(iter(self.viewer.joint_controls))
+        current_value = self.viewer.committed_state.get_joint_value(joint_name)
+        self.viewer._joint_changed(joint_name, current_value)
+        motion = SimpleNamespace(
+            joint_groups={"selected_group": (joint_name,)},
+            end_effectors=live_motion.end_effectors,
+        )
+
+        self.window.controls.set_editing_mode("joint_angles")
+        joint_selection = controller._editor_selection_context(motion)
+        self.assertEqual(joint_selection.joint, joint_name)
+        self.assertEqual(joint_selection.joint_group, "selected_group")
+
+        self.window.controls.set_editing_mode("end_effector")
+        end_effector_selection = controller._editor_selection_context(motion)
+        self.assertIsNone(end_effector_selection.joint)
 
     def test_recent_project_selection_reopens_workspace(self):
         with tempfile.TemporaryDirectory() as directory:

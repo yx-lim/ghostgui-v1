@@ -153,6 +153,7 @@ class RobotViewer3D(QWidget):
         self.robot_state = self.committed_state
         self.playback_state = robot_model.create_state() if robot_model else None
         self.preview_active = False
+        self.last_edited_joint_name = None
         self.current_time = 0.0
         self.display_time = 0.0
         self.timeline_duration = 5.0
@@ -976,6 +977,7 @@ class RobotViewer3D(QWidget):
         return True
 
     def _joint_changed(self, name, value):
+        self.last_edited_joint_name = name
         self.begin_preview()
         self.preview_state.set_joint_value(name, value)
         self._set_target_to_selected_pose()
@@ -1002,6 +1004,13 @@ class RobotViewer3D(QWidget):
                 f"Preview FK: {name} = {value:+.3f} rad; "
                 "use Commit Keyframe to save"
             )
+
+    def selected_joint_name(self):
+        """Return the Joint Angle most recently manipulated by the user."""
+
+        if self.last_edited_joint_name in self.joint_controls:
+            return self.last_edited_joint_name
+        return None
 
     def _update_preview_collisions(self, collisions=None):
         if collisions is None:

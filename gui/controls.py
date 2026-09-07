@@ -19,6 +19,7 @@ import math
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QWidget,
     QVBoxLayout,
     QLabel,
@@ -435,6 +436,16 @@ class TrajectoryControlPanel(QGroupBox):
             "yaw",
         ])
         self.table.setColumnHidden(1, True)
+        self.table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.table.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self.table.setToolTip(
+            "Select two or more Keyframe rows to give the Motion Assistant "
+            "a time interval."
+        )
         self.table.cellClicked.connect(self.on_table_cell_clicked)
 
         self.trajectory_layout.addWidget(QLabel("Trajectory keyframes"))
@@ -765,10 +776,40 @@ class TrajectoryControlPanel(QGroupBox):
             ]
 
             for col, value in enumerate(values):
-                self.table.setItem(row, col, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                if col == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, float(frame.time))
+                self.table.setItem(row, col, item)
 
     def selected_row(self):
         return self.table.currentRow()
+
+    def selected_rows(self):
+        selection_model = self.table.selectionModel()
+        if selection_model is None:
+            return ()
+        return tuple(
+            sorted(index.row() for index in selection_model.selectedRows())
+        )
+
+    def selected_time_interval(self):
+        """Return the span of the selected Keyframe rows, if it is a range."""
+
+        times = set()
+        for row in self.selected_rows():
+            item = self.table.item(row, 0)
+            if item is None:
+                continue
+            try:
+                exact_time = item.data(Qt.ItemDataRole.UserRole)
+                time = float(item.text() if exact_time is None else exact_time)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(time) and time >= 0.0:
+                times.add(time)
+        if len(times) < 2:
+            return None
+        return min(times), max(times)
 
     def on_table_cell_clicked(self, row, col):
         self.keyframe_selected.emit(row)

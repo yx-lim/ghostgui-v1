@@ -201,6 +201,16 @@ but focused components now own the mechanics it previously embedded:
 | `gui/ai_frame_capture.py` | GUI-thread OpenGL capture, timestamp overlay, and editor-state restoration |
 | `gui/visualization/` | Main-window display/tool/panel adapters |
 
+`AIAssistantController` captures a single ephemeral selection snapshot for all
+text and visual AI entry points. It reads current time and active Keyframe from
+`ProjectDocument`, a selected interval from the existing Keyframe-table row
+selection, logical target and recent Joint Angle interaction from
+`RobotViewer3D`, edit mode from `TrajectoryControlPanel`, and view/camera values
+from the existing viewer tabs and canvas. The snapshot owns no motion or camera
+state. `ContextBuilder` combines it with model-adapter capabilities and metadata
+service protection lookups, keeping GUI state and provenance authoritative in
+their existing owners.
+
 For provider compatibility, each planned operation's arguments cross the wire
 as compact JSON object text. `motion_plan.py` decodes that text into the normal
 `PlannedOperation.arguments` mapping, and `PlanExecutor` validates the selected

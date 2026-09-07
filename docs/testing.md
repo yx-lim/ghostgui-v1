@@ -213,6 +213,17 @@ Phase 7 reduces accidental development quota use:
 | Repeated identical successful Test Connection | 0 provider requests |
 | Test after provider, model, or API key change | 1 provider request |
 
+Phase 9 enriches the existing compact context without adding provider calls:
+
+| Phase 9 action | Normalized provider requests |
+| --- | ---: |
+| Apply or Refine with live editor selection | 1 |
+| Apply with a local-operation repair | 2 maximum |
+| Critique, Visual refine, or Verify visually | 1 per explicit action |
+
+The first request contains the request-time UI snapshot. Local selection
+resolution and context construction make no provider request.
+
 Gemini transient-server retries remain available only through an explicit
 `max_attempts` value; HTTP 429 never retries. Record/replay tests use synthetic
 content and a temporary JSON store. They verify that files contain a
@@ -307,6 +318,16 @@ structure. It skips outside the explicitly configured visual environment.
   test both session-only and system-keyring storage.
 - Apply a focused edit and confirm the committed motion stays unchanged while
   the Orange preview shows the staged working copy.
+- Select Keyframe rows at 2.0 s and 3.0 s, apply “Make this section twice as
+  slow,” and inspect a MockProvider request for
+  `time_interval_seconds: [2.0, 3.0]`.
+- Select the right hand in the 3D view, apply “Move this higher,” and confirm the
+  MockProvider context identifies both the logical frame and End Effector as
+  `right_hand`.
+- Switch to Joint Angles, manipulate one Joint Angle, and confirm its name (and
+  one unambiguous model-defined joint group, when available) appears in the
+  next request; switch back to End Effector mode and confirm stale Joint Angle
+  context is omitted.
 - Scrub the viewer timeline and move the camera while the provider request is
   running; confirm document-mutating controls remain unavailable.
 - Use **Refine** twice and confirm each turn builds on the same staged result.

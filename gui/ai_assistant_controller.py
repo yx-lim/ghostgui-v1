@@ -329,9 +329,7 @@ class AIAssistantController:
         context = SemanticToolContext(
             session=self.session,
             metadata=metadata,
-            selection=EditorSelectionContext(
-                logical_frame=self.host.controls.frame_box.currentText(),
-            ),
+            selection=self._editor_selection_context(motion),
             motion_name=(
                 None
                 if self.host.current_project is None
@@ -339,6 +337,64 @@ class AIAssistantController:
             ),
         )
         return tools, context
+
+    def _editor_selection_context(self, motion):
+        """Capture provider context from authoritative GUI state once."""
+
+        controls = self.host.controls
+        viewer = self.host.viewer_3d
+        target = viewer._selected_target()
+        logical_frame = viewer.reverse_bindings.get(target)
+        if logical_frame is None and target == (None, None):
+            logical_frame = controls.frame_box.currentText() or None
+
+        edit_mode = controls.editing_mode()
+        joint = (
+            viewer.selected_joint_name()
+            if edit_mode == "joint_angles"
+            else None
+        )
+        matching_groups = tuple(
+            name
+            for name, members in motion.joint_groups.items()
+            if joint is not None and joint in members
+        )
+        joint_group = matching_groups[0] if len(matching_groups) == 1 else None
+
+        active_view = None
+        view_index = self.host.viewer_tabs.currentIndex()
+        if 0 <= view_index < self.host.viewer_tabs.count():
+            active_view = self.host.viewer_tabs.tabText(view_index)
+        camera_view = active_view
+        if (
+            active_view
+            and self.host.viewer_tabs.currentWidget()
+            is self.host.viewer_3d_stack
+        ):
+            canvas = viewer.canvas
+            center = ",".join(
+                f"{float(value):.3f}" for value in canvas.camera_center
+            )
+            camera_view = (
+                f"{active_view}; yaw={float(canvas.camera_yaw):.2f} deg; "
+                f"pitch={float(canvas.camera_pitch):.2f} deg; "
+                f"distance={float(canvas.camera_distance):.3f} m; "
+                f"center=[{center}] m"
+            )
+
+        return EditorSelectionContext(
+            time_interval=controls.selected_time_interval(),
+            logical_frame=logical_frame,
+            joint=joint,
+            joint_group=joint_group,
+            end_effector=(
+                logical_frame
+                if logical_frame in motion.end_effectors
+                else None
+            ),
+            edit_mode=edit_mode,
+            camera_view=camera_view,
+        )
 
     def _clear_visual_refinement(self) -> None:
         self._visual_refinement_goal = ""
@@ -419,9 +475,7 @@ class AIAssistantController:
                 for name, values in motion.joint_groups.items()
             ),
         )
-        selection = EditorSelectionContext(
-            logical_frame=self.host.controls.frame_box.currentText(),
-        )
+        selection = self._editor_selection_context(motion)
         metadata = MotionMetadataService(
             self.metadata_store,
             self.identity_resolver,
@@ -499,9 +553,7 @@ class AIAssistantController:
             context = SemanticToolContext(
                 session=self.session,
                 metadata=metadata,
-                selection=EditorSelectionContext(
-                    logical_frame=self.host.controls.frame_box.currentText(),
-                ),
+                selection=self._editor_selection_context(motion),
                 motion_name=(
                     None
                     if self.host.current_project is None
