@@ -142,6 +142,7 @@ from application.ai.context import (
 )
 from application.ai.motion_services import (
     GhostGUIMotionService,
+    JointAngleEditResult,
     LogicalFrameSolveResult,
     MotionValidationReport,
     SemanticMotionError,
@@ -199,6 +200,7 @@ __all__ = [
     "EncodedFrame",
     "EditorSelectionContext",
     "GhostGUIMotionService",
+    "JointAngleEditResult",
     "GhostGUIAgent",
     "ImageVariant",
     "FrameCaptureError",

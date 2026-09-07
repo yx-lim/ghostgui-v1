@@ -75,6 +75,9 @@ network connection, or provider credential.
   settings never make quota-exhaustion or HTTP 429 responses retryable.
 - User-authored and protected Keyframes take priority over later AI edits.
   Missing provenance is treated as user-owned, never as implicit AI ownership.
+- Joint Angle tools stage qpos plus FK-derived affected logical Keyframes in one
+  atomic replacement. Provenance checks cover both representations before
+  mutation, preventing a partial qpos-only edit.
 - The provider-facing protection tool can only add protection. Removing a
   protection requires a human-owned path outside autonomous tool execution.
 - Accept uses one atomic `ReplaceMotionState` command and rejects a session if

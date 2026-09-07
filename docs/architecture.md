@@ -84,6 +84,15 @@ MuJoCo states:
 logical target-frame keyframes used by the backend. A commit updates both
 representations for the same time.
 
+Semantic Joint Angle edits preserve that dual representation. The motion
+service applies the named joint values to a detached MuJoCo state, identifies
+existing logical Keyframes whose compiled kinematic chains contain an edited
+joint, and regenerates those poses through forward kinematics. The semantic
+tool then stages the FK-derived logical Keyframes and qpos Keyframe through one
+`ReplaceMotionState` command. All corresponding provenance references are
+checked before that atomic change, so a user-owned or protected affected
+logical Keyframe rejects the complete Joint Angle edit.
+
 `application.timeline_editing` owns Insert Time, Shift Entire Motion, Move Time
 Range, and Scale Time Range planning, plus the shared `TimelineEditPlan` and
 `ApplyTimelineEditPlan` replacement command. `application.motion_clipboard`

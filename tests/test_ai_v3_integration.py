@@ -20,6 +20,7 @@ from application.ai import (
 )
 from application.ai.errors import ProviderCancelledError, ProviderError
 from application.ai.motion_services import (
+    JointAngleEditResult,
     LogicalFrameSolveResult,
     MotionValidationReport,
 )
@@ -145,7 +146,7 @@ class _MotionService:
         for index, name in enumerate(self.joint_names):
             if name in values:
                 qpos[index] = float(values[name])
-        return qpos
+        return JointAngleEditResult(qpos)
 
     def ensure_qpos_keyframe(self, document, *, time_seconds):
         return document.qpos_timeline.sample_state(time_seconds)

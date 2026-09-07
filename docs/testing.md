@@ -224,6 +224,12 @@ Phase 9 enriches the existing compact context without adding provider calls:
 The first request contains the request-time UI snapshot. Local selection
 resolution and context construction make no provider request.
 
+Phase 10 changes only local semantic execution and adds no provider request.
+For both `set_joint_angle` and `set_joint_group_angles`, tests compare every
+reported affected logical Keyframe with MuJoCo forward kinematics from the
+staged qpos. They also require one working-copy revision, unchanged committed
+motion, and no mutation when an affected logical Keyframe is user-owned.
+
 Gemini transient-server retries remain available only through an explicit
 `max_attempts` value; HTTP 429 never retries. Record/replay tests use synthetic
 content and a temporary JSON store. They verify that files contain a
@@ -328,6 +334,10 @@ structure. It skips outside the explicitly configured visual environment.
   one unambiguous model-defined joint group, when available) appears in the
   next request; switch back to End Effector mode and confirm stale Joint Angle
   context is omitted.
+- Stage an AI Joint Angle edit at a time containing logical Keyframes and verify
+  the Orange preview, qpos Keyframe, and FK-derived affected logical Keyframes
+  describe the same pose. Confirm a user-owned or protected affected Keyframe
+  rejects the whole operation without a qpos-only change.
 - Scrub the viewer timeline and move the camera while the provider request is
   running; confirm document-mutating controls remain unavailable.
 - Use **Refine** twice and confirm each turn builds on the same staged result.

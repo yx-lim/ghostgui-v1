@@ -23,6 +23,14 @@ class LogicalFrameSolveResult:
 
 
 @dataclass(frozen=True)
+class JointAngleEditResult:
+    """A qpos edit and the existing logical Keyframes changed by its FK."""
+
+    qpos: Any
+    logical_frames: tuple[TargetFrame, ...] = ()
+
+
+@dataclass(frozen=True)
 class MotionValidationReport:
     valid: bool
     issues: tuple[str, ...] = ()
@@ -65,7 +73,7 @@ class SemanticMotionService(Protocol):
         time_seconds: float,
         values: Mapping[str, float],
         protected_logical_frames: tuple[str, ...],
-    ) -> Any:
+    ) -> JointAngleEditResult:
         ...
 
     def ensure_qpos_keyframe(self, document, *, time_seconds: float) -> Any:
@@ -269,7 +277,31 @@ class GhostGUIMotionService:
                 raise SemanticMotionError(
                     f"Joint Angle edit would move protected {logical_frame}"
                 )
-        return state.get_qpos()
+        qpos = state.get_qpos()
+        changed_joints = frozenset(values)
+        logical_frames = []
+        for frame in document.frames_at_time(time_seconds):
+            if not changed_joints.intersection(
+                self.adapter.joint_chain_for_frame(frame.frame_name)
+            ):
+                continue
+            kind, object_name = self.adapter.logical_frame_bindings[
+                frame.frame_name
+            ]
+            position, quaternion = state.get_body_pose(object_name, kind)
+            roll, pitch, yaw = quat_to_rpy(quaternion)
+            logical_frames.append(TargetFrame(
+                time=frame.time,
+                phase=frame.phase,
+                frame_name=frame.frame_name,
+                x=float(position[0]),
+                y=float(position[1]),
+                z=float(position[2]),
+                roll=float(roll),
+                pitch=float(pitch),
+                yaw=float(yaw),
+            ))
+        return JointAngleEditResult(qpos, tuple(logical_frames))
 
     def ensure_qpos_keyframe(self, document, *, time_seconds):
         self._validate_time(document, time_seconds)

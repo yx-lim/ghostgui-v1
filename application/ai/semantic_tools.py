@@ -353,7 +353,7 @@ def _set_joint_values(context, motion, time_seconds, values, operation):
         context.session.working_document,
         time_seconds,
     )
-    qpos = motion.set_joint_angles(
+    result = motion.set_joint_angles(
         context.session.working_document,
         time_seconds=time_seconds,
         values=values,
@@ -363,16 +363,27 @@ def _set_joint_values(context, motion, time_seconds, values, operation):
         ),
     )
     candidate = detached_document(context.session.working_document)
-    candidate.qpos_timeline.set_state(time_seconds, qpos)
-    reference = context.working_metadata.reference_for_qpos_keyframe(time_seconds)
+    for frame in result.logical_frames:
+        candidate.trajectory.upsert_frame(frame)
+    candidate.qpos_timeline.set_state(time_seconds, result.qpos)
+    metadata = context.working_metadata
+    logical_references = tuple(
+        metadata.reference_for_keyframe(frame)
+        for frame in result.logical_frames
+    )
+    qpos_reference = metadata.reference_for_qpos_keyframe(time_seconds)
+    references = logical_references + (qpos_reference,)
     context.session.apply_ai(
         ReplaceMotionState(capture_motion_state(candidate), operation=operation),
-        affected_entities=(reference,),
-        created_entities=() if existed else (reference,),
+        affected_entities=references,
+        created_entities=() if existed else (qpos_reference,),
     )
     return {
         "time_seconds": time_seconds,
         "joint_angles_rad": {name: float(value) for name, value in values.items()},
+        "updated_logical_frames": [
+            frame.frame_name for frame in result.logical_frames
+        ],
     }
 
 

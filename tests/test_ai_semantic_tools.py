@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import unittest
 
+import numpy as np
+
 from application.ai.edit_session import AIEditSession
 from application.ai.metadata import (
     InMemoryMotionMetadataStore,
@@ -12,6 +14,8 @@ from application.ai.metadata import (
     TimestampMotionIdentityResolver,
 )
 from application.ai.motion_services import (
+    GhostGUIMotionService,
+    JointAngleEditResult,
     LogicalFrameSolveResult,
     MotionValidationReport,
 )
@@ -24,7 +28,9 @@ from application.ai.errors import ToolExecutionError, ToolValidationError
 from application.editor_commands import UpdateKeyframe
 from application.editor_controller import EditorController
 from application.project_document import ProjectDocument
-from core.trajectory import TargetFrame
+from application.timeslice_service import capture_timeslice_from_committed_pose
+from core.models import MuJoCoRobotAdapter, RobotStateTimeline
+from core.trajectory import TargetFrame, rpy_to_quat
 
 
 class FakeTimeline:
@@ -119,7 +125,7 @@ class FakeMotionService:
         for index, name in enumerate(self.joint_names):
             if name in values:
                 qpos[index] = float(values[name])
-        return qpos
+        return JointAngleEditResult(qpos)
 
     def ensure_qpos_keyframe(self, document, *, time_seconds):
         return document.qpos_timeline.sample_state(time_seconds)
@@ -376,6 +382,166 @@ class SemanticToolTests(unittest.TestCase):
         self.assertEqual(validated, {"valid": True, "issues": []})
         self.assertNotIn("qpos_values", serialized)
         self.assertEqual(session.working_document.revision, revision)
+
+
+class GhostGUIMotionServiceTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = MuJoCoRobotAdapter("g1")
+        timeline = RobotStateTimeline(self.adapter)
+        document = ProjectDocument(
+            "g1",
+            timeline_duration=2.0,
+            qpos_timeline=timeline,
+        )
+        state = self.adapter.create_state()
+        state.set_qpos(self.adapter.home_qpos)
+        for frame in capture_timeslice_from_committed_pose(
+            state,
+            time=0.0,
+            phase="test",
+            frame_names=self.adapter.trajectory_frames,
+            frame_bindings=self.adapter.logical_frame_bindings,
+        ):
+            document.trajectory.add_frame(frame)
+
+        store = InMemoryMotionMetadataStore()
+        resolver = TimestampMotionIdentityResolver()
+        self.session = AIEditSession(document, metadata_store=store)
+        self.context = SemanticToolContext(
+            session=self.session,
+            metadata=MotionMetadataService(store, resolver),
+        )
+        _mark_existing_motion_ai_owned(self.session, resolver)
+        self.motion = GhostGUIMotionService(self.adapter)
+        self.registry = build_semantic_tool_registry(self.motion)
+        self.committed = document
+
+    def assert_logical_frames_match_fk(self, frame_names):
+        working = self.session.working_document
+        state = self.adapter.create_state()
+        state.set_qpos(working.qpos_timeline.get_state(0.0))
+        targets = working.trajectory.targets_at_time(0.0)
+        for frame_name in frame_names:
+            with self.subTest(frame=frame_name):
+                kind, object_name = self.adapter.logical_frame_bindings[
+                    frame_name
+                ]
+                position, quaternion = state.get_body_pose(object_name, kind)
+                target = targets[frame_name]
+                np.testing.assert_allclose(
+                    [target.x, target.y, target.z],
+                    position,
+                    atol=1e-9,
+                )
+                expected_quaternion = np.asarray(
+                    rpy_to_quat(target.roll, target.pitch, target.yaw)
+                )
+                self.assertAlmostEqual(
+                    abs(float(np.dot(expected_quaternion, quaternion))),
+                    1.0,
+                    places=8,
+                )
+
+    def test_joint_angle_updates_qpos_and_fk_targets_atomically(self):
+        joint = "right_elbow_joint"
+        before_qpos = self.committed.qpos_timeline.get_state(0.0)
+        before_hand = self.committed.trajectory.targets_at_time(0.0)[
+            "right_hand"
+        ].to_dict()
+        angle = self.adapter.create_state().get_joint_value(joint) + 0.05
+
+        result = self.registry.execute(
+            "set_joint_angle",
+            {"joint": joint, "time_seconds": 0.0, "angle_rad": angle},
+            context=self.context,
+        )
+
+        self.assertIn("right_hand", result["updated_logical_frames"])
+        self.assertEqual(self.session.working_document.revision, 1)
+        self.assertEqual(len(self.session.edits), 1)
+        self.assert_logical_frames_match_fk(result["updated_logical_frames"])
+        working_state = self.adapter.create_state()
+        working_state.set_qpos(
+            self.session.working_document.qpos_timeline.get_state(0.0)
+        )
+        self.assertAlmostEqual(working_state.get_joint_value(joint), angle)
+        np.testing.assert_allclose(
+            self.committed.qpos_timeline.get_state(0.0),
+            before_qpos,
+        )
+        self.assertEqual(
+            self.committed.trajectory.targets_at_time(0.0)[
+                "right_hand"
+            ].to_dict(),
+            before_hand,
+        )
+
+    def test_joint_group_uses_the_same_atomic_fk_synchronization(self):
+        joints = ("right_shoulder_pitch_joint", "right_elbow_joint")
+        self.adapter.joint_groups = {"right_arm": joints}
+        self.motion = GhostGUIMotionService(self.adapter)
+        self.registry = build_semantic_tool_registry(self.motion)
+        state = self.adapter.create_state()
+        angles = [state.get_joint_value(name) + 0.03 for name in joints]
+
+        result = self.registry.execute(
+            "set_joint_group_angles",
+            {
+                "joint_group": "right_arm",
+                "time_seconds": 0.0,
+                "angles_rad": angles,
+            },
+            context=self.context,
+        )
+
+        self.assertIn("right_hand", result["updated_logical_frames"])
+        self.assertEqual(self.session.working_document.revision, 1)
+        self.assertEqual(len(self.session.edits), 1)
+        self.assert_logical_frames_match_fk(result["updated_logical_frames"])
+        working_state = self.adapter.create_state()
+        working_state.set_qpos(
+            self.session.working_document.qpos_timeline.get_state(0.0)
+        )
+        for name, angle in zip(joints, angles):
+            self.assertAlmostEqual(working_state.get_joint_value(name), angle)
+
+    def test_user_owned_affected_target_rejects_the_whole_joint_edit(self):
+        working_metadata = self.context.working_metadata
+        right_hand = self.session.working_document.trajectory.targets_at_time(
+            0.0
+        )["right_hand"]
+        reference = working_metadata.reference_for_keyframe(right_hand)
+        self.session.metadata.record(reference, EditAuthor.USER)
+        before_qpos = self.session.working_document.qpos_timeline.get_state(0.0)
+        before_hand = right_hand.to_dict()
+        angle = (
+            self.adapter.create_state().get_joint_value("right_elbow_joint")
+            + 0.05
+        )
+
+        with self.assertRaisesRegex(ToolExecutionError, "user-authored"):
+            self.registry.execute(
+                "set_joint_angle",
+                {
+                    "joint": "right_elbow_joint",
+                    "time_seconds": 0.0,
+                    "angle_rad": angle,
+                },
+                context=self.context,
+            )
+
+        np.testing.assert_allclose(
+            self.session.working_document.qpos_timeline.get_state(0.0),
+            before_qpos,
+        )
+        self.assertEqual(
+            self.session.working_document.trajectory.targets_at_time(0.0)[
+                "right_hand"
+            ].to_dict(),
+            before_hand,
+        )
+        self.assertEqual(self.session.working_document.revision, 0)
+        self.assertFalse(self.session.has_changes)
 
 
 if __name__ == "__main__":

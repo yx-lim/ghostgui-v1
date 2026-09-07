@@ -48,6 +48,13 @@ one operation or many operations therefore use the same single provider
 request; GhostGUI does not send a second request merely to obtain a “done”
 message.
 
+When an explicit Joint Angle or joint-group operation changes a qpos Keyframe,
+GhostGUI runs forward kinematics locally and updates every existing logical
+Keyframe affected by those joints in the same atomic working-copy change. This
+keeps the two editable motion representations aligned. If one of those logical
+Keyframes is user-authored or protected, the complete Joint Angle operation is
+rejected rather than partially changing qpos.
+
 At request time, the controller takes one snapshot from the editor's existing
 authoritative controls. It includes the current timeline time, a multi-row
 Keyframe interval, active Keyframe, selected logical frame or End Effector,
