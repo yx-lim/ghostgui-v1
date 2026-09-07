@@ -194,7 +194,7 @@ but focused components now own the mechanics it previously embedded:
 | `gui/render_progress.py` | Render-progress overlay behavior |
 | `gui/panels/status_panel.py` | Status summary and diagnostic-detail widgets |
 | `gui/panels/ai_assistant_panel.py` | Motion Assistant presentation and intent signals |
-| `gui/ai_assistant_controller.py` | Background provider/session orchestration and Orange preview adaptation |
+| `gui/ai_assistant_controller.py` | Background provider/session orchestration and detached working-copy preview sourcing |
 | `application/ai/frame_capture.py` | Qt-free representative timestamp selection and paired-image capture contract |
 | `application/ai/visual_critique.py` | Read-only structured multimodal observation request and validation |
 | `application/ai/visual_refinement.py` | One-shot visual semantic planning and explicit read-only verification |
@@ -245,6 +245,17 @@ structured multimodal request. It neither invokes `GhostGUIAgent` nor starts an
 automatic visual loop. **Verify visually** is a separate read-only request over
 original/candidate pairs captured at identical timestamps; it returns no edit
 operations.
+
+Whole-motion candidate preview reuses `RobotViewer3D`'s existing playback timer,
+reference state, Orange preview state, canvas, and renderer. The controller
+supplies a read-only sampler backed by
+`AIEditSession.working_document.qpos_timeline`; it does not replace the viewer's
+committed `state_timeline`. Each scrub or playback tick samples committed motion
+into the reference state and staged motion into the Orange state at the same
+time. Candidate mode suppresses editable-time signals and per-pose commit or
+delete actions, so inspection cannot mutate committed qpos, current time, or
+Keyframes. Refine temporarily detaches the sampler while the worker may mutate
+the working copy, then restores it when the session is staged again.
 
 Gemini defaults to one SDK outbound attempt. A caller must explicitly raise its
 small transient-server retry budget, and HTTP 429 is never retryable. The

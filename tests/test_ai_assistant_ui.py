@@ -28,8 +28,11 @@ class AIAssistantPanelTests(unittest.TestCase):
     def test_running_and_staged_states_expose_only_valid_actions(self):
         from gui.panels.ai_assistant_panel import AIAssistantPanelState
 
+        previews = []
+        self.panel.preview_requested.connect(lambda: previews.append(True))
         self.assertEqual(self.panel.state, AIAssistantPanelState.READY)
         self.assertFalse(self.panel.accept_button.isEnabled())
+        self.assertEqual(self.panel.preview_button.text(), "Preview candidate")
         self.panel.begin_request()
         self.assertEqual(self.panel.state, AIAssistantPanelState.RUNNING)
         self.assertFalse(self.panel.cancel_button.isHidden())
@@ -41,6 +44,8 @@ class AIAssistantPanelTests(unittest.TestCase):
         self.assertTrue(self.panel.visual_refine_button.isEnabled())
         self.assertTrue(self.panel.visual_verify_button.isEnabled())
         self.assertEqual(self.panel.proposal_list.item(0).text(), "Modified 2 Keyframes")
+        self.panel.preview_button.click()
+        self.assertEqual(previews, [True])
 
     def test_apply_and_refine_emit_trimmed_instructions(self):
         submitted = []

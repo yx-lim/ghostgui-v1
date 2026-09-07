@@ -218,6 +218,8 @@ class RobotViewer3D(QWidget):
         self.playback_clock = PlaybackClock()
         self._resume_playback_after_scrub = False
         self._pending_scrub_preview_time = None
+        self._candidate_preview_sampler = None
+        self._candidate_preview_reference_duration = None
         self.canvas = RobotCanvas3D()
         self.canvas.geometry_progress.connect(self._on_geometry_progress)
         self.canvas.rendering_failed.connect(self._on_rendering_failed)
@@ -716,7 +718,8 @@ class RobotViewer3D(QWidget):
         self.scrub_preview_timer.stop()
         self._pending_scrub_preview_time = None
         self.preview_trajectory_time(time, emit_time_signal=True)
-        self.timeslice_time_changed.emit(time)
+        if not self.candidate_preview_active:
+            self.timeslice_time_changed.emit(time)
         resume_playback = self._resume_playback_after_scrub
         self._resume_playback_after_scrub = False
         if resume_playback:
@@ -726,8 +729,11 @@ class RobotViewer3D(QWidget):
         was_playing = self.play_timer.isActive()
         if was_playing:
             self.pause_playback(commit_time=False)
-        self._set_timeslice_widgets(time)
-        self.timeslice_time_changed.emit(float(time))
+        if self.candidate_preview_active:
+            self.preview_trajectory_time(time, emit_time_signal=True)
+        else:
+            self._set_timeslice_widgets(time)
+            self.timeslice_time_changed.emit(float(time))
         if was_playing:
             self.start_playback()
 
@@ -736,8 +742,11 @@ class RobotViewer3D(QWidget):
         was_playing = self.play_timer.isActive()
         if was_playing:
             self.pause_playback(commit_time=False)
-        self._set_timeslice_widgets(time)
-        self.timeslice_time_changed.emit(time)
+        if self.candidate_preview_active:
+            self.preview_trajectory_time(time, emit_time_signal=True)
+        else:
+            self._set_timeslice_widgets(time)
+            self.timeslice_time_changed.emit(time)
         if was_playing:
             self.start_playback()
 
@@ -794,6 +803,13 @@ class RobotViewer3D(QWidget):
         # creating an editable state. Commit Keyframe must first choose one authoritative
         # time so its qpos state and logical-target snapshot cannot be written
         # at two different positions on the timeline.
+        if self.candidate_preview_active:
+            self.status_label.setText(
+                "The AI candidate is read-only; use Accept in Motion Assistant "
+                "to commit the complete staged motion."
+            )
+            return
+
         slice_time = max(0.0, min(float(self.display_time), self.timeline_duration))
         if self.state_timeline is not None:
             slice_time = self.state_timeline.time_key(slice_time)
@@ -818,6 +834,12 @@ class RobotViewer3D(QWidget):
         self.accept_timeslice_requested.emit()
 
     def delete_timeslice(self):
+        if self.candidate_preview_active:
+            self.status_label.setText(
+                "The AI candidate is read-only; Reject or Accept it from "
+                "Motion Assistant."
+            )
+            return
         self.delete_timeslice_requested.emit()
 
     def sidebar_context_widget(self):
@@ -1425,6 +1447,12 @@ class RobotViewer3D(QWidget):
         self.history_action_finished.emit("Preview path")
 
     def accept_preview(self, *, emit_pose_finished=True):
+        if self.candidate_preview_active:
+            self.status_label.setText(
+                "The AI candidate cannot be committed as one pose; use Accept "
+                "in Motion Assistant for the complete staged motion."
+            )
+            return False
         if not self.preview_active:
             self.status_label.setText("No preview changes to commit.")
             return False
@@ -1588,6 +1616,68 @@ class RobotViewer3D(QWidget):
         )
         self.canvas.set_preview_visible(self.preview_active)
 
+    @property
+    def candidate_preview_active(self):
+        """Whether timeline presentation is sampling an external candidate."""
+
+        return self._candidate_preview_sampler is not None
+
+    def begin_candidate_preview(self, sampler, duration):
+        """Present a read-only candidate over the committed timeline state."""
+
+        if not callable(sampler):
+            raise TypeError("candidate preview sampler must be callable")
+        duration = float(duration)
+        if not np.isfinite(duration) or duration <= 0.0:
+            raise ValueError(
+                "candidate preview duration must be positive and finite"
+            )
+        if not self.robot_state:
+            raise ValueError("candidate preview requires a loaded robot model")
+
+        self.pause_playback(commit_time=False)
+        if not self.candidate_preview_active:
+            self._candidate_preview_reference_duration = self.timeline_duration
+        self._candidate_preview_sampler = sampler
+        committed_time = self.current_time
+        self.set_timeline_duration(duration, emit_signal=False)
+        self.current_time = committed_time
+        self.delete_timeslice_button.setEnabled(False)
+        try:
+            self.preview_trajectory_time(min(self.display_time, duration))
+        except Exception:
+            self.end_candidate_preview()
+            raise
+        self.status_label.setText(
+            "Orange shows the staged AI candidate; the reference robot shows "
+            "committed motion at the same time. Scrub or press Play to inspect."
+        )
+
+    def end_candidate_preview(self):
+        """Stop candidate sampling and restore committed timeline presentation."""
+
+        if not self.candidate_preview_active:
+            return
+        self.pause_playback(commit_time=False)
+        reference_duration = self._candidate_preview_reference_duration
+        self._candidate_preview_sampler = None
+        self._candidate_preview_reference_duration = None
+        if reference_duration is not None:
+            self.set_timeline_duration(reference_duration, emit_signal=False)
+        self.delete_timeslice_button.setEnabled(self.robot_state is not None)
+        self.display_time = min(self.current_time, self.timeline_duration)
+        self._set_timeslice_widgets(self.display_time)
+        self.preview_state.set_qpos(self.committed_state.get_qpos())
+        self.preview_active = False
+        self.canvas.set_preview_collisions([])
+        self._use_editor_canvas_states()
+        self.canvas.set_preview_visible(False)
+        self._sync_joint_controls()
+        self._set_target_to_selected_pose()
+        self.canvas.update()
+        self._update_frame_readout(self.display_time)
+        self._update_timeline_label()
+
     def preview_trajectory_time(self, time, emit_time_signal=False):
         """Display a timeline pose without creating an editable qpos state."""
         if not self.robot_state:
@@ -1595,6 +1685,34 @@ class RobotViewer3D(QWidget):
         time = max(0.0, min(float(time), self.timeline_duration))
         self.display_time = time
         self._set_timeslice_widgets(time)
+
+        if self.candidate_preview_active:
+            reference_qpos = self.state_timeline.sample_state(
+                time,
+                fallback_qpos=self.committed_state.get_qpos(),
+            )
+            candidate_qpos = self._candidate_preview_sampler(time)
+            self.playback_state.set_qpos(reference_qpos)
+            self.preview_state.set_qpos(candidate_qpos)
+            self.preview_active = True
+            self.canvas.set_robot_states(
+                self.playback_state,
+                self.preview_state,
+                self.ghost_renderer,
+            )
+            self.canvas.set_preview_visible(True)
+            self._update_preview_collisions()
+            self._sync_joint_controls(state=self.preview_state)
+            self._set_canvas_target_from_state(self.preview_state)
+            self.canvas.update()
+            self.timeslice_frame_readout.setText("AI candidate")
+            self.timeline_state_label.setText(
+                f"Candidate preview time: {time:.2f} s"
+            )
+            if emit_time_signal:
+                self.timeslice_preview_time_changed.emit(time)
+            copier = getattr(candidate_qpos, "copy", None)
+            return copier() if callable(copier) else candidate_qpos
 
         qpos, frame_index = self._trajectory_sample(time)
         if qpos is None and self.state_timeline:
@@ -2471,10 +2589,10 @@ class RobotViewer3D(QWidget):
             self.start_playback()
 
     def start_playback(self):
-        if not self.robot_trajectory:
+        bounds = self._playback_bounds()
+        if bounds is None:
             return
-        start_time = self.robot_trajectory_times[0]
-        end_time = self.robot_trajectory_times[-1]
+        start_time, end_time = bounds
         if end_time <= start_time:
             self.preview_trajectory_time(start_time, emit_time_signal=True)
             return
@@ -2490,18 +2608,22 @@ class RobotViewer3D(QWidget):
         self.playback_clock.stop()
         self._set_playback_button_text("Play")
         self.playback_state_changed.emit(False)
-        if commit_time and abs(self.display_time - self.current_time) > 1e-9:
+        if (
+            commit_time
+            and not self.candidate_preview_active
+            and abs(self.display_time - self.current_time) > 1e-9
+        ):
             self.timeslice_time_changed.emit(self.display_time)
 
     def _set_playback_button_text(self, text):
         self.play_button.setText(text)
 
     def _advance_playback(self, elapsed=None):
-        if not self.robot_trajectory:
+        bounds = self._playback_bounds()
+        if bounds is None:
             self.pause_playback()
             return
-        start_time = self.robot_trajectory_times[0]
-        end_time = self.robot_trajectory_times[-1]
+        start_time, end_time = bounds
         if end_time <= start_time:
             self.preview_trajectory_time(start_time, emit_time_signal=True)
             self.pause_playback(commit_time=True)
@@ -2519,6 +2641,13 @@ class RobotViewer3D(QWidget):
             self.playback_speed.value(),
         )
         self.preview_trajectory_time(next_time, emit_time_signal=True)
+
+    def _playback_bounds(self):
+        if self.candidate_preview_active:
+            return 0.0, self.timeline_duration
+        if not self.robot_trajectory:
+            return None
+        return self.robot_trajectory_times[0], self.robot_trajectory_times[-1]
 
     def _advance_frame(self):
         """Backward-compatible alias for elapsed-time playback advancement."""

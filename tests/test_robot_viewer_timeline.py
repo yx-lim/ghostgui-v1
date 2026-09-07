@@ -1051,6 +1051,123 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         self.assertEqual(self.viewer.play_timer.interval(), 33)
 
+    def test_ai_candidate_preview_scrubs_and_plays_without_committing(self):
+        committed_start, committed_end = self.configure_two_keyframe_motion()
+        document_revision = self.window.document.revision
+        committed_time = self.viewer.get_current_time()
+        committed_duration = self.viewer.timeline_duration
+        candidate_end = committed_start.copy()
+        candidate_end[-1] += 0.12
+
+        def sample_candidate(time):
+            fraction = min(1.0, max(0.0, float(time) / 2.0))
+            return (
+                committed_start * (1.0 - fraction)
+                + candidate_end * fraction
+            )
+
+        committed_time_events = []
+        preview_time_events = []
+        self.viewer.timeslice_time_changed.connect(
+            committed_time_events.append
+        )
+        self.viewer.timeslice_preview_time_changed.connect(
+            preview_time_events.append
+        )
+
+        self.viewer.begin_candidate_preview(sample_candidate, 2.0)
+        self.viewer.timeslice_slider.setValue(150)
+        self.viewer._emit_timeslice_slider_time()
+
+        self.assertTrue(self.viewer.candidate_preview_active)
+        self.assertTrue(self.viewer.preview_active)
+        self.assertEqual(self.viewer.timeslice_frame_readout.text(), "AI candidate")
+        self.assertAlmostEqual(self.viewer.display_time, 1.5)
+        self.assertAlmostEqual(
+            self.viewer.preview_state.get_qpos()[-1],
+            committed_start[-1] + 0.09,
+        )
+        self.assertAlmostEqual(
+            self.viewer.playback_state.get_qpos()[-1],
+            committed_end[-1],
+        )
+        self.assertEqual(preview_time_events, [1.5])
+        self.assertEqual(committed_time_events, [])
+        self.assertEqual(self.viewer.get_current_time(), committed_time)
+        self.assertEqual(self.window.document.revision, document_revision)
+        self.assertFalse(self.viewer.accept_preview())
+        np.testing.assert_allclose(
+            self.viewer.committed_state.get_qpos(),
+            committed_start,
+        )
+
+        self.viewer.start_playback()
+        self.assertTrue(self.viewer.play_timer.isActive())
+        self.viewer._advance_playback(elapsed=0.25)
+        self.assertAlmostEqual(self.viewer.display_time, 1.75)
+        self.viewer.pause_playback(commit_time=True)
+        self.assertEqual(committed_time_events, [])
+
+        self.viewer.end_candidate_preview()
+        self.assertFalse(self.viewer.candidate_preview_active)
+        self.assertFalse(self.viewer.preview_active)
+        self.assertAlmostEqual(self.viewer.timeline_duration, committed_duration)
+        self.assertEqual(self.viewer.get_current_time(), committed_time)
+        np.testing.assert_allclose(
+            self.viewer.committed_state.get_qpos(),
+            committed_start,
+        )
+
+    def test_motion_assistant_preview_samples_staged_working_timeline(self):
+        self.configure_two_keyframe_motion()
+        controller = self.window.ai_assistant_controller
+        session = AIEditSession(
+            self.window.document,
+            metadata_store=controller.metadata_store,
+        )
+        candidate = session.working_document.qpos_timeline.get_state(1.0)
+        candidate[-1] += 0.08
+        session.working_document.qpos_timeline.set_state(1.0, candidate)
+        frame = session.working_document.trajectory.frames[0]
+        session.apply_ai(UpdateKeyframe(0, replace(frame, z=frame.z + 0.01)))
+        controller.session = session
+        committed = self.window.document.qpos_timeline.get_state(1.0)
+
+        controller.preview()
+        self.viewer.preview_trajectory_time(1.0)
+
+        self.assertTrue(self.viewer.candidate_preview_active)
+        self.assertAlmostEqual(
+            self.viewer.preview_state.get_qpos()[-1],
+            candidate[-1],
+        )
+        np.testing.assert_allclose(
+            self.window.document.qpos_timeline.get_state(1.0),
+            committed,
+        )
+
+        controller.reject()
+        self.assertFalse(self.viewer.candidate_preview_active)
+        self.assertFalse(self.viewer.preview_active)
+
+    def test_shorter_candidate_duration_does_not_change_committed_time(self):
+        self.configure_two_keyframe_motion()
+        self.window.on_viewer_timeslice_time_changed(4.0)
+        committed_time = self.window.document.current_time
+        committed_revision = self.window.document.revision
+        pose = self.viewer.committed_state.get_qpos()
+
+        self.viewer.begin_candidate_preview(lambda _time: pose, 1.0)
+
+        self.assertEqual(self.viewer.get_current_time(), committed_time)
+        self.assertEqual(self.window.document.current_time, committed_time)
+        self.assertEqual(self.window.document.revision, committed_revision)
+        self.assertAlmostEqual(self.viewer.display_time, 1.0)
+
+        self.viewer.end_candidate_preview()
+        self.assertEqual(self.viewer.get_current_time(), committed_time)
+        self.assertAlmostEqual(self.viewer.timeline_duration, 5.0)
+
     def test_live_scrub_render_updates_are_coalesced(self):
         first = self.viewer.robot_model.home_qpos.copy()
         second = first.copy()

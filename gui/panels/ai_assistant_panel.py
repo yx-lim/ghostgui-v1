@@ -83,8 +83,11 @@ class AIAssistantPanel(QWidget):
         self.proposal_list.hide()
         layout.addWidget(self.proposal_list)
 
-        self.preview_button = QPushButton("Preview")
+        self.preview_button = QPushButton("Preview candidate")
         self.preview_button.setObjectName("aiPreviewButton")
+        self.preview_button.setToolTip(
+            "Show the staged motion in Orange while scrubbing or playing"
+        )
         self.preview_button.clicked.connect(self.preview_requested.emit)
         layout.addWidget(self.preview_button)
 

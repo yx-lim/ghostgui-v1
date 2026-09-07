@@ -239,6 +239,13 @@ results also assert `scope: structural_kinematic` and
 `dynamic_feasibility_assessed: false`; no test or UI result describes the
 candidate as dynamically feasible.
 
+Phase 12 adds no provider request. Viewer tests drive both timeline scrubbing
+and the existing playback clock against a staged qpos sampler, verify that the
+committed/reference and Orange candidate poses use the same time, and assert
+that committed qpos, document revision, editable current time, and Keyframes do
+not change. Controller coverage verifies that the sampler reads the detached
+`AIEditSession.working_document.qpos_timeline` and is removed on Reject.
+
 Gemini transient-server retries remain available only through an explicit
 `max_attempts` value; HTTP 429 never retries. Record/replay tests use synthetic
 content and a temporary JSON store. They verify that files contain a
@@ -333,6 +340,11 @@ structure. It skips outside the explicitly configured visual environment.
   test both session-only and system-keyring storage.
 - Apply a focused edit and confirm the committed motion stays unchanged while
   the Orange preview shows the staged working copy.
+- Choose **Preview candidate**, scrub across the complete candidate duration,
+  and press **Play**. Confirm Orange follows the staged motion while the
+  reference robot follows committed motion at identical times. Confirm
+  scrubbing, pausing, and the disabled per-Keyframe actions do not change the
+  committed motion or its editable time.
 - Select Keyframe rows at 2.0 s and 3.0 s, apply “Make this section twice as
   slow,” and inspect a MockProvider request for
   `time_interval_seconds: [2.0, 3.0]`.

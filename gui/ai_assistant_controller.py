@@ -170,6 +170,7 @@ class AIAssistantController:
             self._clear_visual_refinement()
             self.panel.show_error(str(error), session_staged=True)
             return
+        self._end_candidate_preview()
         self.panel.begin_request(visual_refinement=True)
         self.host.set_ai_motion_controls_enabled(False)
 
@@ -196,6 +197,7 @@ class AIAssistantController:
                 "The background worker is shutting down.",
                 session_staged=True,
             )
+            self.preview()
 
     async def _run_visual_motion(
         self,
@@ -565,6 +567,8 @@ class AIAssistantController:
             return
 
         self.panel.begin_request(refinement=refinement)
+        if refinement and self.session_staged:
+            self._end_candidate_preview()
         self.host.set_ai_motion_controls_enabled(False)
 
         def work(token):
@@ -586,6 +590,8 @@ class AIAssistantController:
             )
             if not self.session_staged:
                 self.host.set_ai_motion_controls_enabled(True)
+            else:
+                self.preview()
 
     async def _run_text_motion(self, instruction, tools, context, token):
         provider = self._provider()
@@ -628,14 +634,18 @@ class AIAssistantController:
             return
         self.panel.show_error(str(error), session_staged=self.session_staged)
         self._clear_visual_refinement()
-        if not self.session_staged:
+        if self.session_staged:
+            self.preview()
+        else:
             self.host.set_ai_motion_controls_enabled(True)
 
     def _request_cancelled(self) -> None:
         self.active_handle = None
         self.panel.show_cancelled(session_staged=self.session_staged)
         self._clear_visual_refinement()
-        if not self.session_staged:
+        if self.session_staged:
+            self.preview()
+        else:
             self.host.set_ai_motion_controls_enabled(True)
 
     def cancel_request(self) -> None:
@@ -653,27 +663,32 @@ class AIAssistantController:
             )
             return
         try:
-            qpos = sample_working_preview_qpos(
-                self.session,
-                viewer.get_current_time(),
+            session = self.session
+            duration = float(session.working_document.timeline_duration)
+            viewer.begin_candidate_preview(
+                lambda time: sample_working_preview_qpos(session, time),
+                duration,
             )
-            viewer.preview_state.set_qpos(qpos)
-            viewer.preview_active = True
-            viewer._use_editor_canvas_states()
-            viewer.canvas.set_preview_visible(True)
-            viewer._update_preview_collisions()
-            viewer.canvas.update()
-            viewer.status_label.setText(
-                "Orange preview shows the staged AI working copy; committed "
-                "motion is unchanged."
-            )
+            self.host.set_sidebar_timeline_duration(duration)
         except Exception as error:
             self.panel.show_error(str(error), session_staged=True)
+
+    def _end_candidate_preview(self) -> None:
+        viewer = getattr(self.host, "viewer_3d", None)
+        if viewer is None:
+            return
+        viewer.end_candidate_preview()
+        duration = float(self.host.document.timeline_duration)
+        self.host.set_sidebar_timeline_duration(duration)
+        self.host.controls.time_slider.set_value(
+            self.host.document.current_time
+        )
 
     def accept(self) -> None:
         if not self.session_staged or self.active_handle is not None:
             return
         try:
+            self._end_candidate_preview()
             self.session.accept(self.host.editor_controller)
             self.metadata_store.replace(self.session.metadata.snapshot())
             self.host.viewer_3d.cancel_preview()
@@ -690,6 +705,8 @@ class AIAssistantController:
             self.host.record_history_action("Accept AI motion edit")
         except Exception as error:
             self.panel.show_error(str(error), session_staged=True)
+            if self.session_staged:
+                self.preview()
             return
         self.panel.reset_session("AI motion edit accepted as one history entry.")
         self.session = None
@@ -700,6 +717,7 @@ class AIAssistantController:
     def activate_document(self, document) -> None:
         """Select the metadata store paired with a committed document."""
 
+        self._end_candidate_preview()
         self.metadata_store = self._metadata_stores.setdefault(
             document.document_id,
             InMemoryMotionMetadataStore(),
@@ -710,6 +728,7 @@ class AIAssistantController:
     def reset_motion_metadata(self, document) -> None:
         """Start conservative metadata for a new empty project workspace."""
 
+        self._end_candidate_preview()
         self.metadata_store = InMemoryMotionMetadataStore()
         self._metadata_stores[document.document_id] = self.metadata_store
         self._metadata_service().seed_document_as_user_owned(document)
@@ -718,6 +737,7 @@ class AIAssistantController:
     def restore_motion_metadata(self, payload, document) -> None:
         """Restore a saved workspace or conservatively seed a legacy one."""
 
+        self._end_candidate_preview()
         store = InMemoryMotionMetadataStore()
         service = MotionMetadataService(store, self.identity_resolver)
         service.restore_project_dict(payload, document)
@@ -742,9 +762,12 @@ class AIAssistantController:
         if self.session is None or self.active_handle is not None:
             return
         try:
+            self._end_candidate_preview()
             self.session.reject()
         except Exception as error:
             self.panel.show_error(str(error), session_staged=self.session_staged)
+            if self.session_staged:
+                self.preview()
             return
         self.host.viewer_3d.cancel_preview()
         self.panel.reset_session("AI working copy rejected; committed motion is unchanged.")
@@ -911,6 +934,7 @@ class AIAssistantController:
 
     def shutdown(self) -> None:
         self.cancel_request()
+        self._end_candidate_preview()
         subscription = getattr(self, "_document_changed_subscription", None)
         if subscription is not None:
             subscription.unsubscribe()

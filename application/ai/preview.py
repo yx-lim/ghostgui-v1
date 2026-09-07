@@ -18,8 +18,9 @@ def sample_working_preview_qpos(
 ) -> Any:
     """Sample one detached working-copy pose for presentation only.
 
-    This never mutates or replaces the committed document. It intentionally
-    returns one pose, not a generated raw qpos trajectory.
+    This never mutates or replaces the committed document. The presentation
+    layer may call it for each scrub or playback time, but each call returns
+    one pose rather than exposing or generating a raw qpos trajectory.
     """
 
     if session.state is not AIEditSessionState.STAGED:

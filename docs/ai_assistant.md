@@ -35,10 +35,14 @@ not test the connection automatically at startup.
    **Refine**.
 
 AI changes are made on a detached working copy. The Orange preview presents
-that copy but is not its source of truth. **Accept** atomically replaces the
-committed motion and creates one history entry. **Reject** discards the complete
-working copy. **Refine** continues from the staged copy rather than restarting
-from committed motion.
+that copy but is not its source of truth. While a result is staged, choose
+**Preview candidate** and use the normal timeline scrubber or **Play** control to
+inspect the whole working motion. Orange shows the staged candidate while the
+reference robot samples committed motion at the same time. Scrubbing and
+playback are read-only and do not move, add, or commit a Keyframe. **Accept**
+atomically replaces the committed motion and creates one history entry.
+**Reject** discards the complete working copy. **Refine** continues from the
+staged copy rather than restarting from committed motion.
 
 Each normal **Apply** or **Refine** action asks the provider once for a complete,
 structured semantic plan. GhostGUI then validates and executes every operation

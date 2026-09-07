@@ -87,6 +87,10 @@ network connection, or provider credential.
   protection requires a human-owned path outside autonomous tool execution.
 - Accept uses one atomic `ReplaceMotionState` command and rejects a session if
   the committed document changed after the working copy was created.
+- Whole-motion candidate preview is local and read-only. Scrub and playback
+  ticks sample the detached working qpos timeline into the existing Orange
+  preview state while a separate viewer state samples the committed reference;
+  they emit no editable-time or per-Keyframe commit operation.
 
 Provider comparison performs all fairness checks before making a provider
 request. Every candidate must start with an identical committed motion and a
