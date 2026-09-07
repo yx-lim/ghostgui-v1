@@ -67,6 +67,12 @@ from application.ai.connection_cache import (
     ConnectionTestIdentity,
     connection_test_identity,
 )
+from application.ai.provider_registry import (
+    DEFAULT_GEMINI_MODEL,
+    DEFAULT_PROVIDER_REGISTRY,
+    ProviderRegistration,
+    ProviderRegistry,
+)
 from application.ai.motion_plan import (
     MAX_PLANNED_OPERATIONS,
     MotionEditPlan,
@@ -234,6 +240,8 @@ __all__ = [
     "ProviderCapabilityError",
     "ProviderConfigurationError",
     "ProviderCapabilities",
+    "ProviderRegistration",
+    "ProviderRegistry",
     "ProviderError",
     "ProviderRecordingError",
     "ProviderRecordingStore",
@@ -248,6 +256,8 @@ __all__ = [
     "ProviderBehaviorSnapshot",
     "ProviderComparisonCase",
     "ProviderRunStatus",
+    "DEFAULT_GEMINI_MODEL",
+    "DEFAULT_PROVIDER_REGISTRY",
     "PlanExecutionError",
     "PlanExecutionResult",
     "PlanExecutor",

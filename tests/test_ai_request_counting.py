@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
-from unittest.mock import patch
 
 from application.ai.agent import GhostGUIAgent
 from application.ai.edit_session import AIEditSession
@@ -287,16 +286,17 @@ class ConnectionRequestCountingTests(unittest.TestCase):
         )
         controller = AIAssistantController.__new__(AIAssistantController)
         controller._session_api_keys = {}
+        controller.provider_registry = type("Registry", (), {
+            "create": staticmethod(
+                lambda _provider_name, *, api_key=None: provider
+            ),
+        })()
 
-        with patch(
-            "gui.ai_assistant_controller.GeminiProvider",
-            return_value=provider,
-        ):
-            result = asyncio.run(controller._run_connection_test(
-                "gemini",
-                "mock",
-                "ephemeral-test-key",
-            ))
+        result = asyncio.run(controller._run_connection_test(
+            "gemini",
+            "mock",
+            "ephemeral-test-key",
+        ))
 
         self.assertEqual(result, "OK")
         self.assertEqual(

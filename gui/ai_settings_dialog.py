@@ -17,17 +17,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from application.ai.provider_registry import (
+    DEFAULT_PROVIDER_REGISTRY,
+    ProviderRegistry,
+)
 from application.ai.schemas import ProviderCapabilities
-
-
-PROVIDER_MODELS = {
-    "gemini": ("gemini-3.7-flash", "gemini-3.6-flash"),
-    "anthropic": (
-        "claude-sonnet-5",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5-20251001",
-    ),
-}
 
 
 @dataclass(frozen=True)
@@ -47,12 +41,13 @@ class AISettingsDialog(QDialog):
     def __init__(
         self,
         *,
-        provider="gemini",
-        model="gemini-3.7-flash",
-        capabilities: ProviderCapabilities,
+        provider=None,
+        model=None,
+        capabilities: ProviderCapabilities | None = None,
         secure_key_available=False,
         provider_capabilities=None,
         secure_key_availability=None,
+        provider_registry: ProviderRegistry = DEFAULT_PROVIDER_REGISTRY,
         parent=None,
     ):
         super().__init__(parent)
@@ -60,8 +55,15 @@ class AISettingsDialog(QDialog):
         self.setWindowTitle("AI Assistant Settings")
         self.setModal(True)
         self.setMinimumWidth(430)
-        self._provider_capabilities = dict(provider_capabilities or {})
-        self._provider_capabilities.setdefault(provider, capabilities)
+        self._provider_registry = provider_registry
+        provider = provider or provider_registry.default_name
+        self._provider_capabilities = {
+            registration.name: registration.capabilities
+            for registration in provider_registry.registrations
+        }
+        self._provider_capabilities.update(provider_capabilities or {})
+        if capabilities is not None:
+            self._provider_capabilities[provider] = capabilities
         self._secure_key_availability = dict(secure_key_availability or {})
         self._secure_key_availability.setdefault(
             provider,
@@ -79,8 +81,11 @@ class AISettingsDialog(QDialog):
         form = QFormLayout()
         self.provider_box = QComboBox()
         self.provider_box.setObjectName("aiProviderBox")
-        self.provider_box.addItem("Gemini", "gemini")
-        self.provider_box.addItem("Anthropic", "anthropic")
+        for registration in provider_registry.registrations:
+            self.provider_box.addItem(
+                registration.display_name,
+                registration.name,
+            )
         provider_index = self.provider_box.findData(provider)
         self.provider_box.setCurrentIndex(max(0, provider_index))
         form.addRow("Provider", self.provider_box)
@@ -88,8 +93,11 @@ class AISettingsDialog(QDialog):
         self.model_box = QComboBox()
         self.model_box.setObjectName("aiModelBox")
         self.model_box.setEditable(True)
-        self.model_box.addItems(PROVIDER_MODELS.get(provider, ()))
-        self.model_box.setCurrentText(model)
+        registration = provider_registry.get(
+            str(self.provider_box.currentData())
+        )
+        self.model_box.addItems(registration.models)
+        self.model_box.setCurrentText(model or registration.default_model)
         form.addRow("Model", self.model_box)
 
         self.api_key_input = QLineEdit()
@@ -191,7 +199,9 @@ class AISettingsDialog(QDialog):
         provider = str(self.provider_box.currentData())
         if reset_model:
             self.model_box.clear()
-            self.model_box.addItems(PROVIDER_MODELS.get(provider, ()))
+            self.model_box.addItems(
+                self._provider_registry.get(provider).models
+            )
             self.api_key_input.clear()
             self.test_status_label.setText("Not tested")
         secure = bool(self._secure_key_availability.get(provider, False))

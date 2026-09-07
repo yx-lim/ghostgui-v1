@@ -38,14 +38,9 @@ from application.ai.credentials import (
     default_credential_source,
 )
 from application.ai.errors import ProviderCancelledError
-from application.ai.providers.gemini import (
-    DEFAULT_GEMINI_CAPABILITIES,
-    GeminiProvider,
-)
-from application.ai.providers.anthropic import (
-    DEFAULT_ANTHROPIC_CAPABILITIES,
-    DEFAULT_CLAUDE_MODEL,
-    AnthropicProvider,
+from application.ai.provider_registry import (
+    DEFAULT_PROVIDER_REGISTRY,
+    ProviderRegistry,
 )
 from application.ai.schemas import (
     ImageVariant,
@@ -58,22 +53,23 @@ from gui.ai_frame_capture import RobotViewerFrameRenderer
 from gui.ai_settings_dialog import AISettingsDialog
 
 
-DEFAULT_AI_PROVIDER = "gemini"
-DEFAULT_AI_MODEL = "gemini-3.7-flash"
-DEFAULT_PROVIDER_MODELS = {
-    "gemini": DEFAULT_AI_MODEL,
-    "anthropic": DEFAULT_CLAUDE_MODEL,
-}
-
-
 class AIAssistantController:
     """Bind panel intents to a detached session without moving state into Qt."""
 
-    def __init__(self, host, panel, settings, background_jobs):
+    def __init__(
+        self,
+        host,
+        panel,
+        settings,
+        background_jobs,
+        *,
+        provider_registry: ProviderRegistry = DEFAULT_PROVIDER_REGISTRY,
+    ):
         self.host = host
         self.panel = panel
         self.settings = settings
         self.background_jobs = background_jobs
+        self.provider_registry = provider_registry
         self.credential_store = SystemKeyringCredentialStore()
         self.identity_resolver = TimestampMotionIdentityResolver()
         self.metadata_store = InMemoryMotionMetadataStore()
@@ -89,13 +85,21 @@ class AIAssistantController:
         self._session_goal = ""
         self._visual_refinement_goal = ""
 
-        self.provider_name = str(
-            settings.value("ai/provider", DEFAULT_AI_PROVIDER)
+        configured_provider = str(
+            settings.value("ai/provider", provider_registry.default_name)
         )
-        self.model = str(settings.value(
-            "ai/model",
-            DEFAULT_PROVIDER_MODELS.get(self.provider_name, DEFAULT_AI_MODEL),
-        ))
+        try:
+            registration = provider_registry.get(configured_provider)
+        except ValueError:
+            registration = provider_registry.default
+            configured_model = registration.default_model
+        else:
+            configured_model = settings.value(
+                "ai/model",
+                registration.default_model,
+            )
+        self.provider_name = registration.name
+        self.model = str(configured_model)
         self.panel.set_provider(self.provider_name, self.model)
         self.panel.submit_requested.connect(self.start_edit)
         self.panel.critique_requested.connect(self.start_critique)
@@ -608,11 +612,7 @@ class AIAssistantController:
 
     def _provider(self, *, api_key=None):
         key = api_key or self._session_api_keys.get(self.provider_name)
-        if self.provider_name == "gemini":
-            return GeminiProvider(api_key=key)
-        if self.provider_name == "anthropic":
-            return AnthropicProvider(api_key=key)
-        raise ValueError(f"Unsupported AI provider: {self.provider_name}")
+        return self.provider_registry.create(self.provider_name, api_key=key)
 
     def _request_succeeded(self, result: TextMotionRunResult) -> None:
         self.active_handle = None
@@ -805,19 +805,20 @@ class AIAssistantController:
 
     def open_settings(self) -> None:
         secure_key_availability = {
-            provider: bool(self.credential_store.get_secret(provider))
-            for provider in DEFAULT_PROVIDER_MODELS
+            registration.name: bool(
+                self.credential_store.get_secret(
+                    registration.credential_identifier
+                )
+            )
+            for registration in self.provider_registry.registrations
         }
         dialog = AISettingsDialog(
             provider=self.provider_name,
             model=self.model,
             capabilities=self._provider_capabilities(self.provider_name),
             secure_key_available=secure_key_availability[self.provider_name],
-            provider_capabilities={
-                "gemini": DEFAULT_GEMINI_CAPABILITIES,
-                "anthropic": DEFAULT_ANTHROPIC_CAPABILITIES,
-            },
             secure_key_availability=secure_key_availability,
+            provider_registry=self.provider_registry,
             parent=self.host,
         )
         self._settings_dialog = dialog
@@ -834,8 +835,11 @@ class AIAssistantController:
                 self._connection_test_cache.invalidate()
             try:
                 if values.api_key and values.store_securely:
+                    credential_identifier = self.provider_registry.get(
+                        values.provider
+                    ).credential_identifier
                     self.credential_store.set_secret(
-                        values.provider,
+                        credential_identifier,
                         values.api_key,
                     )
                     self._session_api_keys.pop(values.provider, None)
@@ -895,12 +899,7 @@ class AIAssistantController:
 
     async def _run_connection_test(self, provider_name, model, api_key):
         key = api_key or self._session_api_keys.get(provider_name)
-        if provider_name == "gemini":
-            provider = GeminiProvider(api_key=key)
-        elif provider_name == "anthropic":
-            provider = AnthropicProvider(api_key=key)
-        else:
-            raise ValueError(f"Unsupported AI provider: {provider_name}")
+        provider = self.provider_registry.create(provider_name, api_key=key)
         try:
             response = await provider.generate(
                 ProviderRequest(
@@ -944,20 +943,20 @@ class AIAssistantController:
         if self._settings_dialog is None:
             return
         try:
-            removed = self.credential_store.delete_secret(provider_name)
+            credential_identifier = self.provider_registry.get(
+                provider_name
+            ).credential_identifier
+            removed = self.credential_store.delete_secret(
+                credential_identifier
+            )
         except CredentialStorageError as error:
             self._settings_dialog.set_test_result(False, str(error))
             return
         self._connection_test_cache.invalidate()
         self._settings_dialog.mark_stored_key_removed(removed)
 
-    @staticmethod
-    def _provider_capabilities(provider_name):
-        if provider_name == "gemini":
-            return DEFAULT_GEMINI_CAPABILITIES
-        if provider_name == "anthropic":
-            return DEFAULT_ANTHROPIC_CAPABILITIES
-        raise ValueError(f"Unsupported AI provider: {provider_name}")
+    def _provider_capabilities(self, provider_name):
+        return self.provider_registry.get(provider_name).capabilities
 
     def shutdown(self) -> None:
         self.cancel_request()

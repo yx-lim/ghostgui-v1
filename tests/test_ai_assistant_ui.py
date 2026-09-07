@@ -151,6 +151,37 @@ class AISettingsDialogTests(unittest.TestCase):
         self.assertEqual(dialog.values().model, "claude-sonnet-5")
         self.assertIn("Vision", dialog.capabilities_label.text())
 
+    def test_settings_enumerates_a_new_provider_from_the_registry(self):
+        from application.ai.provider_registry import (
+            ProviderRegistration,
+            ProviderRegistry,
+        )
+        from application.ai.schemas import ProviderCapabilities
+        from gui.ai_settings_dialog import AISettingsDialog
+
+        registration = ProviderRegistration(
+            name="future",
+            display_name="Future AI",
+            factory=lambda *, api_key=None: object(),
+            models=("future-default", "future-fast"),
+            capabilities=ProviderCapabilities(
+                supports_tools=True,
+                supports_vision=False,
+            ),
+            credential_identifier="future-key",
+            environment_variables=("FUTURE_API_KEY",),
+            sdk_distribution="future-sdk",
+        )
+        registry = ProviderRegistry((registration,), default_name="future")
+
+        dialog = AISettingsDialog(provider_registry=registry, provider="future")
+        self.addCleanup(dialog.close)
+
+        self.assertEqual(dialog.provider_box.count(), 1)
+        self.assertEqual(dialog.provider_box.currentText(), "Future AI")
+        self.assertEqual(dialog.values().model, "future-default")
+        self.assertIn("Tool Calling", dialog.capabilities_label.text())
+
 
 if __name__ == "__main__":
     unittest.main()

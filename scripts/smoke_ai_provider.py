@@ -23,12 +23,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from application.ai.errors import ProviderError
-from application.ai.providers.anthropic import (
-    DEFAULT_CLAUDE_MODEL,
-    AnthropicProvider,
-)
 from application.ai.providers.base import LLMProvider
-from application.ai.providers.gemini import GeminiProvider
+from application.ai.provider_registry import DEFAULT_PROVIDER_REGISTRY
 from application.ai.schemas import (
     ImageVariant,
     MessageRole,
@@ -40,14 +36,13 @@ from application.ai.schemas import (
 )
 
 
-DEFAULT_GEMINI_MODEL = "gemini-3.7-flash"
 _DEFAULT_MODELS = {
-    "gemini": DEFAULT_GEMINI_MODEL,
-    "anthropic": DEFAULT_CLAUDE_MODEL,
+    registration.name: registration.default_model
+    for registration in DEFAULT_PROVIDER_REGISTRY.registrations
 }
 _SDK_DISTRIBUTIONS = {
-    "gemini": "google-genai",
-    "anthropic": "anthropic",
+    registration.name: registration.sdk_distribution
+    for registration in DEFAULT_PROVIDER_REGISTRY.registrations
 }
 
 
@@ -79,11 +74,7 @@ def _sdk_version(provider_name: str) -> str:
 
 
 def _provider(provider_name: str) -> LLMProvider:
-    if provider_name == "gemini":
-        # A smoke check should report the first live result, not silently consume
-        # more quota through adapter retries.
-        return GeminiProvider(max_attempts=1)
-    return AnthropicProvider()
+    return DEFAULT_PROVIDER_REGISTRY.create(provider_name)
 
 
 def _request(model: str, prompt: str, **changes) -> ProviderRequest:

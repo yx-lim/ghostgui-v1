@@ -204,6 +204,7 @@ but focused components now own the mechanics it previously embedded:
 | `application/ai/plan_executor.py` | Allowlisted local plan execution, operation rollback, validation, and summaries |
 | `application/ai/motion_services.py` | Semantic motion operations plus structural and kinematic working-copy validation |
 | `application/ai/connection_cache.py` | Session-only successful connection-test identity cache |
+| `application/ai/provider_registry.py` | Central live-provider factories, models, capabilities, credential identifiers, and SDK distribution names |
 | `application/ai/metadata.py` | Opaque motion identity, conservative ownership, protection, and versioned workspace persistence |
 | `application/ai/provider_comparison.py` | Provider-neutral comparison of validated tool and detached motion outcomes; provider prose is excluded |
 | `application/ai/limits.py` | Shared local instruction, response, tool-result, output-token, and image budgets |
@@ -220,6 +221,15 @@ from the existing viewer tabs and canvas. The snapshot owns no motion or camera
 state. `ContextBuilder` combines it with model-adapter capabilities and metadata
 service protection lookups, keeping GUI state and provenance authoritative in
 their existing owners.
+
+`ProviderRegistry` is the small application composition boundary for live AI
+providers. The controller, settings dialog, environment credential lookup, and
+manual smoke harness consume the same registrations instead of branching on
+Gemini or Anthropic. Each registration supplies its display identity, factory,
+ordered model choices (the first is the default), capability flags, credential
+identifier and official environment variables, and SDK distribution name.
+Adding another built-in provider therefore changes the registry and adapter,
+not multiple GUI files; this is intentionally not a dynamic plugin framework.
 
 For provider compatibility, each planned operation's arguments cross the wire
 as compact JSON object text. `motion_plan.py` decodes that text into the normal

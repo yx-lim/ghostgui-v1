@@ -8,6 +8,11 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from application.ai.connection_cache import ConnectionTestCache
+from application.ai.provider_registry import (
+    ProviderRegistration,
+    ProviderRegistry,
+)
+from application.ai.schemas import ProviderCapabilities
 
 
 try:
@@ -21,6 +26,35 @@ except ImportError:
     "Motion Assistant dependencies unavailable",
 )
 class AIConnectionProbeTests(unittest.TestCase):
+    def test_controller_creates_an_injected_provider_without_name_branching(self):
+        class _Provider:
+            def __init__(self, api_key):
+                self.api_key = api_key
+
+        controller = AIAssistantController.__new__(AIAssistantController)
+        controller.provider_registry = ProviderRegistry(
+            (ProviderRegistration(
+                name="future",
+                display_name="Future",
+                factory=lambda *, api_key=None: _Provider(api_key),
+                models=("future-default",),
+                capabilities=ProviderCapabilities(
+                    supports_tools=True,
+                    supports_vision=False,
+                ),
+                credential_identifier="future-key",
+                environment_variables=("FUTURE_API_KEY",),
+                sdk_distribution="future-sdk",
+            ),),
+            default_name="future",
+        )
+        controller.provider_name = "future"
+        controller._session_api_keys = {"future": "session-secret"}
+
+        provider = controller._provider()
+
+        self.assertEqual(provider.api_key, "session-secret")
+
     def test_probe_does_not_starve_thinking_models_of_output_tokens(self):
         calls = []
 
@@ -37,14 +71,29 @@ class AIConnectionProbeTests(unittest.TestCase):
 
         controller = AIAssistantController.__new__(AIAssistantController)
         controller._session_api_key = None
-        with patch("gui.ai_assistant_controller.GeminiProvider", _Provider):
-            result = asyncio.run(
-                controller._run_connection_test(
-                    "gemini",
-                    "gemini-3.6-flash",
-                    "test-key",
-                )
+        controller.provider_registry = ProviderRegistry(
+            (ProviderRegistration(
+                name="gemini",
+                display_name="Gemini",
+                factory=lambda *, api_key=None: _Provider(api_key=api_key),
+                models=("gemini-3.6-flash",),
+                capabilities=ProviderCapabilities(
+                    supports_tools=False,
+                    supports_vision=False,
+                ),
+                credential_identifier="gemini",
+                environment_variables=("GEMINI_API_KEY",),
+                sdk_distribution="google-genai",
+            ),),
+            default_name="gemini",
+        )
+        result = asyncio.run(
+            controller._run_connection_test(
+                "gemini",
+                "gemini-3.6-flash",
+                "test-key",
             )
+        )
 
         self.assertEqual(result, "OK")
         self.assertEqual(len(calls), 1)

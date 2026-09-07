@@ -44,11 +44,16 @@ class EnvironmentCredentialSource:
 
     def get_secret(self, provider_name: str) -> str | None:
         values = os.environ if self.environ is None else self.environ
-        if provider_name == "gemini":
-            # The Gemini SDK gives GOOGLE_API_KEY precedence when both are present.
-            return values.get("GOOGLE_API_KEY") or values.get("GEMINI_API_KEY") or None
-        if provider_name == "anthropic":
-            return values.get("ANTHROPIC_API_KEY") or None
+        try:
+            from application.ai.provider_registry import DEFAULT_PROVIDER_REGISTRY
+
+            registration = DEFAULT_PROVIDER_REGISTRY.get(provider_name)
+        except ValueError:
+            return None
+        for variable in registration.environment_variables:
+            secret = values.get(variable)
+            if secret:
+                return secret
         return None
 
 
