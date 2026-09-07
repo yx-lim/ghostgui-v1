@@ -23,6 +23,18 @@ key identity during this GhostGUI process. Repeating the identical test uses
 the cached result; changing any of those settings invalidates it. GhostGUI does
 not test the connection automatically at startup.
 
+The optional AI dependency versions are pinned to the known-working live-smoke
+baseline used for the normalized provider adapters:
+
+- `google-genai==2.21.0` with `gemini-3.7-flash`;
+- `anthropic==1.4.0` with `claude-sonnet-5`;
+- `keyring==25.7.0` for secure credential storage.
+
+The live checks covered text, structured output, tool calling, and vision for
+each provider. Upgrading one of these packages requires rerunning the offline
+adapter contract tests and the corresponding opt-in live smoke test before
+updating this baseline.
+
 ## Edit And Review
 
 1. Select the relevant logical frame and active time. To target an interval,

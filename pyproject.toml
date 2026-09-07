@@ -37,9 +37,9 @@ dependencies = [
 
 [project.optional-dependencies]
 ai = [
-    "anthropic>=1.0",
-    "google-genai>=1.0",
-    "keyring>=24",
+    "anthropic==1.4.0",
+    "google-genai==2.21.0",
+    "keyring==25.7.0",
 ]
 
 [project.urls]
