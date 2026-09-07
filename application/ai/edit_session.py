@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Callable
 
 from application.ai.metadata import (
     InMemoryMotionMetadataStore,
@@ -190,7 +191,17 @@ class AIEditSession:
         self._state = AIEditSessionState.STAGED
         return True
 
-    def accept(self, committed_controller: EditorController) -> CommandResult:
+    def accept(
+        self,
+        committed_controller: EditorController,
+        *,
+        commit_checkpoint: Callable[[], None] | None = None,
+    ) -> CommandResult:
+        """Commit motion, provenance, and an optional history checkpoint.
+
+        The callback is part of the logical transaction.  Presentation work must
+        happen after this method returns.
+        """
         self._require_state(AIEditSessionState.STAGED)
         if committed_controller.document is not self._committed_document:
             raise AIEditSessionError("session belongs to a different committed document")
@@ -200,13 +211,32 @@ class AIEditSession:
             )
         if not self.has_changes:
             raise AIEditSessionError("cannot accept an AI session with no motion changes")
-        result = committed_controller.execute(
-            ReplaceMotionState(
-                capture_motion_state(self.working_document),
-                force_change=True,
+        before_motion = capture_motion_state(self._committed_document)
+        before_metadata = dict(self._committed_metadata.snapshot())
+        before_revision = self._committed_document.revision
+        before_dirty = self._committed_document.dirty
+        try:
+            # Provenance is an in-memory snapshot and can be compensated before
+            # publishing the committed document change.
+            self._committed_metadata.replace(self.metadata.snapshot())
+            result = committed_controller.execute(
+                ReplaceMotionState(
+                    capture_motion_state(self.working_document),
+                    force_change=True,
+                )
             )
-        )
-        self._committed_metadata.replace(self.metadata.snapshot())
+            if commit_checkpoint is not None:
+                commit_checkpoint()
+        except Exception:
+            # Restore directly so compensation does not create a second editor
+            # revision or history operation.
+            ReplaceMotionState(before_motion, force_change=True).execute(
+                self._committed_document
+            )
+            self._committed_document.revision = before_revision
+            self._committed_document.dirty = before_dirty
+            self._committed_metadata.replace(before_metadata)
+            raise
         self._state = AIEditSessionState.ACCEPTED
         return result
 

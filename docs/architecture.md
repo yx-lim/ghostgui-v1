@@ -280,6 +280,16 @@ v2 project schema. Loading an older workspace with no section performs the same
 conservative seed. The timestamp-backed MVP resolver remains isolated behind
 the service so stable Keyframe IDs can replace it without changing AI tools.
 
+Accept treats the candidate motion replacement, its provenance snapshot, and
+one history checkpoint as a single logical transaction. If provenance or
+history checkpointing fails, the committed motion, revision, dirty state, and
+metadata are compensated back to their pre-AI values and the session remains
+staged. GUI history snapshots include provenance, so Undo and Redo restore the
+complete pre-AI and accepted states. Orange preview teardown, generated-motion
+cache invalidation, and viewer refresh happen only after the transaction; a
+presentation failure is reported as a warning and does not make a successfully
+accepted session appear staged or partially committed.
+
 `GhostGUIMotionService.validate_motion` owns local working-copy validation. It
 checks duration and time domains, document/timeline model identity, qpos width
 and finiteness, Joint Angle limits, configured blocking collisions, logical

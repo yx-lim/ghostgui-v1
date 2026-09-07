@@ -1150,6 +1150,77 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertFalse(self.viewer.candidate_preview_active)
         self.assertFalse(self.viewer.preview_active)
 
+    def test_ai_accept_undo_redo_restores_motion_and_provenance(self):
+        self.configure_two_keyframe_motion()
+        controller = self.window.ai_assistant_controller
+        frame = self.window.trajectory.frames[0]
+        reference = controller._metadata_service().reference_for_keyframe(frame)
+        controller.metadata_store.record(reference, EditAuthor.USER)
+        self.window._refresh_history_baseline()
+        undo_count = len(self.window.undo_stack)
+
+        session = AIEditSession(
+            self.window.document,
+            metadata_store=controller.metadata_store,
+        )
+        session.apply_ai(
+            UpdateKeyframe(0, replace(frame, z=frame.z + 0.08)),
+            affected_entities=(reference,),
+            allow_user_override=True,
+        )
+        controller.session = session
+        controller.accept()
+
+        self.assertEqual(len(self.window.undo_stack), undo_count + 1)
+        self.assertAlmostEqual(self.window.trajectory.frames[0].z, frame.z + 0.08)
+        self.assertEqual(
+            controller.metadata_store.get(reference).author,
+            EditAuthor.AI,
+        )
+
+        self.window.undo_last_action()
+        self.assertAlmostEqual(self.window.trajectory.frames[0].z, frame.z)
+        self.assertEqual(
+            controller.metadata_store.get(reference).author,
+            EditAuthor.USER,
+        )
+
+        self.window.redo_last_action()
+        self.assertAlmostEqual(self.window.trajectory.frames[0].z, frame.z + 0.08)
+        self.assertEqual(
+            controller.metadata_store.get(reference).author,
+            EditAuthor.AI,
+        )
+
+    def test_ai_accept_remains_committed_when_viewer_refresh_fails(self):
+        self.configure_two_keyframe_motion()
+        controller = self.window.ai_assistant_controller
+        frame = self.window.trajectory.frames[0]
+        session = AIEditSession(
+            self.window.document,
+            metadata_store=controller.metadata_store,
+        )
+        session.apply_ai(
+            UpdateKeyframe(0, replace(frame, z=frame.z + 0.04))
+        )
+        controller.session = session
+        undo_count = len(self.window.undo_stack)
+
+        with patch.object(
+            self.window.viewer_3d,
+            "clear_robot_trajectory",
+            side_effect=RuntimeError("renderer unavailable"),
+        ):
+            controller.accept()
+
+        self.assertIsNone(controller.session)
+        self.assertEqual(len(self.window.undo_stack), undo_count + 1)
+        self.assertAlmostEqual(self.window.trajectory.frames[0].z, frame.z + 0.04)
+        self.assertIn(
+            "Viewer refresh warning",
+            controller.panel.response_label.text(),
+        )
+
     def test_shorter_candidate_duration_does_not_change_committed_time(self):
         self.configure_two_keyframe_motion()
         self.window.on_viewer_timeslice_time_changed(4.0)

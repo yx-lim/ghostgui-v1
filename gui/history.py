@@ -24,3 +24,4 @@ class GuiHistorySnapshot:
     ghost_source: str | None
     show_ghosts: bool
     timeline_duration: float
+    motion_metadata: tuple = ()

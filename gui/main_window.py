@@ -2394,6 +2394,15 @@ class RobotGuiMainWindow(QMainWindow):
 
     def capture_history_snapshot(self):
         viewer = self.viewer_3d
+        ai_controller = getattr(self, "ai_assistant_controller", None)
+        motion_metadata = ()
+        if ai_controller is not None:
+            motion_metadata = tuple(
+                sorted(
+                    ai_controller.metadata_store.snapshot().items(),
+                    key=lambda item: item[0].identifier,
+                )
+            )
         timeline_states = ()
         if viewer.state_timeline is not None:
             timeline_states = tuple(
@@ -2432,6 +2441,7 @@ class RobotGuiMainWindow(QMainWindow):
             ghost_source=viewer.ghost_source,
             show_ghosts=bool(viewer.show_ghosts.isChecked()),
             timeline_duration=float(viewer.timeline_duration),
+            motion_metadata=motion_metadata,
         )
 
     def _restore_control_frame(self, frame):
@@ -2456,6 +2466,11 @@ class RobotGuiMainWindow(QMainWindow):
         viewer = self.viewer_3d
         self._history_restoring = True
         try:
+            ai_controller = getattr(self, "ai_assistant_controller", None)
+            if ai_controller is not None:
+                ai_controller.metadata_store.replace(
+                    dict(snapshot.motion_metadata)
+                )
             self.trajectory.tracks = {
                 name: [] for name in snapshot.trajectory_track_names
             }
@@ -2538,7 +2553,7 @@ class RobotGuiMainWindow(QMainWindow):
             return
         self.history.set_baseline(self.capture_history_snapshot())
 
-    def record_history_action(self, description):
+    def checkpoint_history_action(self, description):
         if self._history_restoring:
             return False
         before = self.history.baseline or self.capture_history_snapshot()
@@ -2548,9 +2563,17 @@ class RobotGuiMainWindow(QMainWindow):
             before=before,
             after=after,
         )
+        return True
+
+    def announce_history_action(self, description):
         self.statusBar().showMessage(f"{description}; Ctrl+Z can undo.", 3000)
         self.mark_project_dirty(description)
         self.sync_workflow_toolbar()
+
+    def record_history_action(self, description):
+        if not self.checkpoint_history_action(description):
+            return False
+        self.announce_history_action(description)
         return True
 
     def undo_last_action(self):

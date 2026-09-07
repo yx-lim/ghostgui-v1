@@ -144,6 +144,63 @@ class AIEditSessionTests(unittest.TestCase):
         self.assertEqual(metadata.get(reference).author, EditAuthor.AI)
         self.assertEqual(session.state, AIEditSessionState.ACCEPTED)
 
+    def test_accept_rolls_back_motion_and_metadata_when_checkpoint_fails(self):
+        committed = _document()
+        committed.dirty = False
+        metadata = InMemoryMotionMetadataStore()
+        reference = MotionEntityRef("pelvis-keyframe")
+        metadata.record(reference, EditAuthor.USER)
+        session = AIEditSession(committed, metadata_store=metadata)
+        session.apply_ai(
+            UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.7)),
+            affected_entities=(reference,),
+            allow_user_override=True,
+        )
+
+        def fail_checkpoint():
+            raise RuntimeError("history unavailable")
+
+        with self.assertRaisesRegex(RuntimeError, "history unavailable"):
+            session.accept(
+                EditorController(committed),
+                commit_checkpoint=fail_checkpoint,
+            )
+
+        self.assertEqual(committed.trajectory.frames[0].z, 0.9)
+        self.assertEqual(committed.revision, 0)
+        self.assertFalse(committed.dirty)
+        self.assertEqual(metadata.get(reference).author, EditAuthor.USER)
+        self.assertEqual(session.state, AIEditSessionState.STAGED)
+
+    def test_accept_does_not_publish_motion_when_metadata_commit_fails(self):
+        class FailingMetadataStore(InMemoryMotionMetadataStore):
+            fail_next_replace = False
+
+            def replace(self, values):
+                if self.fail_next_replace:
+                    self.fail_next_replace = False
+                    raise RuntimeError("metadata unavailable")
+                super().replace(values)
+
+        committed = _document()
+        metadata = FailingMetadataStore()
+        session = AIEditSession(committed, metadata_store=metadata)
+        session.apply_ai(
+            UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.7))
+        )
+        changed = []
+        events = EditorEventBus()
+        events.subscribe(DocumentChanged, changed.append)
+        metadata.fail_next_replace = True
+
+        with self.assertRaisesRegex(RuntimeError, "metadata unavailable"):
+            session.accept(EditorController(committed, events))
+
+        self.assertEqual(committed.trajectory.frames[0].z, 0.9)
+        self.assertEqual(committed.revision, 0)
+        self.assertEqual(changed, [])
+        self.assertEqual(session.state, AIEditSessionState.STAGED)
+
     def test_reject_discards_working_copy_and_metadata(self):
         committed = _document()
         metadata = InMemoryMotionMetadataStore()

@@ -82,6 +82,7 @@ class AIAssistantController:
         }
         self.session = None
         self.active_handle = None
+        self._accepting_session = False
         self._session_api_keys = {}
         self._connection_test_cache = ConnectionTestCache()
         self._settings_dialog = None
@@ -687,10 +688,26 @@ class AIAssistantController:
     def accept(self) -> None:
         if not self.session_staged or self.active_handle is not None:
             return
+        description = "Accept AI motion edit"
+        try:
+            self._accepting_session = True
+            self.session.accept(
+                self.host.editor_controller,
+                commit_checkpoint=lambda: self._checkpoint_accept_history(
+                    description
+                ),
+            )
+        except Exception as error:
+            self.panel.show_error(str(error), session_staged=True)
+            if self.session_staged:
+                self.preview()
+            return
+        finally:
+            self._accepting_session = False
+
+        refresh_error = None
         try:
             self._end_candidate_preview()
-            self.session.accept(self.host.editor_controller)
-            self.metadata_store.replace(self.session.metadata.snapshot())
             self.host.viewer_3d.cancel_preview()
             self.host.viewer_3d.clear_robot_trajectory()
             self.host.viewer_3d_mujoco.clear_trajectory()
@@ -702,17 +719,25 @@ class AIAssistantController:
                 self.host.document.current_time
             )
             self.host.refresh_display()
-            self.host.record_history_action("Accept AI motion edit")
         except Exception as error:
-            self.panel.show_error(str(error), session_staged=True)
-            if self.session_staged:
-                self.preview()
-            return
-        self.panel.reset_session("AI motion edit accepted as one history entry.")
+            refresh_error = error
+        try:
+            self.host.announce_history_action(description)
+        except Exception as error:
+            refresh_error = refresh_error or error
+
+        message = "AI motion edit accepted as one history entry."
+        if refresh_error is not None:
+            message += f" Viewer refresh warning: {refresh_error}"
+        self.panel.reset_session(message)
         self.session = None
         self._session_goal = ""
         self._clear_visual_refinement()
         self.host.set_ai_motion_controls_enabled(True)
+
+    def _checkpoint_accept_history(self, description: str) -> None:
+        if not self.host.checkpoint_history_action(description):
+            raise RuntimeError("AI Accept history checkpoint was not recorded")
 
     def activate_document(self, document) -> None:
         """Select the metadata store paired with a committed document."""
@@ -755,6 +780,8 @@ class AIAssistantController:
 
     def _committed_document_changed(self, event) -> None:
         if event.document_id != self.host.document.document_id:
+            return
+        if getattr(self, "_accepting_session", False):
             return
         self._metadata_service().claim_document_as_user_owned(self.host.document)
 
