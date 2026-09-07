@@ -27,6 +27,7 @@ from application.ai.plan_executor import (
     local_proposal,
 )
 from application.ai.providers import MockProvider, RequestCountingProvider
+from application.ai.progress import AIProgressStage
 from application.ai.schemas import ProviderResponse
 from application.ai.semantic_tools import (
     SemanticToolContext,
@@ -279,6 +280,44 @@ class PlanExecutorTests(unittest.TestCase):
 
 
 class TextMotionWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_progress_tracks_local_operations_without_extra_requests(self):
+        operations = [_ensure_operation(0.25 * index) for index in range(1, 5)]
+        response = ProviderResponse(text=json.dumps(_payload(operations)))
+        _committed, _session, context, tools, delegate, provider = _setup([response])
+        events = []
+
+        await TextMotionWorkflow(provider, tools).run(
+            "Create four Keyframes.",
+            model="mock",
+            context=context,
+            progress_callback=events.append,
+        )
+
+        self.assertEqual(provider.counter.counts.total, 1)
+        self.assertEqual(
+            [event.stage for event in events],
+            [
+                AIProgressStage.PLANNING_STARTED,
+                AIProgressStage.STRUCTURED_PLAN_COMPLETED,
+                *([AIProgressStage.LOCAL_OPERATION] * 4),
+                AIProgressStage.VALIDATION,
+                AIProgressStage.DONE,
+            ],
+        )
+        operation_events = [
+            event
+            for event in events
+            if event.stage is AIProgressStage.LOCAL_OPERATION
+        ]
+        self.assertEqual(
+            [
+                (event.operation_index, event.operation_count)
+                for event in operation_events
+            ],
+            [(1, 4), (2, 4), (3, 4), (4, 4)],
+        )
+        delegate.assert_exhausted()
+
     async def test_one_four_and_twelve_operation_plans_each_use_one_request(self):
         for count in (1, 4, 12):
             with self.subTest(operation_count=count):

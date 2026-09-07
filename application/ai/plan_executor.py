@@ -12,6 +12,12 @@ from application.ai.errors import ProviderCancelledError
 from application.ai.limits import MAX_TOOL_RESULT_CHARACTERS
 from application.ai.motion_plan import MotionEditPlan, PlannedOperation
 from application.ai.providers.base import CancellationSignal
+from application.ai.progress import (
+    AIProgressCallback,
+    AIProgressEvent,
+    AIProgressStage,
+    report_progress,
+)
 from application.ai.semantic_tools import SemanticToolContext
 from application.ai.tool_registry import ToolRegistry
 
@@ -85,6 +91,8 @@ class PlanExecutor:
         *,
         context: SemanticToolContext,
         cancellation_token: CancellationSignal | None = None,
+        progress_callback: AIProgressCallback | None = None,
+        repair: bool = False,
     ) -> PlanExecutionResult:
         if plan.needs_clarification:
             return PlanExecutionResult(plan, (), None)
@@ -97,6 +105,15 @@ class PlanExecutor:
         results = []
         for index, operation in enumerate(plan.operations):
             _raise_if_cancelled(cancellation_token)
+            report_progress(
+                progress_callback,
+                AIProgressEvent(
+                    AIProgressStage.LOCAL_OPERATION,
+                    operation_index=index + 1,
+                    operation_count=len(plan.operations),
+                    repair=repair,
+                ),
+            )
             checkpoint = context.session.checkpoint()
             edit_count = len(context.session.edits)
             try:
@@ -136,6 +153,10 @@ class PlanExecutor:
         _raise_if_cancelled(cancellation_token)
         validation = None
         if context.session.has_changes:
+            report_progress(
+                progress_callback,
+                AIProgressEvent(AIProgressStage.VALIDATION, repair=repair),
+            )
             validation = _json_value(
                 self.tools.execute("validate_motion", {}, context=context),
                 max_characters=self.max_result_characters,

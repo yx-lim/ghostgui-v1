@@ -7,6 +7,8 @@ import asyncio
 from application.ai import (
     AIEditSession,
     AIEditSessionState,
+    AIProgressCallback,
+    AIProgressEvent,
     ConnectionTestCache,
     ContextBuilder,
     EditorSelectionContext,
@@ -578,7 +580,13 @@ class AIAssistantController:
 
         def work(token):
             return asyncio.run(
-                self._run_text_motion(instruction, tools, context, token)
+                self._run_text_motion(
+                    instruction,
+                    tools,
+                    context,
+                    token,
+                    progress_callback=self._emit_progress,
+                )
             )
 
         self.active_handle = self.background_jobs.submit_cancellable(
@@ -598,7 +606,21 @@ class AIAssistantController:
             else:
                 self.preview()
 
-    async def _run_text_motion(self, instruction, tools, context, token):
+    def _emit_progress(self, event: AIProgressEvent) -> None:
+        try:
+            self.panel.progress_received.emit(event)
+        except RuntimeError:
+            # The panel may have been destroyed while a worker is shutting down.
+            pass
+
+    async def _run_text_motion(
+        self,
+        instruction,
+        tools,
+        context,
+        token,
+        progress_callback: AIProgressCallback | None = None,
+    ):
         provider = self._provider()
         try:
             return await TextMotionWorkflow(provider, tools).run(
@@ -606,6 +628,7 @@ class AIAssistantController:
                 model=self.model,
                 context=context,
                 cancellation_token=token,
+                progress_callback=progress_callback,
             )
         finally:
             await provider.aclose()

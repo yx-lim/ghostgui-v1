@@ -64,6 +64,12 @@ local results. Plans containing one operation or many operations therefore use
 the same single provider request; GhostGUI does not send a second request merely
 to obtain a “done” message.
 
+While that action runs, the status advances through deterministic local stages:
+planning, plan completion, operation 1/N through N/N, validation, and candidate
+completion. These updates describe work GhostGUI already performs and do not
+make additional provider requests. Provider text is currently consumed as one
+complete structured response rather than streamed token by token.
+
 The local motion check covers positive finite duration, current and Keyframe
 times, active-model and qpos compatibility, finite qpos values, Joint Angle
 limits, blocking collisions reported by the configured collision checker,

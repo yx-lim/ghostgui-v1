@@ -210,6 +210,7 @@ but focused components now own the mechanics it previously embedded:
 | `application/ai/text_planner.py` | One-request text planning and workflow orchestration |
 | `application/ai/repair_planner.py` | One optional compact replacement-operation request after local failure |
 | `application/ai/plan_executor.py` | Allowlisted local plan execution, operation rollback, validation, and summaries |
+| `application/ai/progress.py` | Provider-neutral planning, local execution, validation, and completion progress events |
 | `application/ai/motion_services.py` | Semantic motion operations plus structural and kinematic working-copy validation |
 | `application/ai/connection_cache.py` | Session-only successful connection-test identity cache |
 | `application/ai/provider_registry.py` | Central live-provider factories, models, capabilities, credential identifiers, and SDK distribution names |
@@ -251,6 +252,14 @@ replacement-operation request using the already-updated working copy; local
 execution then stops whether the replacement set succeeds or fails. Earlier
 successful operations remain staged, and each failed operation is rolled back
 to its own checkpoint.
+
+Text planning and local execution expose typed progress events without changing
+that request topology. The controller forwards them across a queued Qt signal,
+and the panel ignores events once the request is no longer running. Current
+adapters still return one complete structured response, so planning and
+operation progress is deterministic and local. The event contract reserves a
+text-delta stage for future SDK streaming, but enabling it must not add provider
+turns or bypass structured-plan validation.
 
 The visual path shares that same local execution boundary:
 

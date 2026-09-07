@@ -47,6 +47,28 @@ class AIAssistantPanelTests(unittest.TestCase):
         self.panel.preview_button.click()
         self.assertEqual(previews, [True])
 
+    def test_worker_progress_updates_only_an_active_request(self):
+        from application.ai.progress import AIProgressEvent, AIProgressStage
+
+        self.panel.begin_request()
+        self.panel.progress_received.emit(AIProgressEvent(
+            AIProgressStage.LOCAL_OPERATION,
+            operation_index=2,
+            operation_count=5,
+        ))
+        self.app.processEvents()
+        self.assertEqual(
+            self.panel.response_label.text(),
+            "Executing operation 2/5…",
+        )
+
+        self.panel.show_proposal("Done", ("Modified motion",))
+        self.panel.progress_received.emit(
+            AIProgressEvent(AIProgressStage.VALIDATION)
+        )
+        self.app.processEvents()
+        self.assertEqual(self.panel.response_label.text(), "Done")
+
     def test_apply_and_refine_emit_trimmed_instructions(self):
         submitted = []
         refined = []

@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from application.ai.progress import AIProgressEvent
+
 
 class AIAssistantPanelState(str, Enum):
     READY = "ready"
@@ -37,12 +39,17 @@ class AIAssistantPanel(QWidget):
     reject_requested = Signal()
     cancel_requested = Signal()
     settings_requested = Signal()
+    progress_received = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("aiAssistantPanel")
         self.setMinimumWidth(0)
         self._state = AIAssistantPanelState.READY
+        self.progress_received.connect(
+            self.show_progress,
+            Qt.ConnectionType.QueuedConnection,
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -201,6 +208,15 @@ class AIAssistantPanel(QWidget):
             self.response_label.setText("Refining the staged working copy…")
         else:
             self.response_label.setText("Creating a detached AI working copy…")
+
+    def show_progress(self, event: object) -> None:
+        """Present worker progress only while its request remains active."""
+
+        if (
+            self._state is AIAssistantPanelState.RUNNING
+            and isinstance(event, AIProgressEvent)
+        ):
+            self.response_label.setText(event.message)
 
     def show_proposal(self, response: str, changes: tuple[str, ...]) -> None:
         self.response_label.setText(response.strip() or "AI edit staged for review.")

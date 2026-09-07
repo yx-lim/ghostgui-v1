@@ -31,6 +31,12 @@ from application.ai.plan_executor import (
     local_proposal,
     local_repair_proposal,
 )
+from application.ai.progress import (
+    AIProgressCallback,
+    AIProgressEvent,
+    AIProgressStage,
+    report_progress,
+)
 from application.ai.providers.base import CancellationSignal, LLMProvider
 from application.ai.repair_planner import (
     MotionRepairPlanner,
@@ -158,6 +164,7 @@ class TextMotionPlanner:
         model: str,
         context: SemanticToolContext,
         cancellation_token: CancellationSignal | None = None,
+        progress_callback: AIProgressCallback | None = None,
     ) -> TextMotionPlanningResult:
         if not instruction.strip():
             raise ValueError("AI edit instruction must not be empty")
@@ -170,6 +177,10 @@ class TextMotionPlanner:
                 "selected provider/model does not support structured motion planning"
             )
         _raise_if_cancelled(cancellation_token)
+        report_progress(
+            progress_callback,
+            AIProgressEvent(AIProgressStage.PLANNING_STARTED),
+        )
 
         compact_context = self.tools.execute("inspect_motion", {}, context=context)
         messages = self._messages(instruction, compact_context)
@@ -204,6 +215,13 @@ class TextMotionPlanner:
                 "motion planner response exceeds the local size limit"
             )
         plan = parse_motion_edit_plan(response.text)
+        report_progress(
+            progress_callback,
+            AIProgressEvent(
+                AIProgressStage.STRUCTURED_PLAN_COMPLETED,
+                operation_count=len(plan.operations),
+            ),
+        )
         transcript = tuple(messages) + (
             ProviderMessage(MessageRole.ASSISTANT, text=response.text),
         )
@@ -266,17 +284,20 @@ class TextMotionWorkflow:
         model: str,
         context: SemanticToolContext,
         cancellation_token: CancellationSignal | None = None,
+        progress_callback: AIProgressCallback | None = None,
     ) -> TextMotionRunResult:
         planning = await self.planner.plan(
             instruction,
             model=model,
             context=context,
             cancellation_token=cancellation_token,
+            progress_callback=progress_callback,
         )
         execution = self.executor.execute(
             planning.plan,
             context=context,
             cancellation_token=cancellation_token,
+            progress_callback=progress_callback,
         )
         repair_execution = None
         repair_error = None
@@ -290,6 +311,7 @@ class TextMotionWorkflow:
                     model=model,
                     context=context,
                     cancellation_token=cancellation_token,
+                    progress_callback=progress_callback,
                 )
             except ProviderCancelledError:
                 raise
@@ -300,6 +322,8 @@ class TextMotionWorkflow:
                     repair.plan,
                     context=context,
                     cancellation_token=cancellation_token,
+                    progress_callback=progress_callback,
+                    repair=True,
                 )
                 usage = Usage(
                     input_tokens=usage.input_tokens + repair.usage.input_tokens,
@@ -323,7 +347,7 @@ class TextMotionWorkflow:
             )
         else:
             text, lines = local_proposal(execution)
-        return TextMotionRunResult(
+        result = TextMotionRunResult(
             plan=planning.plan,
             execution=execution,
             repair_execution=repair_execution,
@@ -336,6 +360,11 @@ class TextMotionWorkflow:
             usage=usage,
             transcript=transcript,
         )
+        report_progress(
+            progress_callback,
+            AIProgressEvent(AIProgressStage.DONE),
+        )
+        return result
 
 
 def _raise_if_cancelled(token: CancellationSignal | None) -> None:

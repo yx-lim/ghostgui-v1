@@ -73,6 +73,11 @@ from application.ai.provider_registry import (
     ProviderRegistration,
     ProviderRegistry,
 )
+from application.ai.progress import (
+    AIProgressCallback,
+    AIProgressEvent,
+    AIProgressStage,
+)
 from application.ai.motion_plan import (
     MAX_PLANNED_OPERATIONS,
     MotionEditPlan,
@@ -197,6 +202,9 @@ __all__ = [
     "AIEditSessionCheckpoint",
     "AIEditSessionError",
     "AIEditSessionState",
+    "AIProgressCallback",
+    "AIProgressEvent",
+    "AIProgressStage",
     "AIContext",
     "AnthropicProvider",
     "ContextBuilder",

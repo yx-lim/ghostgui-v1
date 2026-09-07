@@ -24,6 +24,12 @@ from application.ai.motion_plan import (
     parse_motion_repair_plan,
 )
 from application.ai.plan_executor import PlanExecutionResult
+from application.ai.progress import (
+    AIProgressCallback,
+    AIProgressEvent,
+    AIProgressStage,
+    report_progress,
+)
 from application.ai.providers.base import CancellationSignal, LLMProvider
 from application.ai.schemas import (
     MessageRole,
@@ -110,6 +116,7 @@ class MotionRepairPlanner:
         model: str,
         context: SemanticToolContext,
         cancellation_token: CancellationSignal | None = None,
+        progress_callback: AIProgressCallback | None = None,
     ) -> MotionRepairPlanningResult:
         self._last_request_started = False
         if not execution.failed_operations:
@@ -119,6 +126,10 @@ class MotionRepairPlanner:
                 "selected provider/model does not support structured motion repair"
             )
         _raise_if_cancelled(cancellation_token)
+        report_progress(
+            progress_callback,
+            AIProgressEvent(AIProgressStage.PLANNING_STARTED, repair=True),
+        )
 
         updated_context = self.tools.execute(
             "inspect_motion",
@@ -161,6 +172,14 @@ class MotionRepairPlanner:
                 "motion repair response exceeds the local size limit"
             )
         plan = parse_motion_repair_plan(response.text)
+        report_progress(
+            progress_callback,
+            AIProgressEvent(
+                AIProgressStage.STRUCTURED_PLAN_COMPLETED,
+                operation_count=len(plan.operations),
+                repair=True,
+            ),
+        )
         transcript = tuple(messages) + (
             ProviderMessage(MessageRole.ASSISTANT, text=response.text),
         )

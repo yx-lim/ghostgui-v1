@@ -13,6 +13,7 @@ from application.ai.motion_plan import (
 )
 from application.ai.plan_executor import PlanExecutor
 from application.ai.providers import MockStep
+from application.ai.progress import AIProgressStage
 from application.ai.schemas import ProviderResponse
 from application.ai.text_planner import TextMotionWorkflow
 from application.editor_commands import UpdateKeyframe
@@ -76,6 +77,37 @@ class MotionRepairContractTests(unittest.TestCase):
 
 
 class MotionRepairWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_repair_progress_remains_bounded_to_two_requests(self):
+        responses = [
+            _failed_initial_with_success(),
+            ProviderResponse(text=json.dumps(_repair_payload([
+                _ensure_operation(1.0),
+            ]))),
+        ]
+        _committed, _session, context, tools, delegate, provider = _setup(responses)
+        events = []
+
+        await TextMotionWorkflow(provider, tools).run(
+            "Add Keyframes at 0.5 and 1.0 seconds.",
+            model="mock",
+            context=context,
+            progress_callback=events.append,
+        )
+
+        self.assertEqual(provider.counter.counts.total, 2)
+        repair_events = [event for event in events if event.repair]
+        self.assertEqual(
+            [event.stage for event in repair_events],
+            [
+                AIProgressStage.PLANNING_STARTED,
+                AIProgressStage.STRUCTURED_PLAN_COMPLETED,
+                AIProgressStage.LOCAL_OPERATION,
+                AIProgressStage.VALIDATION,
+            ],
+        )
+        self.assertEqual(events[-1].stage, AIProgressStage.DONE)
+        delegate.assert_exhausted()
+
     async def test_repair_context_is_compact_and_success_stays_within_two_requests(self):
         responses = [
             _failed_initial_with_success(),
