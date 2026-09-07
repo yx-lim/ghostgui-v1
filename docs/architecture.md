@@ -202,6 +202,7 @@ but focused components now own the mechanics it previously embedded:
 | `application/ai/text_planner.py` | One-request text planning and workflow orchestration |
 | `application/ai/repair_planner.py` | One optional compact replacement-operation request after local failure |
 | `application/ai/plan_executor.py` | Allowlisted local plan execution, operation rollback, validation, and summaries |
+| `application/ai/motion_services.py` | Semantic motion operations plus structural and kinematic working-copy validation |
 | `application/ai/connection_cache.py` | Session-only successful connection-test identity cache |
 | `application/ai/metadata.py` | Opaque motion identity, conservative ownership, protection, and versioned workspace persistence |
 | `application/ai/provider_comparison.py` | Provider-neutral comparison of validated tool and detached motion outcomes; provider prose is excluded |
@@ -267,6 +268,18 @@ normal workspace JSON survives save, autosave, and reopen without changing the
 v2 project schema. Loading an older workspace with no section performs the same
 conservative seed. The timestamp-backed MVP resolver remains isolated behind
 the service so stable Keyframe IDs can replace it without changing AI tools.
+
+`GhostGUIMotionService.validate_motion` owns local working-copy validation. It
+checks duration and time domains, document/timeline model identity, qpos width
+and finiteness, Joint Angle limits, configured blocking collisions, logical
+TargetFrame names, and same-time TargetFrame/qpos forward-kinematics agreement.
+The FK comparison uses explicit local position and orientation tolerances and
+only compares representations where a logical TargetFrame and structurally
+valid qpos Keyframe share a time. The provider-facing result labels this scope
+`structural_kinematic` and explicitly reports that it did not assess dynamic
+feasibility. Balance, contact stability, torque/actuator limits, continuous-path
+collision analysis, DSMS, and hardware validation remain outside v3 and are
+future v3.2 work.
 
 `RobotViewer3D` similarly retains its public API while delegating the advanced
 IK inspector builders to `gui/viewers/ik_panels.py` and playback math to the

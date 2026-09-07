@@ -357,7 +357,10 @@ class VisualMotionWorkflow:
         if execution.validation_passed is False:
             issues = execution.validation.get("issues", [])
             detail = "; ".join(str(issue) for issue in issues) or "unknown issue"
-            raise PlanExecutionError(f"staged motion validation failed: {detail}")
+            raise PlanExecutionError(
+                "staged motion structural/kinematic validation failed: "
+                f"{detail}"
+            )
         text, lines = local_proposal(execution)
         return VisualMotionRunResult(planning, execution, text, lines)
 

@@ -305,7 +305,10 @@ class GhostGUIAgent:
         if not isinstance(result, dict) or result.get("valid") is not True:
             issues = result.get("issues", []) if isinstance(result, dict) else []
             detail = "; ".join(str(issue) for issue in issues) or "unknown issue"
-            raise AgentValidationError(f"staged motion validation failed: {detail}")
+            raise AgentValidationError(
+                "staged motion structural/kinematic validation failed: "
+                f"{detail}"
+            )
         return result
 
     @staticmethod

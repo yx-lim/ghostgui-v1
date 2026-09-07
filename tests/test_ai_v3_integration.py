@@ -268,7 +268,12 @@ class V3AIIntegrationTests(unittest.IsolatedAsyncioTestCase):
         result = await flow.run("Raise the right hand by 10 cm.")
         preview_qpos = sample_working_preview_qpos(flow.session, 0.0)
 
-        self.assertEqual(result.validation, {"valid": True, "issues": []})
+        self.assertEqual(result.validation, {
+            "valid": True,
+            "issues": [],
+            "scope": "structural_kinematic",
+            "dynamic_feasibility_assessed": False,
+        })
         self.assertEqual(flow.session.state, AIEditSessionState.STAGED)
         self.assertEqual(preview_qpos, [1.1, 0.0])
         self.assertEqual(

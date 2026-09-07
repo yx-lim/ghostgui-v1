@@ -78,6 +78,11 @@ network connection, or provider credential.
 - Joint Angle tools stage qpos plus FK-derived affected logical Keyframes in one
   atomic replacement. Provenance checks cover both representations before
   mutation, preventing a partial qpos-only edit.
+- Local motion validation checks finite values, time and model contracts, qpos
+  shape, Joint Angle limits, configured blocking collisions, logical TargetFrame
+  names, and same-time TargetFrame/qpos forward-kinematics consistency. Its
+  machine-readable result explicitly identifies this scope as structural and
+  kinematic and reports that dynamic feasibility was not assessed.
 - The provider-facing protection tool can only add protection. Removing a
   protection requires a human-owned path outside autonomous tool execution.
 - Accept uses one atomic `ReplaceMotionState` command and rejects a session if
@@ -110,7 +115,8 @@ rest of GhostGUI. Motion-mutating controls remain disabled during an active
 request so the response cannot race a committed edit; Accept also performs a
 revision check as a final stale-state guard.
 
-Do not rely on visual critique or deterministic motion validation as proof of
-real-world stability, collision safety, actuator feasibility, or hardware
-safety. Review and test accepted motion through the appropriate robotics
-workflow before deployment.
+Do not rely on visual critique or structural/kinematic motion validation as
+proof of real-world stability, continuous-path collision safety, actuator
+feasibility, contact stability, or hardware safety. Dynamic validation remains
+future DSMS/v3.2 work. Review and test accepted motion through the appropriate
+robotics workflow before deployment.

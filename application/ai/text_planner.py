@@ -312,7 +312,8 @@ class TextMotionWorkflow:
             issues = final_execution.validation.get("issues", [])
             detail = "; ".join(str(issue) for issue in issues) or "unknown issue"
             raise PlanExecutionError(
-                f"staged motion validation failed: {detail}"
+                "staged motion structural/kinematic validation failed: "
+                f"{detail}"
             )
         if execution.failed_operations:
             text, lines = local_repair_proposal(

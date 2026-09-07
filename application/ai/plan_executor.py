@@ -163,9 +163,9 @@ def local_proposal(result: PlanExecutionResult) -> tuple[str, tuple[str, ...]]:
         count = len(failed)
         lines += (f"{count} planned operation{'s' if count != 1 else ''} failed locally",)
     if result.validation_passed is True:
-        lines += ("Basic validation passed",)
+        lines += ("Structural/kinematic validation passed",)
     elif result.validation_passed is False:
-        lines += ("Basic validation failed",)
+        lines += ("Structural/kinematic validation failed",)
 
     changed_count = len(changed)
     if changed_count:

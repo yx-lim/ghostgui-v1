@@ -6,7 +6,13 @@ from dataclasses import dataclass
 import math
 from typing import Any, Callable, Mapping, Protocol
 
+from core.math3d import quaternion_angle, rpy_to_quaternion
+from core.robotics import QposContract
 from core.trajectory import TargetFrame, quat_to_rpy
+
+
+TARGET_FK_POSITION_TOLERANCE_M = 0.001
+TARGET_FK_ORIENTATION_TOLERANCE_RAD = 0.01
 
 
 class SemanticMotionError(ValueError):
@@ -32,6 +38,8 @@ class JointAngleEditResult:
 
 @dataclass(frozen=True)
 class MotionValidationReport:
+    """Result of local structural and kinematic checks, not dynamics."""
+
     valid: bool
     issues: tuple[str, ...] = ()
 
@@ -314,34 +322,146 @@ class GhostGUIMotionService:
         if self.validator is not None:
             return self.validator(document)
         issues = []
+        duration = _finite_float(document.timeline_duration)
+        if duration is None or duration <= 0.0:
+            issues.append("Motion duration must be positive and finite")
+            duration = None
+
+        current_time = _finite_float(document.current_time)
+        if current_time is None or current_time < 0.0:
+            issues.append("Current motion time must be finite and non-negative")
+        elif duration is not None and current_time > duration + 1e-9:
+            issues.append("Current motion time exceeds motion duration")
+
+        adapter_model_key = str(
+            getattr(getattr(self.adapter, "info", None), "key", "")
+        )
+        model_matches = (
+            not adapter_model_key or document.model_key == adapter_model_key
+        )
+        if not model_matches:
+            issues.append(
+                f"Motion model {document.model_key} does not match active model "
+                f"{adapter_model_key}"
+            )
+
+        valid_frames = []
         for frame in document.trajectory.frames:
             if frame.frame_name not in self.logical_frames:
                 issues.append(f"Unknown logical frame {frame.frame_name}")
-            if frame.time > document.timeline_duration + 1e-9:
+                continue
+            frame_values = (
+                frame.time,
+                frame.x,
+                frame.y,
+                frame.z,
+                frame.roll,
+                frame.pitch,
+                frame.yaw,
+            )
+            if any(_finite_float(value) is None for value in frame_values):
                 issues.append(
-                    f"Keyframe at {frame.time:.3f} s exceeds motion duration"
+                    f"Logical Keyframe {frame.frame_name} contains a "
+                    "non-finite value"
                 )
+                continue
+            frame_time = float(frame.time)
+            if frame_time < 0.0:
+                issues.append(
+                    f"Logical Keyframe {frame.frame_name} has a negative time"
+                )
+                continue
+            if duration is not None and frame_time > duration + 1e-9:
+                issues.append(
+                    f"Logical Keyframe at {frame_time:.3f} s exceeds motion "
+                    "duration"
+                )
+                continue
+            valid_frames.append(frame)
+
+        for frame_name, track in document.trajectory.tracks.items():
+            times = [
+                float(frame.time)
+                for frame in track
+                if _finite_float(frame.time) is not None
+            ]
+            if any(
+                earlier >= later
+                for earlier, later in zip(times, times[1:])
+            ):
+                issues.append(
+                    f"Logical Keyframe times for {frame_name} must be strictly "
+                    "increasing"
+                )
+
         timeline = document.qpos_timeline
         if timeline is not None:
+            timeline_model_key = str(getattr(
+                getattr(getattr(timeline, "robot_model", None), "info", None),
+                "key",
+                "",
+            ))
+            if (
+                adapter_model_key
+                and timeline_model_key
+                and timeline_model_key != adapter_model_key
+            ):
+                issues.append(
+                    f"qpos timeline model {timeline_model_key} does not match "
+                    f"active model {adapter_model_key}"
+                )
+            try:
+                raw_times = tuple(timeline.times())
+            except (TypeError, ValueError):
+                issues.append("qpos Keyframe times are unavailable or invalid")
+                raw_times = ()
+            normalized_times = []
+            previous_time = None
+            for raw_time in raw_times:
+                time = _finite_float(raw_time)
+                if time is None:
+                    issues.append("qpos Keyframe has a non-finite time")
+                    continue
+                if time < 0.0:
+                    issues.append("qpos Keyframe has a negative time")
+                    continue
+                if previous_time is not None and time <= previous_time:
+                    issues.append(
+                        "qpos Keyframe times must be strictly increasing"
+                    )
+                previous_time = time
+                if duration is not None and time > duration + 1e-9:
+                    issues.append(
+                        f"qpos Keyframe at {time:.3f} s exceeds motion duration"
+                    )
+                    continue
+                normalized_times.append((time, raw_time))
+
             collision_checker = getattr(
                 self.collision_solver,
                 "collision_checker",
                 None,
             )
-            collision_state = (
-                self.adapter.create_state()
-                if collision_checker is not None else None
-            )
-            for time in timeline.times():
-                qpos = timeline.get_state(time)
+            qpos_by_time = {}
+            contract = QposContract(int(self.adapter.mj_model.nq))
+            for time, raw_time in normalized_times:
                 try:
-                    finite = all(math.isfinite(float(value)) for value in qpos)
-                except (TypeError, ValueError):
-                    finite = False
-                if not finite:
-                    issues.append(f"qpos Keyframe at {float(time):.3f} s is non-finite")
+                    qpos = contract.validate(
+                        timeline.get_state(raw_time),
+                        context=f"qpos Keyframe at {time:.3f} s",
+                    )
+                except (TypeError, ValueError) as error:
+                    issues.append(str(error))
                     continue
-                if collision_state is not None:
+
+                limit_issues = self._joint_limit_issues(qpos, time)
+                issues.extend(limit_issues)
+                if limit_issues:
+                    continue
+                qpos_by_time[time] = qpos
+
+                if collision_checker is not None:
+                    collision_state = self.adapter.create_state()
                     collision_state.set_qpos(qpos)
                     blocking = tuple(
                         collision
@@ -350,10 +470,73 @@ class GhostGUIMotionService:
                     )
                     if blocking:
                         issues.append(
-                            f"qpos Keyframe at {float(time):.3f} s has "
+                            f"qpos Keyframe at {time:.3f} s has "
                             f"{len(blocking)} blocking collision(s)"
                         )
+            if model_matches:
+                issues.extend(
+                    self._target_fk_issues(valid_frames, qpos_by_time)
+                )
         return MotionValidationReport(not issues, tuple(issues))
+
+    def _joint_limit_issues(self, qpos, time_seconds):
+        issues = []
+        for name in self.joint_names:
+            limits = self.adapter.get_joint_limits(name)
+            if limits is None:
+                continue
+            joint = self.adapter.joints.get(self.adapter.plain_name(name))
+            if joint is None:
+                continue
+            value = float(qpos[joint.qpos_address])
+            if value < limits[0] - 1e-9 or value > limits[1] + 1e-9:
+                issues.append(
+                    f"Joint Angle {name} at {time_seconds:.3f} s is outside "
+                    "its model limits"
+                )
+        return issues
+
+    def _target_fk_issues(self, frames, qpos_by_time):
+        issues = []
+        states = {}
+        for frame in frames:
+            qpos_time = next(
+                (
+                    time
+                    for time in qpos_by_time
+                    if abs(time - float(frame.time)) <= 1e-6
+                ),
+                None,
+            )
+            if qpos_time is None:
+                continue
+            state = states.get(qpos_time)
+            if state is None:
+                state = self.adapter.create_state()
+                state.set_qpos(qpos_by_time[qpos_time])
+                states[qpos_time] = state
+            kind, object_name = self.adapter.logical_frame_bindings[
+                frame.frame_name
+            ]
+            position, quaternion = state.get_body_pose(object_name, kind)
+            position_error = math.sqrt(sum(
+                (float(position[index]) - target) ** 2
+                for index, target in enumerate((frame.x, frame.y, frame.z))
+            ))
+            orientation_error = quaternion_angle(
+                quaternion,
+                rpy_to_quaternion(frame.roll, frame.pitch, frame.yaw),
+            )
+            if (
+                position_error > TARGET_FK_POSITION_TOLERANCE_M
+                or orientation_error > TARGET_FK_ORIENTATION_TOLERANCE_RAD
+            ):
+                issues.append(
+                    f"Logical Keyframe {frame.frame_name} at "
+                    f"{float(frame.time):.3f} s does not match qpos forward "
+                    "kinematics"
+                )
+        return issues
 
     @staticmethod
     def _validate_time(document, time_seconds):
@@ -369,6 +552,14 @@ class GhostGUIMotionService:
         if timeline is None:
             raise SemanticMotionError("motion has no editable qpos timeline")
         return timeline.sample_state(time_seconds)
+
+
+def _finite_float(value):
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
 
 
 def _vector(values, label):

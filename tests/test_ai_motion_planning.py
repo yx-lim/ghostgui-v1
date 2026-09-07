@@ -21,7 +21,11 @@ from application.ai.motion_plan import (
     parse_motion_edit_plan,
 )
 from application.ai.motion_services import MotionValidationReport
-from application.ai.plan_executor import PlanExecutionError, PlanExecutor
+from application.ai.plan_executor import (
+    PlanExecutionError,
+    PlanExecutor,
+    local_proposal,
+)
 from application.ai.providers import MockProvider, RequestCountingProvider
 from application.ai.schemas import ProviderResponse
 from application.ai.semantic_tools import (
@@ -212,6 +216,11 @@ class PlanExecutorTests(unittest.TestCase):
         self.assertIn(0.5, session.working_document.qpos_timeline.times())
         self.assertEqual(len(session.edits), 1)
         self.assertTrue(result.validation_passed)
+        _summary, proposal_lines = local_proposal(result)
+        self.assertIn(
+            "Structural/kinematic validation passed",
+            proposal_lines,
+        )
 
     def test_unknown_nonediting_and_invalid_operations_never_execute(self):
         _committed, session, context, tools, _delegate, _provider = _setup()

@@ -230,6 +230,15 @@ reported affected logical Keyframe with MuJoCo forward kinematics from the
 staged qpos. They also require one working-copy revision, unchanged committed
 motion, and no mutation when an affected logical Keyframe is user-owned.
 
+Phase 11 expands the local structural/kinematic motion validator and adds no
+provider request. Tests cover positive finite duration, valid current/logical/
+qpos Keyframe times, document and timeline model compatibility, qpos width and
+finite values, Joint Angle limits, blocking collisions, logical TargetFrame
+names, and same-time TargetFrame/qpos forward-kinematics consistency. Tool
+results also assert `scope: structural_kinematic` and
+`dynamic_feasibility_assessed: false`; no test or UI result describes the
+candidate as dynamically feasible.
+
 Gemini transient-server retries remain available only through an explicit
 `max_attempts` value; HTTP 429 never retries. Record/replay tests use synthetic
 content and a temporary JSON store. They verify that files contain a
@@ -338,6 +347,11 @@ structure. It skips outside the explicitly configured visual environment.
   the Orange preview, qpos Keyframe, and FK-derived affected logical Keyframes
   describe the same pose. Confirm a user-owned or protected affected Keyframe
   rejects the whole operation without a qpos-only change.
+- Validate a staged candidate and confirm the proposal calls the result
+  structural/kinematic, not dynamically feasible. Deliberately test a wrong
+  qpos width, non-finite value, out-of-limit Joint Angle, blocking collision,
+  unknown logical TargetFrame, invalid time, model mismatch, and same-time FK
+  mismatch; confirm each is rejected locally.
 - Scrub the viewer timeline and move the camera while the provider request is
   running; confirm document-mutating controls remain unavailable.
 - Use **Refine** twice and confirm each turn builds on the same staged result.

@@ -175,7 +175,8 @@ def build_semantic_tool_registry(
     ))
     registry.register(_spec(
         "validate_motion",
-        "Validate the staged working motion without changing it.",
+        "Run structural and kinematic checks on the staged working motion; "
+        "dynamic feasibility is not assessed.",
         _closed_object({}),
         ToolCategory.TEST,
         False,
@@ -450,7 +451,12 @@ def _retime_segment(context, arguments):
 
 def _validate(context, motion):
     report = motion.validate_motion(context.session.working_document)
-    return {"valid": report.valid, "issues": list(report.issues)}
+    return {
+        "valid": report.valid,
+        "issues": list(report.issues),
+        "scope": "structural_kinematic",
+        "dynamic_feasibility_assessed": False,
+    }
 
 
 def _protected_logical_frames(document, metadata):

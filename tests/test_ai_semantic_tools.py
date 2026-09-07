@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 import unittest
 
 import numpy as np
@@ -379,7 +380,12 @@ class SemanticToolTests(unittest.TestCase):
         serialized = json.dumps(inspected)
 
         self.assertEqual(inspected["motion"]["name"], "test motion")
-        self.assertEqual(validated, {"valid": True, "issues": []})
+        self.assertEqual(validated, {
+            "valid": True,
+            "issues": [],
+            "scope": "structural_kinematic",
+            "dynamic_feasibility_assessed": False,
+        })
         self.assertNotIn("qpos_values", serialized)
         self.assertEqual(session.working_document.revision, revision)
 
@@ -542,6 +548,84 @@ class GhostGUIMotionServiceTests(unittest.TestCase):
         )
         self.assertEqual(self.session.working_document.revision, 0)
         self.assertFalse(self.session.has_changes)
+
+    def test_structural_kinematic_validation_accepts_consistent_motion(self):
+        report = self.motion.validate_motion(self.session.working_document)
+
+        self.assertTrue(report.valid, report.issues)
+        self.assertEqual(report.issues, ())
+
+    def test_validation_checks_model_qpos_limits_and_all_time_contracts(self):
+        document = self.session.working_document
+        width = self.adapter.mj_model.nq
+        timeline = document.qpos_timeline
+        timeline.states[0.0] = np.zeros(width - 1)
+        non_finite = self.adapter.home_qpos.copy()
+        non_finite[0] = np.nan
+        timeline.states[0.5] = non_finite
+        outside_limit = self.adapter.home_qpos.copy()
+        joint = self.adapter.joints["right_elbow_joint"]
+        outside_limit[joint.qpos_address] = joint.limits[1] + 0.5
+        timeline.states[1.0] = outside_limit
+        timeline.states[3.0] = self.adapter.home_qpos.copy()
+        timeline.robot_model = SimpleNamespace(
+            info=SimpleNamespace(key="go2")
+        )
+        document.model_key = "go2"
+        document.current_time = 3.0
+        document.trajectory.add_frame(TargetFrame(
+            time=1.0,
+            frame_name="unknown_frame",
+        ))
+        negative_time = document.trajectory.frames[0]
+        negative_time.time = -0.1
+
+        report = self.motion.validate_motion(document)
+        message = "\n".join(report.issues)
+
+        self.assertFalse(report.valid)
+        self.assertIn("does not match active model", message)
+        self.assertIn("qpos timeline model go2 does not match", message)
+        self.assertIn(f"must contain {width} values", message)
+        self.assertIn("non-finite value", message)
+        self.assertIn("outside its model limits", message)
+        self.assertIn("qpos Keyframe at 3.000 s exceeds", message)
+        self.assertIn("Current motion time exceeds", message)
+        self.assertIn("Unknown logical frame unknown_frame", message)
+        self.assertIn("has a negative time", message)
+
+    def test_validation_checks_duration_fk_and_blocking_collisions(self):
+        document = self.session.working_document
+        right_hand = next(
+            frame
+            for frame in document.trajectory.frames
+            if frame.frame_name == "right_hand"
+        )
+        right_hand.x += 0.1
+        blocking_collision = SimpleNamespace(blocking=True)
+        solver = SimpleNamespace(
+            collision_checker=SimpleNamespace(
+                get_collisions=lambda _state: (blocking_collision,)
+            )
+        )
+        motion = GhostGUIMotionService(
+            self.adapter,
+            collision_solver=solver,
+        )
+
+        report = motion.validate_motion(document)
+        message = "\n".join(report.issues)
+
+        self.assertFalse(report.valid)
+        self.assertIn("does not match qpos forward kinematics", message)
+        self.assertIn("1 blocking collision", message)
+
+        document.timeline_duration = float("nan")
+        duration_report = motion.validate_motion(document)
+        self.assertIn(
+            "Motion duration must be positive and finite",
+            duration_report.issues,
+        )
 
 
 if __name__ == "__main__":

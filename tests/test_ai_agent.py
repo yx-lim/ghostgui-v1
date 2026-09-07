@@ -95,7 +95,12 @@ class GhostGUIAgentTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.text, "The pelvis was lowered.")
         self.assertEqual(result.provider_turns, 2)
-        self.assertEqual(result.validation, {"valid": True, "issues": []})
+        self.assertEqual(result.validation, {
+            "valid": True,
+            "issues": [],
+            "scope": "structural_kinematic",
+            "dynamic_feasibility_assessed": False,
+        })
         self.assertTrue(result.tool_executions[0].succeeded)
         self.assertEqual(session.state, AIEditSessionState.STAGED)
         self.assertEqual(session.working_document.trajectory.frames[0].z, 0.7)

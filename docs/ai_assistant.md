@@ -42,11 +42,19 @@ from committed motion.
 
 Each normal **Apply** or **Refine** action asks the provider once for a complete,
 structured semantic plan. GhostGUI then validates and executes every operation
-locally through its strict tool registry, validates the resulting working copy,
-and builds the proposal summary from recorded local results. Plans containing
-one operation or many operations therefore use the same single provider
-request; GhostGUI does not send a second request merely to obtain a “done”
-message.
+locally through its strict tool registry, runs structural and kinematic checks
+on the resulting working copy, and builds the proposal summary from recorded
+local results. Plans containing one operation or many operations therefore use
+the same single provider request; GhostGUI does not send a second request merely
+to obtain a “done” message.
+
+The local motion check covers positive finite duration, current and Keyframe
+times, active-model and qpos compatibility, finite qpos values, Joint Angle
+limits, blocking collisions reported by the configured collision checker,
+logical TargetFrame names, and consistency between same-time TargetFrames and
+qpos forward kinematics. It is an authoring-time structural and kinematic check.
+It does not assess dynamics, balance, actuator or torque limits, contact
+stability, or hardware feasibility.
 
 When an explicit Joint Angle or joint-group operation changes a qpos Keyframe,
 GhostGUI runs forward kinematics locally and updates every existing logical
