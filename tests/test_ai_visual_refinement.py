@@ -32,7 +32,11 @@ from application.ai.visual_refinement import (
     parse_visual_verification,
     visual_motion_plan_response_schema,
 )
-from tests.test_ai_semantic_tools import FakeMotionService, _document
+from tests.test_ai_semantic_tools import (
+    FakeMotionService,
+    _document,
+    _mark_existing_motion_ai_owned,
+)
 
 
 class _Token:
@@ -109,6 +113,7 @@ def _semantic_setup():
     store = InMemoryMotionMetadataStore()
     metadata = MotionMetadataService(store, TimestampMotionIdentityResolver())
     session = AIEditSession(committed, metadata_store=store)
+    _mark_existing_motion_ai_owned(session, metadata.resolver)
     context = SemanticToolContext(session, metadata, motion_name="landing")
     tools = build_semantic_tool_registry(FakeMotionService())
     tools.execute("ensure_keyframe", {"time_seconds": 1.0}, context=context)

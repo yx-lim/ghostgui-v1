@@ -92,6 +92,16 @@ python3 -m unittest tests.test_ai_connection_probe -v
 python3 -m unittest tests.test_ai_provider_replay -v
 ```
 
+Conservative ownership, protection, metadata migration, and project round-trip
+behavior are covered without a provider account:
+
+```bash
+python3 -m unittest tests.test_ai_metadata -v
+python3 -m unittest \
+  tests.test_robot_viewer_timeline.RobotViewerTimelineTests.test_project_workspace_round_trips_ai_motion_metadata \
+  -v
+```
+
 Gemini and Claude live contract smoke tests are opt-in and perform four provider
 requests: text, structured output, a non-executed tool request, and a tiny
 generated-image vision check. They use GhostGUI's normal keychain/environment

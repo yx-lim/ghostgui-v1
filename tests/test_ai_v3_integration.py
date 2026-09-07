@@ -215,6 +215,20 @@ class _Workflow:
             self.committed,
             metadata_store=self.store,
         )
+        working_metadata = MotionMetadataService(
+            self.session.metadata,
+            self.resolver,
+        )
+        for frame in self.session.working_document.trajectory.frames:
+            self.session.metadata.record(
+                working_metadata.reference_for_keyframe(frame),
+                EditAuthor.AI,
+            )
+        for time in self.session.working_document.qpos_timeline.times():
+            self.session.metadata.record(
+                working_metadata.reference_for_qpos_keyframe(time),
+                EditAuthor.AI,
+            )
         self.context = SemanticToolContext(
             self.session,
             self.metadata,

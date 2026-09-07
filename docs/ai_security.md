@@ -68,6 +68,9 @@ network connection, or provider credential.
 - Gemini makes one outbound attempt by default. Explicit transient-server retry
   settings never make quota-exhaustion or HTTP 429 responses retryable.
 - User-authored and protected Keyframes take priority over later AI edits.
+  Missing provenance is treated as user-owned, never as implicit AI ownership.
+- The provider-facing protection tool can only add protection. Removing a
+  protection requires a human-owned path outside autonomous tool execution.
 - Accept uses one atomic `ReplaceMotionState` command and rejects a session if
   the committed document changed after the working copy was created.
 
@@ -83,6 +86,11 @@ sanitized normalized response; request prompts, context text, rendered image
 bytes, and credentials are not written. Use synthetic inputs and keep recording
 files outside the repository. `ReplayProvider` fails closed when the provider,
 model, normalized prompt/context, image digest, or semantic schema differs.
+
+Motion provenance and protection use opaque entity identifiers behind the
+metadata service. The versioned project-workspace payload persists author,
+protection, and ordering metadata without exposing timestamp identity to the AI
+layer. Legacy workspaces with no payload seed all existing motion as user-owned.
 
 ## Failure And Cancellation
 

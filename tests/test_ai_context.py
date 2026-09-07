@@ -132,12 +132,26 @@ class ContextBuilderTests(unittest.TestCase):
 
         self.assertEqual(
             constraints["keyframes"],
-            [{
-                "logical_frame": "torso",
-                "time_seconds": 1.0,
-                "author": "user",
-                "protected": True,
-            }],
+            [
+                {
+                    "logical_frame": "pelvis",
+                    "time_seconds": 0.0,
+                    "author": "user",
+                    "protected": False,
+                },
+                {
+                    "logical_frame": "torso",
+                    "time_seconds": 1.0,
+                    "author": "user",
+                    "protected": True,
+                },
+                {
+                    "logical_frame": "right_hand",
+                    "time_seconds": 2.0,
+                    "author": "user",
+                    "protected": False,
+                },
+            ],
         )
 
     def test_time_summary_is_bounded_and_keeps_endpoints(self):

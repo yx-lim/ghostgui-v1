@@ -33,7 +33,11 @@ from application.ai.tool_registry import ToolCategory, ToolSpec
 from application.editor_commands import UpdateKeyframe
 from core.trajectory import TargetFrame
 from gui.ai_assistant_controller import AIAssistantController
-from tests.test_ai_semantic_tools import FakeMotionService, _document
+from tests.test_ai_semantic_tools import (
+    FakeMotionService,
+    _document,
+    _mark_existing_motion_ai_owned,
+)
 
 
 def _setup(responses=(), *, motion=None):
@@ -41,6 +45,7 @@ def _setup(responses=(), *, motion=None):
     store = InMemoryMotionMetadataStore()
     metadata = MotionMetadataService(store, TimestampMotionIdentityResolver())
     session = AIEditSession(committed, metadata_store=store)
+    _mark_existing_motion_ai_owned(session, metadata.resolver)
     context = SemanticToolContext(session, metadata, motion_name="planning test")
     tools = build_semantic_tool_registry(motion or FakeMotionService())
     delegate = MockProvider(responses)

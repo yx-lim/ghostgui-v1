@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from hashlib import sha256
-from typing import Mapping, Protocol
+from typing import Any, Mapping, Protocol
 
 from application.ai.schemas import EditAuthor, MotionEntityRef
+from application.project_document import ProjectDocument
 from core.trajectory import TargetFrame
+
+
+MOTION_METADATA_SCHEMA_VERSION = 1
+MAX_PERSISTED_MOTION_METADATA_ENTITIES = 100_000
 
 
 @dataclass(frozen=True)
@@ -133,7 +138,7 @@ class InMemoryMotionMetadataStore:
     ) -> bool:
         metadata = self.get(reference)
         if metadata is None:
-            return True
+            return False
         if metadata.protected:
             return False
         return metadata.author is not EditAuthor.USER or allow_user_override
@@ -159,6 +164,123 @@ class MotionMetadataService:
     def reference_for_qpos_keyframe(self, time_seconds: float) -> MotionEntityRef:
         return self.resolver.reference_for_qpos_keyframe(time_seconds)
 
+    def seed_document_as_user_owned(self, document: ProjectDocument) -> int:
+        """Conservatively classify every untracked committed motion entity."""
+
+        seeded = 0
+        for reference in self._document_references(document):
+            if self.store.get(reference) is None:
+                self.store.record(reference, EditAuthor.USER)
+                seeded += 1
+        return seeded
+
+    def claim_document_as_user_owned(self, document: ProjectDocument) -> int:
+        """Record a committed human mutation and drop identities no longer present."""
+
+        references = self._document_references(document)
+        previous = self.store.snapshot()
+        values: dict[MotionEntityRef, MotionEditMetadata] = {}
+        changed = 0
+        sequence = max(
+            (metadata.sequence for metadata in previous.values()),
+            default=0,
+        )
+        for reference in references:
+            metadata = previous.get(reference)
+            if metadata is None or metadata.author is not EditAuthor.USER:
+                sequence += 1
+                changed += 1
+                metadata = MotionEditMetadata(
+                    author=EditAuthor.USER,
+                    protected=False if metadata is None else metadata.protected,
+                    sequence=sequence,
+                )
+            values[reference] = metadata
+        self.store.replace(values)
+        return changed
+
+    def to_project_dict(self, document: ProjectDocument) -> dict[str, Any]:
+        """Serialize opaque identities without exposing their implementation."""
+
+        self.seed_document_as_user_owned(document)
+        return {
+            "schema_version": MOTION_METADATA_SCHEMA_VERSION,
+            "entities": [
+                {
+                    "id": reference.identifier,
+                    "author": metadata.author.value,
+                    "protected": metadata.protected,
+                    "sequence": metadata.sequence,
+                }
+                for reference, metadata in sorted(
+                    self.store.snapshot().items(),
+                    key=lambda item: item[0].identifier,
+                )
+            ],
+        }
+
+    def restore_project_dict(
+        self,
+        payload: Mapping[str, Any] | None,
+        document: ProjectDocument,
+    ) -> None:
+        """Restore persisted metadata, then seed legacy or newly unknown content."""
+
+        if payload is None:
+            self.store.replace({})
+            self.seed_document_as_user_owned(document)
+            return
+        if not isinstance(payload, Mapping) or set(payload) != {
+            "schema_version",
+            "entities",
+        }:
+            raise ValueError("motion metadata must be a versioned object")
+        if payload["schema_version"] != MOTION_METADATA_SCHEMA_VERSION:
+            raise ValueError("unsupported motion metadata schema version")
+        entities = payload["entities"]
+        if not isinstance(entities, list):
+            raise ValueError("motion metadata entities must be a list")
+        if len(entities) > MAX_PERSISTED_MOTION_METADATA_ENTITIES:
+            raise ValueError("motion metadata contains too many entities")
+
+        values: dict[MotionEntityRef, MotionEditMetadata] = {}
+        for entity in entities:
+            if not isinstance(entity, Mapping) or set(entity) != {
+                "id",
+                "author",
+                "protected",
+                "sequence",
+            }:
+                raise ValueError("motion metadata entity is invalid")
+            identifier = entity["id"]
+            protected = entity["protected"]
+            sequence = entity["sequence"]
+            if (
+                not isinstance(identifier, str)
+                or not identifier.strip()
+                or len(identifier) > 512
+            ):
+                raise ValueError("motion metadata entity id is invalid")
+            if not isinstance(protected, bool):
+                raise ValueError("motion metadata protection must be boolean")
+            if (
+                not isinstance(sequence, int)
+                or isinstance(sequence, bool)
+                or sequence < 0
+            ):
+                raise ValueError("motion metadata sequence must be non-negative")
+            try:
+                author = EditAuthor(entity["author"])
+            except (TypeError, ValueError) as error:
+                raise ValueError("motion metadata author is invalid") from error
+            reference = MotionEntityRef(identifier)
+            if reference in values:
+                raise ValueError("motion metadata contains a duplicate entity")
+            values[reference] = MotionEditMetadata(author, protected, sequence)
+
+        self.store.replace(values)
+        self.seed_document_as_user_owned(document)
+
     def remap_keyframe(self, before: TargetFrame, after: TargetFrame) -> None:
         self._remap(
             self.reference_for_keyframe(before),
@@ -182,3 +304,19 @@ class MotionMetadataService:
         if existing is None or metadata.sequence >= existing.sequence:
             values[after] = metadata
         self.store.replace(values)
+
+    def _document_references(
+        self,
+        document: ProjectDocument,
+    ) -> tuple[MotionEntityRef, ...]:
+        references = [
+            self.reference_for_keyframe(frame)
+            for frame in document.trajectory.frames
+        ]
+        timeline = document.qpos_timeline
+        if timeline is not None:
+            references.extend(
+                self.reference_for_qpos_keyframe(time)
+                for time in timeline.times()
+            )
+        return tuple(dict.fromkeys(references))

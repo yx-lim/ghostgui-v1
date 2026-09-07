@@ -53,6 +53,7 @@ from application.ai.schemas import (
     ProviderMessage,
     ProviderRequest,
 )
+from application.editor_events import DocumentChanged
 from gui.ai_frame_capture import RobotViewerFrameRenderer
 from gui.ai_settings_dialog import AISettingsDialog
 
@@ -74,8 +75,11 @@ class AIAssistantController:
         self.settings = settings
         self.background_jobs = background_jobs
         self.credential_store = SystemKeyringCredentialStore()
-        self.metadata_store = InMemoryMotionMetadataStore()
         self.identity_resolver = TimestampMotionIdentityResolver()
+        self.metadata_store = InMemoryMotionMetadataStore()
+        self._metadata_stores = {
+            host.document.document_id: self.metadata_store,
+        }
         self.session = None
         self.active_handle = None
         self._session_api_keys = {}
@@ -102,6 +106,11 @@ class AIAssistantController:
         self.panel.reject_requested.connect(self.reject)
         self.panel.cancel_requested.connect(self.cancel_request)
         self.panel.settings_requested.connect(self.open_settings)
+        self._document_changed_subscription = host.editor_events.subscribe(
+            DocumentChanged,
+            self._committed_document_changed,
+        )
+        self._metadata_service().seed_document_as_user_owned(host.document)
 
     @property
     def session_staged(self) -> bool:
@@ -636,6 +645,47 @@ class AIAssistantController:
         self._clear_visual_refinement()
         self.host.set_ai_motion_controls_enabled(True)
 
+    def activate_document(self, document) -> None:
+        """Select the metadata store paired with a committed document."""
+
+        self.metadata_store = self._metadata_stores.setdefault(
+            document.document_id,
+            InMemoryMotionMetadataStore(),
+        )
+        self._metadata_service().seed_document_as_user_owned(document)
+        self.session = None
+
+    def reset_motion_metadata(self, document) -> None:
+        """Start conservative metadata for a new empty project workspace."""
+
+        self.metadata_store = InMemoryMotionMetadataStore()
+        self._metadata_stores[document.document_id] = self.metadata_store
+        self._metadata_service().seed_document_as_user_owned(document)
+        self.session = None
+
+    def restore_motion_metadata(self, payload, document) -> None:
+        """Restore a saved workspace or conservatively seed a legacy one."""
+
+        store = InMemoryMotionMetadataStore()
+        service = MotionMetadataService(store, self.identity_resolver)
+        service.restore_project_dict(payload, document)
+        self.metadata_store = store
+        self._metadata_stores[document.document_id] = store
+        self.session = None
+
+    def project_motion_metadata(self, document):
+        """Return the versioned metadata section stored in project workspace."""
+
+        return self._metadata_service().to_project_dict(document)
+
+    def _metadata_service(self):
+        return MotionMetadataService(self.metadata_store, self.identity_resolver)
+
+    def _committed_document_changed(self, event) -> None:
+        if event.document_id != self.host.document.document_id:
+            return
+        self._metadata_service().claim_document_as_user_owned(self.host.document)
+
     def reject(self) -> None:
         if self.session is None or self.active_handle is not None:
             return
@@ -809,6 +859,9 @@ class AIAssistantController:
 
     def shutdown(self) -> None:
         self.cancel_request()
+        subscription = getattr(self, "_document_changed_subscription", None)
+        if subscription is not None:
+            subscription.unsubscribe()
 
     @staticmethod
     def _proposal_lines(result: TextMotionRunResult) -> tuple[str, ...]:

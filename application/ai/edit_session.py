@@ -133,15 +133,25 @@ class AIEditSession:
         command: EditorCommand,
         *,
         affected_entities: tuple[MotionEntityRef, ...] = (),
+        created_entities: tuple[MotionEntityRef, ...] = (),
         allow_user_override: bool = False,
     ) -> CommandResult:
         self._require_state(AIEditSessionState.READY, AIEditSessionState.STAGED)
+        created = frozenset(created_entities)
+        if not created.issubset(affected_entities):
+            raise ValueError("created AI entities must also be affected entities")
         blocked = tuple(
             reference
             for reference in affected_entities
-            if not self.metadata.permits_ai_edit(
-                reference,
-                allow_user_override=allow_user_override,
+            if (
+                self.metadata.get(reference) is not None
+                and not self.metadata.permits_ai_edit(
+                    reference,
+                    allow_user_override=allow_user_override,
+                )
+            ) or (
+                self.metadata.get(reference) is None
+                and reference not in created
             )
         )
         if blocked:
@@ -167,6 +177,8 @@ class AIEditSession:
         author: EditAuthor = EditAuthor.USER,
     ) -> bool:
         self._require_state(AIEditSessionState.READY, AIEditSessionState.STAGED)
+        if author is EditAuthor.AI and not protected:
+            raise AIEditSessionError("AI edits cannot remove Keyframe protection")
         if not self.metadata.set_protected(reference, protected):
             return False
         self._edits.append(SessionEditRecord(

@@ -1667,6 +1667,7 @@ class RobotGuiMainWindow(QMainWindow):
             )
             self.refresh_display()
             self._refresh_history_baseline()
+            self.ai_assistant_controller.reset_motion_metadata(self.document)
         finally:
             self._suppress_project_dirty = was_suppressing_dirty
 
@@ -1787,6 +1788,9 @@ class RobotGuiMainWindow(QMainWindow):
         selected_kind, selected_name = viewer._selected_target()
         return {
             "schema_version": 1,
+            "ai_motion_metadata": (
+                self.ai_assistant_controller.project_motion_metadata(self.document)
+            ),
             "active_index": int(self.active_index),
             "active_view_index": int(self.viewer_tabs.currentIndex()),
             "active_view": self.viewer_tabs.tabText(
@@ -1945,6 +1949,15 @@ class RobotGuiMainWindow(QMainWindow):
                     return False
             else:
                 viewer.clear_editable_timeline(keep_current_pose=True, reset_time=0.0)
+
+        try:
+            self.ai_assistant_controller.restore_motion_metadata(
+                workspace.get("ai_motion_metadata"),
+                self.document,
+            )
+        except (TypeError, ValueError) as exc:
+            QMessageBox.warning(self, "Open project failed", str(exc))
+            return False
 
         timeline_duration = workspace.get("timeline_duration")
         if timeline_duration is not None:
@@ -3005,6 +3018,7 @@ class RobotGuiMainWindow(QMainWindow):
         ).items():
             setattr(self, name, value)
         self.editor_controller.activate_document(self.document)
+        self.ai_assistant_controller.activate_document(self.document)
         self.viewer_3d_stack.setCurrentWidget(self.viewer_3d)
         self.viewer_3d_mujoco.set_model_adapter(session.adapter)
         self.viewer_3d_mujoco.clear_trajectory()

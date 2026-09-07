@@ -105,7 +105,8 @@ The optional Motion Assistant has a credential-free regression suite covering
 the provider contract, detached working copy, strict semantic tools, human-edit
 priority, atomic Accept/Reject, Gemini and Anthropic conversion, timestamped
 vision input, bounded refinement, provider comparison, quota-aware connection
-caching, sanitized development replay, payload limits, and failure isolation.
+caching, sanitized development replay, conservative provenance defaults,
+project metadata round-trips, payload limits, and failure isolation.
 Normal CI performs no live Gemini or Claude requests.
 
 Security and data-disclosure assumptions are recorded in

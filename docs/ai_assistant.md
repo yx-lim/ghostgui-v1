@@ -87,6 +87,12 @@ Visual refinement does not automatically repeat. Any text entered before
 choosing **Visual refine** is treated as additional user direction, and
 user-authored or protected Keyframes retain priority.
 
+Existing project and imported motion is seeded as user-authored when no saved
+provenance is available. Unknown provenance also fails closed as user-owned, so
+missing metadata never grants the provider permission to replace a Keyframe.
+The AI tool can add Keyframe protection but cannot remove it; unprotecting is a
+human action outside autonomous provider execution.
+
 Choose **Verify visually** when a staged candidate should be compared with the
 committed motion. Verification sends original and candidate frames captured at
 identical timestamps in one separate, read-only request. It reports which view
@@ -108,6 +114,11 @@ a small retry count for transient server failures. Quota exhaustion and HTTP
 
 The assistant can call only GhostGUI's registered semantic motion tools. It
 cannot execute arbitrary code or generate an unrestricted raw qpos trajectory.
+
+Provenance and protection are saved as a versioned section of the project
+workspace and are included in autosave. Older projects remain compatible: on
+first open, their existing logical and qpos Keyframes are conservatively seeded
+as user-authored, then persisted on the next save.
 See [Motion Assistant Security And Data Boundaries](ai_security.md) for the
 exact provider disclosure, credential, payload-limit, and safety contracts.
 

@@ -80,14 +80,13 @@ def build_semantic_tool_registry(
         ))
         registry.register(_spec(
             "protect_keyframe",
-            "Protect or unprotect an existing logical-frame Keyframe.",
+            "Add protection to an existing logical-frame Keyframe.",
             _closed_object(
                 {
                     "logical_frame": _enum(motion.logical_frames),
                     "time_seconds": _number(0.0, 3600.0),
-                    "protected": {"type": "boolean"},
                 },
-                required=("logical_frame", "time_seconds", "protected"),
+                required=("logical_frame", "time_seconds"),
             ),
             ToolCategory.EDIT,
             True,
@@ -207,6 +206,10 @@ def _inspect(context, motion, builder):
 
 def _ensure_keyframe(context, motion, arguments):
     time_seconds = float(arguments["time_seconds"])
+    existed = _has_qpos_keyframe(
+        context.session.working_document,
+        time_seconds,
+    )
     qpos = motion.ensure_qpos_keyframe(
         context.session.working_document,
         time_seconds=time_seconds,
@@ -220,6 +223,7 @@ def _ensure_keyframe(context, motion, arguments):
             operation="ensure_keyframe",
         ),
         affected_entities=(reference,),
+        created_entities=() if existed else (reference,),
     )
     return {"changed": result.changed, "time_seconds": time_seconds}
 
@@ -270,12 +274,19 @@ def _solve_and_apply(
     operation,
 ):
     metadata = context.working_metadata
+    document = context.session.working_document
+    logical_existed = any(
+        frame.frame_name == logical_frame
+        and abs(frame.time - time_seconds) <= 1e-6
+        for frame in document.trajectory.frames
+    )
+    qpos_existed = _has_qpos_keyframe(document, time_seconds)
     protected = _protected_logical_frames(
-        context.session.working_document,
+        document,
         metadata,
     )
     solved = motion.solve_logical_frame_target(
-        context.session.working_document,
+        document,
         logical_frame=logical_frame,
         time_seconds=time_seconds,
         position_m=position,
@@ -295,6 +306,14 @@ def _solve_and_apply(
     context.session.apply_ai(
         ReplaceMotionState(capture_motion_state(candidate), operation=operation),
         affected_entities=references,
+        created_entities=tuple(
+            reference
+            for reference, existed in zip(
+                references,
+                (logical_existed, qpos_existed),
+            )
+            if not existed
+        ),
     )
     return {
         "logical_frame": solved.frame.frame_name,
@@ -330,6 +349,10 @@ def _set_joint_group(context, motion, arguments):
 
 def _set_joint_values(context, motion, time_seconds, values, operation):
     time_seconds = float(time_seconds)
+    existed = _has_qpos_keyframe(
+        context.session.working_document,
+        time_seconds,
+    )
     qpos = motion.set_joint_angles(
         context.session.working_document,
         time_seconds=time_seconds,
@@ -345,6 +368,7 @@ def _set_joint_values(context, motion, time_seconds, values, operation):
     context.session.apply_ai(
         ReplaceMotionState(capture_motion_state(candidate), operation=operation),
         affected_entities=(reference,),
+        created_entities=() if existed else (reference,),
     )
     return {
         "time_seconds": time_seconds,
@@ -365,13 +389,13 @@ def _protect_keyframe(context, arguments):
     reference = context.working_metadata.reference_for_keyframe(matches[0])
     changed = context.session.protect(
         reference,
-        bool(arguments["protected"]),
+        True,
         author=EditAuthor.AI,
     )
     return {
         "logical_frame": matches[0].frame_name,
         "time_seconds": matches[0].time,
-        "protected": bool(arguments["protected"]),
+        "protected": True,
         "changed": changed,
     }
 
@@ -425,6 +449,14 @@ def _protected_logical_frames(document, metadata):
         if value is not None and value.protected:
             protected.add(frame.frame_name)
     return tuple(sorted(protected))
+
+
+def _has_qpos_keyframe(document, time_seconds):
+    timeline = document.qpos_timeline
+    return timeline is not None and any(
+        abs(float(time) - float(time_seconds)) <= 1e-6
+        for time in timeline.times()
+    )
 
 
 def _remap_timeline_metadata(

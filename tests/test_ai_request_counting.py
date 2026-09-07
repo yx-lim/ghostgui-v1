@@ -38,7 +38,11 @@ from application.ai.visual_refinement import (
     VisualMotionWorkflow,
     VisualVerifier,
 )
-from tests.test_ai_semantic_tools import FakeMotionService, _document
+from tests.test_ai_semantic_tools import (
+    FakeMotionService,
+    _document,
+    _mark_existing_motion_ai_owned,
+)
 from tests.test_ai_visual_critique import _frames as critique_frames
 from tests.test_ai_visual_critique import _response_payload as critique_payload
 from tests.test_ai_visual_refinement import (
@@ -78,6 +82,7 @@ def _semantic_scenario(responses):
     store = InMemoryMotionMetadataStore()
     metadata = MotionMetadataService(store, TimestampMotionIdentityResolver())
     session = AIEditSession(committed, metadata_store=store)
+    _mark_existing_motion_ai_owned(session, metadata.resolver)
     context = SemanticToolContext(session, metadata, motion_name="count baseline")
     tools = build_semantic_tool_registry(FakeMotionService())
     provider = RequestCountingProvider(MockProvider(responses))
@@ -89,6 +94,7 @@ def _visual_scenario(responses):
     store = InMemoryMotionMetadataStore()
     metadata = MotionMetadataService(store, TimestampMotionIdentityResolver())
     session = AIEditSession(committed, metadata_store=store)
+    _mark_existing_motion_ai_owned(session, metadata.resolver)
     context = SemanticToolContext(session, metadata, motion_name="count baseline")
     tools = build_semantic_tool_registry(FakeMotionService())
     provider = RequestCountingProvider(MockProvider(responses))

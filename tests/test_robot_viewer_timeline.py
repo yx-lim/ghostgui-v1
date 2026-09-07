@@ -1,4 +1,5 @@
 import os
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
@@ -28,6 +29,8 @@ from PySide6.QtWidgets import (
 
 from core.ik import Collision
 from application.backend_interface import PythonRobotConfiguration
+from application.ai.schemas import EditAuthor
+from application.editor_commands import UpdateKeyframe
 from application.project_manager import (
     GhostGUIProject,
     ghostgui_projects_dir,
@@ -2911,6 +2914,51 @@ class RobotViewerTimelineTests(unittest.TestCase):
             self.assertTrue(events[-1]["details"]["autosave"])
             self.assertEqual(events[-1]["details"]["frame_count"], 1)
 
+            self.window.current_project = None
+
+    def test_project_workspace_round_trips_ai_motion_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.window.controls.frame_box.setCurrentText("pelvis")
+            self.window.on_add_keyframe()
+            controller = self.window.ai_assistant_controller
+            service = controller._metadata_service()
+            frame = self.window.trajectory.frames[0]
+            reference = service.reference_for_keyframe(frame)
+            controller.metadata_store.record(reference, EditAuthor.AI)
+            controller.metadata_store.set_protected(reference, True)
+
+            project = self.window.create_project_at(
+                Path(directory) / "metadata.ghostgui",
+                "metadata",
+            )
+            workspace = project.read_workspace()
+            saved = {
+                entity["id"]: entity
+                for entity in workspace["ai_motion_metadata"]["entities"]
+            }
+            self.assertEqual(saved[reference.identifier]["author"], "ai")
+            self.assertTrue(saved[reference.identifier]["protected"])
+
+            controller.reset_motion_metadata(self.window.document)
+            self.assertEqual(
+                controller.metadata_store.get(reference).author,
+                EditAuthor.USER,
+            )
+            self.assertTrue(self.window.restore_project(project))
+
+            restored = controller.metadata_store.get(reference)
+            self.assertEqual(restored.author, EditAuthor.AI)
+            self.assertTrue(restored.protected)
+
+            self.window.editor_controller.execute(
+                UpdateKeyframe(
+                    0,
+                    replace(self.window.trajectory.frames[0], z=0.7),
+                )
+            )
+            corrected = controller.metadata_store.get(reference)
+            self.assertEqual(corrected.author, EditAuthor.USER)
+            self.assertTrue(corrected.protected)
             self.window.current_project = None
 
     def test_recent_project_selection_reopens_workspace(self):

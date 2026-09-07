@@ -56,6 +56,7 @@ class AIEditSessionTests(unittest.TestCase):
         committed = _document()
         session = AIEditSession(committed)
         reference = MotionEntityRef("keyframe-1")
+        session.metadata.record(reference, EditAuthor.AI)
 
         session.apply_ai(
             UpdateKeyframe(
@@ -74,6 +75,7 @@ class AIEditSessionTests(unittest.TestCase):
     def test_manual_edit_is_recorded_and_blocks_later_ai_edit(self):
         session = AIEditSession(_document())
         reference = MotionEntityRef("pelvis-keyframe")
+        session.metadata.record(reference, EditAuthor.AI)
         session.apply_ai(
             UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.8)),
             affected_entities=(reference,),
@@ -124,6 +126,7 @@ class AIEditSessionTests(unittest.TestCase):
         metadata = InMemoryMotionMetadataStore()
         session = AIEditSession(committed, metadata_store=metadata)
         reference = MotionEntityRef("pelvis-keyframe")
+        session.metadata.record(reference, EditAuthor.AI)
         session.apply_ai(
             UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.7)),
             affected_entities=(reference,),
@@ -146,6 +149,7 @@ class AIEditSessionTests(unittest.TestCase):
         metadata = InMemoryMotionMetadataStore()
         reference = MotionEntityRef("pelvis-keyframe")
         session = AIEditSession(committed, metadata_store=metadata)
+        session.metadata.record(reference, EditAuthor.AI)
         session.apply_ai(
             UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.7)),
             affected_entities=(reference,),
@@ -195,6 +199,28 @@ class AIEditSessionTests(unittest.TestCase):
                 affected_entities=(reference,),
                 allow_user_override=True,
             )
+
+    def test_unknown_content_is_conservatively_blocked(self):
+        session = AIEditSession(_document())
+        reference = MotionEntityRef("unknown-existing-keyframe")
+
+        with self.assertRaisesRegex(AIEditSessionError, "user-authored"):
+            session.apply_ai(
+                UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.7)),
+                affected_entities=(reference,),
+            )
+
+    def test_ai_cannot_remove_protection_but_user_can(self):
+        session = AIEditSession(_document())
+        reference = MotionEntityRef("protected-keyframe")
+        session.protect(reference, author=EditAuthor.USER)
+
+        with self.assertRaisesRegex(AIEditSessionError, "cannot remove"):
+            session.protect(reference, False, author=EditAuthor.AI)
+
+        self.assertTrue(session.metadata.get(reference).protected)
+        self.assertTrue(session.protect(reference, False, author=EditAuthor.USER))
+        self.assertFalse(session.metadata.get(reference).protected)
 
     def test_replace_motion_state_stays_unchanged_on_qpos_failure(self):
         document = _document()

@@ -253,7 +253,7 @@ def _proposal_line(group: tuple[str, str | None], count: int) -> str:
         "set_joint_angle": "Set Joint Angle for",
         "set_joint_group_angles": "Set Joint Angles for",
         "retime_segment": "Retimed Keyframe intervals",
-        "protect_keyframe": "Updated protection for",
+        "protect_keyframe": "Protected",
     }
     label = labels.get(tool, tool.replace("_", " ").title())
     if tool in {"ensure_keyframe", "retime_segment"}:

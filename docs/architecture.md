@@ -194,6 +194,7 @@ but focused components now own the mechanics it previously embedded:
 | `application/ai/repair_planner.py` | One optional compact replacement-operation request after local failure |
 | `application/ai/plan_executor.py` | Allowlisted local plan execution, operation rollback, validation, and summaries |
 | `application/ai/connection_cache.py` | Session-only successful connection-test identity cache |
+| `application/ai/metadata.py` | Opaque motion identity, conservative ownership, protection, and versioned workspace persistence |
 | `application/ai/provider_comparison.py` | Provider-neutral comparison of validated tool and detached motion outcomes; provider prose is excluded |
 | `application/ai/limits.py` | Shared local instruction, response, tool-result, output-token, and image budgets |
 | `application/ai/providers/` | Provider-neutral protocol plus isolated Mock, Gemini, Anthropic, and development record/replay adapters |
@@ -238,6 +239,15 @@ schema, and semantic tool schemas. The optional JSON store writes that digest
 and sanitized `ProviderResponse`, not the request material. `ReplayProvider`
 uses the same fingerprint and fails on a miss rather than falling back to a live
 request.
+
+Motion provenance is resolved exclusively through `MotionMetadataService` and
+opaque `MotionEntityRef` values. Existing logical and qpos Keyframes missing
+metadata are seeded as user-authored; an unknown lookup denies AI mutation. AI
+may add protection but cannot remove it. A versioned optional section in the
+normal workspace JSON survives save, autosave, and reopen without changing the
+v2 project schema. Loading an older workspace with no section performs the same
+conservative seed. The timestamp-backed MVP resolver remains isolated behind
+the service so stable Keyframe IDs can replace it without changing AI tools.
 
 `RobotViewer3D` similarly retains its public API while delegating the advanced
 IK inspector builders to `gui/viewers/ik_panels.py` and playback math to the

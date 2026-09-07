@@ -207,7 +207,7 @@ class ContextBuilder:
         values = []
         for frame in frames:
             edit_metadata = metadata.metadata_for_keyframe(frame)
-            if edit_metadata is None or (
+            if edit_metadata is not None and (
                 edit_metadata.author is not EditAuthor.USER
                 and not edit_metadata.protected
             ):
@@ -216,8 +216,14 @@ class ContextBuilder:
                 {
                     "logical_frame": frame.frame_name,
                     "time_seconds": frame.time,
-                    "author": edit_metadata.author.value,
-                    "protected": edit_metadata.protected,
+                    "author": (
+                        EditAuthor.USER.value
+                        if edit_metadata is None
+                        else edit_metadata.author.value
+                    ),
+                    "protected": (
+                        False if edit_metadata is None else edit_metadata.protected
+                    ),
                 }
             )
         truncated = len(values) > self.max_constraint_keyframes

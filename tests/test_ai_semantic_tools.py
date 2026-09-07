@@ -143,11 +143,28 @@ def _document():
     return document
 
 
+def _mark_existing_motion_ai_owned(session, resolver):
+    metadata = MotionMetadataService(session.metadata, resolver)
+    for frame in session.working_document.trajectory.frames:
+        session.metadata.record(
+            metadata.reference_for_keyframe(frame),
+            EditAuthor.AI,
+        )
+    timeline = session.working_document.qpos_timeline
+    if timeline is not None:
+        for time in timeline.times():
+            session.metadata.record(
+                metadata.reference_for_qpos_keyframe(time),
+                EditAuthor.AI,
+            )
+
+
 def _setup():
     committed = _document()
     store = InMemoryMotionMetadataStore()
     resolver = TimestampMotionIdentityResolver()
     session = AIEditSession(committed, metadata_store=store)
+    _mark_existing_motion_ai_owned(session, resolver)
     context = SemanticToolContext(
         session=session,
         metadata=MotionMetadataService(store, resolver),
@@ -269,7 +286,7 @@ class SemanticToolTests(unittest.TestCase):
         )
         registry.execute(
             "protect_keyframe",
-            {"logical_frame": "pelvis", "time_seconds": 0.0, "protected": True},
+            {"logical_frame": "pelvis", "time_seconds": 0.0},
             context=context,
         )
         with self.assertRaisesRegex(ToolExecutionError, "protected"):
@@ -290,7 +307,7 @@ class SemanticToolTests(unittest.TestCase):
         committed, session, context, _motion, registry = _setup()
         result = registry.execute(
             "protect_keyframe",
-            {"logical_frame": "pelvis", "time_seconds": 0.0, "protected": True},
+            {"logical_frame": "pelvis", "time_seconds": 0.0},
             context=context,
         )
 
@@ -305,6 +322,20 @@ class SemanticToolTests(unittest.TestCase):
         self.assertTrue(accepted.changed)
         self.assertEqual(committed.revision, 1)
         self.assertTrue(context.metadata.store.get(reference).protected)
+
+    def test_protection_tool_rejects_ai_unprotect_argument(self):
+        _committed, _session, context, _motion, registry = _setup()
+
+        with self.assertRaisesRegex(ToolValidationError, "unknown property"):
+            registry.execute(
+                "protect_keyframe",
+                {
+                    "logical_frame": "pelvis",
+                    "time_seconds": 0.0,
+                    "protected": False,
+                },
+                context=context,
+            )
 
     def test_retime_migrates_metadata_without_ai_timestamp_identity(self):
         _committed, session, context, _motion, registry = _setup()
