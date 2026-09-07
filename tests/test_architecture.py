@@ -51,6 +51,40 @@ class ArchitectureGuardrailTests(unittest.TestCase):
         self.assertEqual(len(violations), 1)
         self.assertIn("core must not import gui", violations[0].message)
 
+    def test_core_robotics_rejects_ui_rendering_and_outer_layers(self):
+        forbidden_imports = {
+            "application": "from application.editor_controller import EditorController",
+            "gui": "from gui.main_window import RobotGuiMainWindow",
+            "OpenGL": "from OpenGL.GL import glClear",
+            "PySide6": "from PySide6.QtWidgets import QWidget",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for layer in architecture.SOURCE_LAYERS:
+                (root / layer).mkdir()
+                (root / layer / "__init__.py").write_text("", encoding="utf-8")
+            robotics = root / "core" / "robotics"
+            robotics.mkdir()
+            (robotics / "__init__.py").write_text("", encoding="utf-8")
+            for name, source in forbidden_imports.items():
+                (robotics / f"bad_{name}.py").write_text(
+                    source + "\n",
+                    encoding="utf-8",
+                )
+
+            violations = architecture.validate_repository(root)
+
+        self.assertEqual(len(violations), len(forbidden_imports))
+        for imported_root in forbidden_imports:
+            with self.subTest(imported_root=imported_root):
+                matching = [
+                    violation
+                    for violation in violations
+                    if f"({imported_root})" in violation.message
+                ]
+                self.assertEqual(len(matching), 1)
+                self.assertIn("core/robotics", matching[0].message)
+
     def test_wheel_validator_checks_modules_and_entry_point(self):
         with tempfile.TemporaryDirectory() as directory:
             wheel_path = Path(directory) / "ghostgui.whl"

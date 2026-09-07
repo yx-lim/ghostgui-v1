@@ -26,6 +26,7 @@ PySide6 controls and 3D gizmo
 | Path | Responsibility |
 | --- | --- |
 | `application/` | Use cases, background jobs, projects, import/export, generation |
+| `core/robotics/` | Model-independent units, qpos validation, and trajectory-array contracts |
 | `core/models/` | Registry, model preparation, MuJoCo metadata, mutable state |
 | `core/ik/` | IK tasks and collision-aware drag solving |
 | `core/trajectory/` | Keyframes, sampling, interpolation, smoothing |
@@ -45,6 +46,13 @@ Core cannot import Qt, OpenGL, application, or GUI code. Application services
 can use core contracts but cannot import GUI modules. GUI code assembles and
 adapts both layers. `application.launcher` is the explicit composition-root
 exception that imports the main window after parsing command-line arguments.
+
+`core/robotics/` is the dependency-free robotics contract boundary shared by
+model code and outer application services. It owns coordinate-unit constants,
+fixed-width finite qpos validation, and paired trajectory time/qpos validation.
+It may depend on other model-independent `core` math, but it must not import
+PySide/PyQt, OpenGL, `application`, or `gui`. Model-specific behavior remains in
+`core/models/`; workflows and provider orchestration remain in `application/`.
 
 ## Application Assembly
 

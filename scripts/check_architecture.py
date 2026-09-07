@@ -19,6 +19,17 @@ FORBIDDEN_LAYER_IMPORTS = {
 FORBIDDEN_CORE_IMPORTS = frozenset(
     {"OpenGL", "PyQt5", "PyQt6", "PySide2", "PySide6"}
 )
+FORBIDDEN_CORE_ROBOTICS_IMPORTS = frozenset(
+    {
+        "OpenGL",
+        "PyQt5",
+        "PyQt6",
+        "PySide2",
+        "PySide6",
+        "application",
+        "gui",
+    }
+)
 COMPOSITION_ROOTS = frozenset({Path("application/launcher.py")})
 
 
@@ -44,6 +55,14 @@ def _import_roots(node: ast.AST) -> tuple[str, ...]:
     return ()
 
 
+def _is_core_robotics(path: Path) -> bool:
+    parts = path.parts
+    return any(
+        parts[index:index + 2] == ("core", "robotics")
+        for index in range(len(parts) - 1)
+    )
+
+
 def check_file(path: Path, layer: str) -> list[ArchitectureViolation]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -59,8 +78,22 @@ def check_file(path: Path, layer: str) -> list[ArchitectureViolation]:
         relative_path = None
     if relative_path in COMPOSITION_ROOTS:
         forbidden_layers = frozenset()
+    core_robotics = layer == "core" and _is_core_robotics(path)
     for node in ast.walk(tree):
         for imported_root in _import_roots(node):
+            if (
+                core_robotics
+                and imported_root in FORBIDDEN_CORE_ROBOTICS_IMPORTS
+            ):
+                violations.append(
+                    ArchitectureViolation(
+                        path,
+                        int(getattr(node, "lineno", 1)),
+                        "core/robotics must remain independent of "
+                        f"UI, rendering, and outer layers ({imported_root})",
+                    )
+                )
+                continue
             if imported_root in forbidden_layers:
                 violations.append(
                     ArchitectureViolation(
