@@ -337,6 +337,47 @@ class RobotModelAdapterTests(unittest.TestCase):
         )
         self.assertGreater(len(adapter.get_kinematic_edges()), 0)
 
+    def test_g1_semantic_joint_groups_use_registered_joint_names(self):
+        adapter = MuJoCoRobotAdapter("g1")
+        groups = adapter.joint_groups
+
+        self.assertEqual(set(groups), {
+            "left_arm",
+            "right_arm",
+            "arms",
+            "left_leg",
+            "right_leg",
+            "legs",
+            "waist",
+            "upper_body",
+        })
+        self.assertEqual(groups, ROBOT_MODELS["g1"].joint_groups)
+        self.assertEqual(
+            groups["arms"],
+            groups["left_arm"] + groups["right_arm"],
+        )
+        self.assertEqual(
+            groups["legs"],
+            groups["left_leg"] + groups["right_leg"],
+        )
+        self.assertEqual(
+            groups["upper_body"],
+            groups["waist"] + groups["arms"],
+        )
+        self.assertEqual(
+            {name for members in groups.values() for name in members}
+            - set(adapter.joint_names),
+            set(),
+        )
+        self.assertEqual(len(groups["left_arm"]), 7)
+        self.assertEqual(len(groups["right_arm"]), 7)
+        self.assertEqual(len(groups["left_leg"]), 6)
+        self.assertEqual(len(groups["right_leg"]), 6)
+        self.assertEqual(len(groups["waist"]), 3)
+        for name, members in groups.items():
+            with self.subTest(group=name):
+                self.assertEqual(len(members), len(set(members)))
+
     def test_go2_urdf_loads_with_quadruped_metadata(self):
         adapter = MuJoCoRobotAdapter("go2")
         self.assertEqual(adapter.model_type, "quadruped")

@@ -13,6 +13,54 @@ from core.resources import bundled_resource_root
 PROJECT_ROOT = bundled_resource_root()
 
 
+_G1_LEFT_ARM_JOINTS = (
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+)
+_G1_RIGHT_ARM_JOINTS = tuple(
+    name.replace("left_", "right_", 1)
+    for name in _G1_LEFT_ARM_JOINTS
+)
+_G1_LEFT_LEG_JOINTS = (
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+)
+_G1_RIGHT_LEG_JOINTS = tuple(
+    name.replace("left_", "right_", 1)
+    for name in _G1_LEFT_LEG_JOINTS
+)
+_G1_WAIST_JOINTS = (
+    "waist_yaw_joint",
+    "waist_roll_joint",
+    "waist_pitch_joint",
+)
+
+
+_G1_JOINT_GROUPS = {
+    "left_arm": _G1_LEFT_ARM_JOINTS,
+    "right_arm": _G1_RIGHT_ARM_JOINTS,
+    "arms": _G1_LEFT_ARM_JOINTS + _G1_RIGHT_ARM_JOINTS,
+    "left_leg": _G1_LEFT_LEG_JOINTS,
+    "right_leg": _G1_RIGHT_LEG_JOINTS,
+    "legs": _G1_LEFT_LEG_JOINTS + _G1_RIGHT_LEG_JOINTS,
+    "waist": _G1_WAIST_JOINTS,
+    "upper_body": (
+        _G1_WAIST_JOINTS
+        + _G1_LEFT_ARM_JOINTS
+        + _G1_RIGHT_ARM_JOINTS
+    ),
+}
+
+
 @dataclass(frozen=True)
 class RobotModelInfo:
     key: str
@@ -54,6 +102,7 @@ ROBOT_MODELS = {
             "right_foot": ("robot/right_foot", "right_foot", "right_ankle_roll_link"),
         },
         end_effector_frames=("left_hand", "right_hand", "left_foot", "right_foot"),
+        joint_groups=_G1_JOINT_GROUPS,
     ),
     "go2": RobotModelInfo(
         key="go2",

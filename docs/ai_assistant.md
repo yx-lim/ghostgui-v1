@@ -78,6 +78,11 @@ visually. Selecting the right hand therefore gives “this” the semantic conte
 `right_hand`; selecting rows at 2.0 s and 3.0 s gives “this section” the interval
 `[2.0, 3.0]`.
 
+For the Unitree G1, model capabilities advertise left/right arms, both arms,
+left/right legs, both legs, waist, and upper-body Joint Angle groups. These
+group names and their ordered members come from the robot registry and are
+included in semantic context; the AI layer does not hard-code G1 joints.
+
 If a planned operation fails local validation or execution, GhostGUI may make
 one additional repair request. That request contains the original intent,
 compact failure information, successful operations already applied, the

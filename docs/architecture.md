@@ -302,6 +302,12 @@ names so third-party callers can migrate incrementally.
 The intended direction for new work is: extend a focused component first, then
 keep only thin signal wiring or a compatibility method on the large facade.
 
+Robot-specific semantic Joint Angle groups belong to `RobotModelInfo` in
+`core/models/registry.py`. The adapter filters registered members against the
+compiled model, and `GhostGUIMotionService` exposes the resulting provider-
+neutral mapping to `RobotCapabilityContext` and the strict semantic tool schema.
+G1-specific group names or joints do not live in the AI application modules.
+
 ## Runtime And Resource Lifecycles
 
 Serialized background work supports cooperative `CancellationToken` checks.

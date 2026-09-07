@@ -15,6 +15,13 @@ and mesh-package mappings in `core/models/registry.py`.
 The exact body, site, joint, and qpos names come from the compiled MuJoCo model.
 Logical targets are model-specific aliases over those objects.
 
+The Unitree G1 registry also publishes semantic Joint Angle groups for
+`left_arm`, `right_arm`, `arms`, `left_leg`, `right_leg`, `legs`, `waist`, and
+`upper_body`. Each group contains actual compiled G1 Joint Angle names; the
+combined groups preserve left-to-right ordering, and `upper_body` contains the
+waist followed by both arms. These capabilities are model metadata rather than
+AI-specific name lists.
+
 ## Source And Runtime Models
 
 MuJoCo XML sources load directly.

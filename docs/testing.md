@@ -246,6 +246,12 @@ that committed qpos, document revision, editable current time, and Keyframes do
 not change. Controller coverage verifies that the sampler reads the detached
 `AIEditSession.working_document.qpos_timeline` and is removed on Reject.
 
+Phase 13 adds no provider request. Model tests assert that every G1 semantic
+group member is an actual compiled Joint Angle and that the combined `arms`,
+`legs`, and `upper_body` groups preserve their documented composition. Semantic
+tool inspection tests prove `RobotCapabilityContext` exposes the registered G1
+groups without any G1-specific AI code.
+
 Gemini transient-server retries remain available only through an explicit
 `max_attempts` value; HTTP 429 never retries. Record/replay tests use synthetic
 content and a temporary JSON store. They verify that files contain a
@@ -355,6 +361,9 @@ structure. It skips outside the explicitly configured visual environment.
   one unambiguous model-defined joint group, when available) appears in the
   next request; switch back to End Effector mode and confirm stale Joint Angle
   context is omitted.
+- With G1 loaded, inspect Motion Assistant context and confirm it advertises
+  `left_arm`, `right_arm`, `arms`, `left_leg`, `right_leg`, `legs`, `waist`, and
+  `upper_body`, with members matching the G1 model's Joint Angle names.
 - Stage an AI Joint Angle edit at a time containing logical Keyframes and verify
   the Orange preview, qpos Keyframe, and FK-derived affected logical Keyframes
   describe the same pose. Confirm a user-owned or protected affected Keyframe

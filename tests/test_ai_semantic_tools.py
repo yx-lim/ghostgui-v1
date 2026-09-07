@@ -555,6 +555,29 @@ class GhostGUIMotionServiceTests(unittest.TestCase):
         self.assertTrue(report.valid, report.issues)
         self.assertEqual(report.issues, ())
 
+    def test_g1_joint_groups_are_exposed_in_robot_capability_context(self):
+        registry = build_semantic_tool_registry(self.motion)
+
+        inspected = registry.execute(
+            "inspect_motion",
+            {},
+            context=self.context,
+        )
+        groups = inspected["robot"]["joint_groups"]
+
+        self.assertEqual(
+            groups["left_arm"],
+            list(self.adapter.joint_groups["left_arm"]),
+        )
+        self.assertEqual(
+            groups["right_leg"],
+            list(self.adapter.joint_groups["right_leg"]),
+        )
+        self.assertEqual(
+            groups["upper_body"],
+            list(self.adapter.joint_groups["upper_body"]),
+        )
+
     def test_validation_checks_model_qpos_limits_and_all_time_contracts(self):
         document = self.session.working_document
         width = self.adapter.mj_model.nq
