@@ -116,6 +116,10 @@ from application.ai.trajectory_executor import (
     TrajectoryOperationResult,
     TrajectorySpecExecutor,
 )
+from application.ai.trajectory_conversation import (
+    MAX_RETAINED_REFINEMENTS,
+    TrajectoryConversation,
+)
 from application.ai.trajectory_operations import (
     TrajectoryOperationError,
     build_trajectory_operation_handlers,
@@ -345,6 +349,8 @@ __all__ = [
     "TrajectoryExecutionContext",
     "TrajectoryExecutionError",
     "TrajectoryExecutionResult",
+    "MAX_RETAINED_REFINEMENTS",
+    "TrajectoryConversation",
     "TrajectoryOperation",
     "TrajectoryOperationError",
     "TrajectoryOperationType",

@@ -11,6 +11,7 @@ from application.ai.context import (
     EditorSelectionContext,
     MotionAssistantContextBuilder,
 )
+from application.ai.edit_session import AIEditSession
 from application.project_document import ProjectDocument
 
 
@@ -24,6 +25,13 @@ class FakeTimeline:
 
     def times(self):
         return sorted(self.states)
+
+    def get_state(self, time):
+        value = self.states.get(float(time))
+        return None if value is None else value.copy()
+
+    def set_state(self, time, qpos):
+        self.states[float(time)] = np.asarray(qpos, dtype=float).copy()
 
     def sample_state(self, time, fallback_qpos=None):
         self.sampled_times.append(float(time))
@@ -164,6 +172,19 @@ class MotionAssistantContextBuilderTests(unittest.TestCase):
         self.assertLessEqual(payload["motion"]["numerical_sample_count"], 8)
         with self.assertRaisesRegex(ValueError, "8 to 20"):
             MotionAssistantContextBuilder(FakeAdapter(), max_numerical_samples=21)
+
+    def test_refine_samples_staged_candidate_not_committed_document(self):
+        committed = _document()
+        session = AIEditSession(committed)
+        session.working_document.qpos_timeline.states[0.0][2] = 1.3
+
+        payload = MotionAssistantContextBuilder(FakeAdapter()).build_for_session(
+            session,
+        ).to_dict()
+
+        self.assertTrue(payload["motion"]["working_copy"])
+        self.assertEqual(payload["motion"]["numerical_samples"][0]["root"]["position_m"][2], 1.3)
+        self.assertEqual(committed.qpos_timeline.states[0.0][2], 0.8)
 
 
 if __name__ == "__main__":
