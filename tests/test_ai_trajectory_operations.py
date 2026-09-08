@@ -13,8 +13,11 @@ from application.ai.metadata import (
     MotionMetadataService,
     TimestampMotionIdentityResolver,
 )
-from application.ai.motion_services import MotionValidationReport
-from application.ai.motion_services import JointAngleEditResult
+from application.ai.motion_services import (
+    JointAngleEditResult,
+    LogicalFrameSolveResult,
+    MotionValidationReport,
+)
 from application.ai.trajectory_edit_spec import (
     TrajectoryEditMode,
     TrajectoryEditSpec,
@@ -349,6 +352,113 @@ class JointTargetTests(unittest.TestCase):
                     ],
                 },
             ))
+
+
+class _EndEffectorState:
+    def __init__(self):
+        self.qpos = None
+
+    def set_qpos(self, qpos):
+        self.qpos = np.asarray(qpos, dtype=float)
+
+    def get_body_pose(self, object_name, kind):
+        del kind
+        offset = 0.1 if object_name == "right_hand_site" else -0.1
+        return np.array([self.qpos[0], offset, self.qpos[2]]), np.array([1, 0, 0, 0])
+
+
+class _EndEffectorMotion:
+    end_effectors = ("right_hand", "left_hand")
+    joint_names = ()
+    joint_groups = {}
+
+    def __init__(self):
+        self.calls = []
+        self.adapter = SimpleNamespace(
+            create_state=lambda: _EndEffectorState(),
+            logical_frame_bindings={
+                "right_hand": ("site", "right_hand_site"),
+                "left_hand": ("site", "left_hand_site"),
+            },
+        )
+
+    def solve_logical_frame_target(self, document, **arguments):
+        self.calls.append(arguments)
+        qpos = document.qpos_timeline.sample_state(arguments["time_seconds"])
+        position = np.asarray(arguments["position_m"], dtype=float)
+        if arguments["mode"] == "delta":
+            position = position + np.array([qpos[0], 0.1, qpos[2]])
+        qpos = np.asarray(qpos, dtype=float).copy()
+        qpos[0:3] = position
+        return LogicalFrameSolveResult(
+            TargetFrame(
+                time=arguments["time_seconds"],
+                frame_name=arguments["logical_frame"],
+                x=float(position[0]),
+                y=float(position[1]),
+                z=float(position[2]),
+            ),
+            qpos,
+            "solved",
+        )
+
+    def validate_motion(self, _document):
+        return MotionValidationReport(True)
+
+
+class EndEffectorOperationTests(unittest.TestCase):
+    def _execute(self, operation):
+        committed = ProjectDocument("g1", timeline_duration=1.0, qpos_timeline=Timeline())
+        store = InMemoryMotionMetadataStore()
+        metadata = MotionMetadataService(store, TimestampMotionIdentityResolver())
+        metadata.seed_document_as_user_owned(committed)
+        session = AIEditSession(committed, metadata_store=store)
+        motion = _EndEffectorMotion()
+        executor = TrajectorySpecExecutor(
+            build_trajectory_operation_handlers(motion, metadata),
+            motion.validate_motion,
+        )
+        executor.execute(
+            TrajectoryEditSpec(
+                TrajectoryEditMode.EDIT,
+                "Apply an End Effector target.",
+                (operation,),
+            ),
+            context=TrajectoryExecutionContext(session, object()),
+        )
+        return committed, session, motion
+
+    def test_relative_end_effector_target_uses_existing_ik_for_interval(self):
+        committed, session, motion = self._execute(TrajectoryOperation(
+            TrajectoryOperationType.SET_END_EFFECTOR_TARGET,
+            {
+                "end_effector": "right_hand",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "mode": "relative",
+                "position_m": [0, 0, 0.1],
+            },
+        ))
+
+        self.assertEqual([call["mode"] for call in motion.calls], ["delta", "delta"])
+        self.assertAlmostEqual(session.working_document.qpos_timeline.get_state(0.0)[2], 0.9)
+        self.assertAlmostEqual(committed.qpos_timeline.get_state(0.0)[2], 0.8)
+        self.assertTrue(session.can_accept)
+
+    def test_lock_uses_fk_source_pose_as_absolute_target(self):
+        _committed, _session, motion = self._execute(TrajectoryOperation(
+            TrajectoryOperationType.LOCK_END_EFFECTOR,
+            {
+                "end_effectors": ["right_hand"],
+                "source_time": 0.5,
+                "start_time": 0.0,
+                "end_time": 1.0,
+            },
+        ))
+
+        self.assertEqual([call["mode"] for call in motion.calls], ["absolute", "absolute"])
+        for call in motion.calls:
+            np.testing.assert_allclose(call["position_m"], [1.5, 0.1, 0.85])
 
 
 if __name__ == "__main__":

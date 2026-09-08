@@ -12,7 +12,7 @@ from application.ai.motion_state import (
     capture_motion_state,
     detached_document,
 )
-from application.ai.motion_services import JointAngleEditResult
+from application.ai.motion_services import JointAngleEditResult, LogicalFrameSolveResult
 from application.ai.trajectory_edit_spec import (
     TrajectoryOperation,
     TrajectoryOperationType,
@@ -59,6 +59,16 @@ def build_trajectory_operation_handlers(motion_service, metadata_service):
         ),
         TrajectoryOperationType.SET_JOINT_GROUP_TARGET: (
             lambda operation, context: _set_joint_group_target(
+                operation, context, motion_service, metadata_service
+            )
+        ),
+        TrajectoryOperationType.SET_END_EFFECTOR_TARGET: (
+            lambda operation, context: _set_end_effector_target(
+                operation, context, motion_service, metadata_service
+            )
+        ),
+        TrajectoryOperationType.LOCK_END_EFFECTOR: (
+            lambda operation, context: _lock_end_effector(
                 operation, context, motion_service, metadata_service
             )
         ),
@@ -354,6 +364,172 @@ def _apply_joint_values(context, motion, metadata, time, values, operation_name)
             frame.frame_name for frame in solved.logical_frames
         ],
     }
+
+
+def _set_end_effector_target(operation, context, motion, metadata):
+    arguments = operation.arguments
+    end_effector = arguments["end_effector"]
+    if end_effector not in motion.end_effectors:
+        raise TrajectoryOperationError(f"unknown End Effector: {end_effector}")
+    mode = "delta" if arguments["mode"] == "relative" else "absolute"
+    times = _interval_keyframe_times(
+        context.session.working_document,
+        float(arguments["start_time"]),
+        float(arguments["end_time"]),
+    )
+    return _apply_logical_frame_targets(
+        context,
+        motion,
+        metadata,
+        targets={end_effector: tuple(arguments["position_m"])},
+        times=times,
+        mode=mode,
+        operation_name="set_end_effector_target",
+    )
+
+
+def _lock_end_effector(operation, context, motion, metadata):
+    arguments = operation.arguments
+    names = tuple(arguments["end_effectors"])
+    unknown = set(names) - set(motion.end_effectors)
+    if unknown:
+        raise TrajectoryOperationError(
+            f"unknown End Effector: {sorted(unknown)[0]}"
+        )
+    document = context.session.working_document
+    source_time = float(arguments["source_time"])
+    if document.qpos_timeline is None:
+        raise TrajectoryOperationError(
+            "lock_end_effector requires an editable qpos timeline"
+        )
+    source_qpos = document.qpos_timeline.sample_state(source_time)
+    if source_qpos is None:
+        raise TrajectoryOperationError("End Effector lock source state is unavailable")
+    state = motion.adapter.create_state()
+    state.set_qpos(source_qpos)
+    targets = {}
+    orientations = {}
+    from core.trajectory import quat_to_rpy
+
+    for name in names:
+        kind, object_name = motion.adapter.logical_frame_bindings[name]
+        position, quaternion = state.get_body_pose(object_name, kind)
+        targets[name] = tuple(float(value) for value in position)
+        orientations[name] = tuple(float(value) for value in quat_to_rpy(quaternion))
+    times = _interval_keyframe_times(
+        document,
+        float(arguments["start_time"]),
+        float(arguments["end_time"]),
+    )
+    result = _apply_logical_frame_targets(
+        context,
+        motion,
+        metadata,
+        targets=targets,
+        orientations=orientations,
+        times=times,
+        mode="absolute",
+        operation_name="lock_end_effector",
+    )
+    return {**result, "source_time": source_time}
+
+
+def _apply_logical_frame_targets(
+    context,
+    motion,
+    metadata,
+    *,
+    targets,
+    times,
+    mode,
+    operation_name,
+    orientations=None,
+):
+    document = context.session.working_document
+    if document.qpos_timeline is None:
+        raise TrajectoryOperationError(
+            f"{operation_name} requires an editable qpos timeline"
+        )
+    candidate = detached_document(document)
+    working_metadata = MotionMetadataService(
+        context.session.metadata,
+        metadata.resolver,
+    )
+    protected = _protected_logical_frames(document, working_metadata)
+    existing_qpos_times = tuple(float(value) for value in document.qpos_timeline.times())
+    existing_logical = {
+        (frame.frame_name, float(frame.time))
+        for frame in document.trajectory.frames
+    }
+    affected = []
+    created = []
+    warnings = []
+    for time in times:
+        solved_names = []
+        for name, position in targets.items():
+            solved = motion.solve_logical_frame_target(
+                candidate,
+                logical_frame=name,
+                time_seconds=time,
+                position_m=position,
+                orientation_rpy_rad=(
+                    None if orientations is None else orientations.get(name)
+                ),
+                mode=mode,
+                protected_logical_frames=tuple(dict.fromkeys(
+                    (*protected, *solved_names)
+                )),
+            )
+            if not isinstance(solved, LogicalFrameSolveResult):
+                raise TrajectoryOperationError(
+                    "IK service returned an invalid End Effector result"
+                )
+            candidate.trajectory.upsert_frame(solved.frame)
+            candidate.qpos_timeline.set_state(time, solved.qpos)
+            frame_reference = working_metadata.reference_for_keyframe(solved.frame)
+            affected.append(frame_reference)
+            if (name, time) not in existing_logical:
+                created.append(frame_reference)
+            warnings.extend(solved.collisions)
+            solved_names.append(name)
+        qpos_reference = working_metadata.reference_for_qpos_keyframe(time)
+        affected.append(qpos_reference)
+        if not any(abs(time - value) <= 1e-9 for value in existing_qpos_times):
+            created.append(qpos_reference)
+    result = context.session.apply_ai(
+        ReplaceMotionState(
+            capture_motion_state(candidate),
+            operation=operation_name,
+        ),
+        affected_entities=tuple(dict.fromkeys(affected)),
+        created_entities=tuple(dict.fromkeys(created)),
+        allow_user_override=True,
+    )
+    if not result.changed:
+        raise TrajectoryOperationError(f"{operation_name} made no motion change")
+    return {
+        "end_effectors": list(targets),
+        "start_time": times[0],
+        "end_time": times[-1],
+        "solved_keyframes": len(times) * len(targets),
+        "collision_warnings": list(dict.fromkeys(warnings)),
+    }
+
+
+def _interval_keyframe_times(document, start, end):
+    if document.qpos_timeline is None:
+        raise TrajectoryOperationError("operation requires an editable qpos timeline")
+    if end > document.timeline_duration + 1e-9:
+        raise TrajectoryOperationError("operation interval exceeds the motion duration")
+    return tuple(sorted({
+        start,
+        end,
+        *(
+            float(time)
+            for time in document.qpos_timeline.times()
+            if start - 1e-9 <= float(time) <= end + 1e-9
+        ),
+    }))
 
 
 def _held_joint_names(scope, body_name, motion):
