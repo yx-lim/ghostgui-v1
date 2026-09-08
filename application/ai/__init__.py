@@ -110,6 +110,10 @@ from application.ai.trajectory_planner import (
     TrajectoryPlannerLimits,
     TrajectoryPlanningResult,
 )
+from application.ai.trajectory_workflow import (
+    CompactMotionRunResult,
+    CompactMotionWorkflow,
+)
 from application.ai.trajectory_executor import (
     TrajectoryExecutionContext,
     TrajectoryExecutionError,
@@ -360,6 +364,8 @@ __all__ = [
     "TrajectoryPlanner",
     "TrajectoryPlannerError",
     "TrajectoryPlannerLimits",
+    "CompactMotionRunResult",
+    "CompactMotionWorkflow",
     "TrajectoryPlanningResult",
     "TrajectorySpecExecutor",
     "Usage",

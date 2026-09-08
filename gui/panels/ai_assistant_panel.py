@@ -126,12 +126,10 @@ class AIAssistantPanel(QWidget):
         for button in (self.accept_button, self.reject_button, self.refine_button):
             decision_row.addWidget(button)
         layout.addLayout(decision_row)
-        visual_row = QHBoxLayout()
-        visual_row.setContentsMargins(0, 0, 0, 0)
-        visual_row.setSpacing(4)
-        visual_row.addWidget(self.visual_refine_button)
-        visual_row.addWidget(self.visual_verify_button)
-        layout.addLayout(visual_row)
+        # Retained for legacy/developer wiring, but automatic visual context is
+        # now part of normal Apply/Refine and needs no separate user action.
+        self.visual_refine_button.hide()
+        self.visual_verify_button.hide()
 
         self.prompt_input = QPlainTextEdit()
         self.prompt_input.setObjectName("aiPromptInput")
@@ -154,7 +152,7 @@ class AIAssistantPanel(QWidget):
         )
         self.critique_button.clicked.connect(self._emit_critique)
         prompt_actions.addWidget(self.submit_button, stretch=1)
-        prompt_actions.addWidget(self.critique_button)
+        self.critique_button.hide()
         prompt_actions.addWidget(self.cancel_button)
         layout.addLayout(prompt_actions)
 
@@ -180,7 +178,6 @@ class AIAssistantPanel(QWidget):
         self.submit_button.setVisible(not running)
         self.submit_button.setEnabled(not running)
         self.submit_button.setText("Refine" if staged else "Apply")
-        self.critique_button.setVisible(not running)
         self.critique_button.setEnabled(not running)
         self.cancel_button.setVisible(running)
         self.preview_button.setEnabled(staged)

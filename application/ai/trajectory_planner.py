@@ -75,6 +75,8 @@ class TrajectoryPlanningResult:
     usage: Usage
     transcript: tuple[ProviderMessage, ...]
     provider_requests: int = 1
+    requests: tuple[ProviderRequest, ...] = ()
+    responses: tuple[Any, ...] = ()
 
 
 class TrajectoryPlanner:
@@ -196,8 +198,22 @@ class TrajectoryPlanner:
                 response.usage.input_tokens + repair.usage.input_tokens,
                 response.usage.output_tokens + repair.usage.output_tokens,
             )
-            return TrajectoryPlanningResult(spec, usage, transcript, 2)
-        return TrajectoryPlanningResult(spec, response.usage, transcript)
+            return TrajectoryPlanningResult(
+                spec,
+                usage,
+                transcript,
+                2,
+                (request, repair_request),
+                (response, repair),
+            )
+        return TrajectoryPlanningResult(
+            spec,
+            response.usage,
+            transcript,
+            1,
+            (request,),
+            (response,),
+        )
 
     async def _request(self, request, session, cancellation_token):
         session.begin_provider_request()

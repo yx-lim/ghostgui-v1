@@ -10,6 +10,8 @@ from application.ai import (
     AIProgressCallback,
     AIProgressEvent,
     ConnectionTestCache,
+    CompactMotionRunResult,
+    CompactMotionWorkflow,
     ContextBuilder,
     EditorSelectionContext,
     FrameSampler,
@@ -17,11 +19,14 @@ from application.ai import (
     GhostGUIMotionService,
     InMemoryMotionMetadataStore,
     MotionMetadataService,
+    MotionAssistantContextBuilder,
+    MotionAssistantDiagnostics,
     RobotCapabilityContext,
     SemanticToolContext,
     TimestampMotionIdentityResolver,
     TextMotionRunResult,
     TextMotionWorkflow,
+    TrajectoryConversation,
     VisualCritic,
     VisualCritiqueResult,
     VisualMotionRunResult,
@@ -30,6 +35,7 @@ from application.ai import (
     VisualVerifier,
     build_semantic_tool_registry,
     capture_comparison_frames,
+    capture_automatic_motion_frames,
     capture_motion_frames,
     sample_working_preview_qpos,
     connection_test_identity,
@@ -85,6 +91,8 @@ class AIAssistantController:
         self._connection_test_cache = ConnectionTestCache()
         self._settings_dialog = None
         self._session_goal = ""
+        self._trajectory_conversation = None
+        self._pending_refinement = ""
         self._visual_refinement_goal = ""
 
         configured_provider = str(
@@ -129,13 +137,14 @@ class AIAssistantController:
     def start_edit(self, instruction: str) -> None:
         if self.active_handle is not None:
             return
-        if self.session is None or self.session.state in {
+        new_session = self.session is None or self.session.state in {
             AIEditSessionState.ACCEPTED,
             AIEditSessionState.REJECTED,
         } or (
             self.session.state is AIEditSessionState.READY
             and not self.session.committed_revision_current
-        ):
+        )
+        if new_session:
             self.host._refresh_history_baseline()
             self.session = AIEditSession(
                 self.host.document,
@@ -143,12 +152,13 @@ class AIAssistantController:
             )
         if not self.session_staged:
             self._session_goal = instruction.strip()
+            self._trajectory_conversation = TrajectoryConversation(instruction)
         self._start_request(instruction, refinement=False)
 
     def refine(self, instruction: str) -> None:
         if not self.session_staged or self.active_handle is not None:
             return
-        self._session_goal = self._combined_goal(instruction)
+        self._pending_refinement = instruction.strip()
         self._start_request(instruction, refinement=True)
 
     def start_visual_refinement(self, instruction: str = "") -> None:
@@ -558,20 +568,46 @@ class AIAssistantController:
             return
         try:
             motion = GhostGUIMotionService(self.host.robot_model_3d)
-            tools = build_semantic_tool_registry(motion)
             metadata = MotionMetadataService(
                 self.metadata_store,
                 self.identity_resolver,
             )
-            context = SemanticToolContext(
-                session=self.session,
+            selection = self._editor_selection_context(motion)
+            context = MotionAssistantContextBuilder(
+                self.host.robot_model_3d,
+            ).build_for_session(
+                self.session,
+                selection=selection,
                 metadata=metadata,
-                selection=self._editor_selection_context(motion),
                 motion_name=(
                     None
                     if self.host.current_project is None
                     else self.host.current_project.project_name
                 ),
+            )
+            document = self.session.working_document
+            capabilities = self._provider_capabilities(self.provider_name)
+            visual = capture_automatic_motion_frames(
+                document,
+                RobotViewerFrameRenderer(self.host.viewer_3d),
+                capabilities,
+                selected_interval=selection.time_interval,
+                current_time=document.current_time,
+                variant=(
+                    ImageVariant.CANDIDATE
+                    if refinement
+                    else ImageVariant.ORIGINAL
+                ),
+            )
+            context_warnings = (
+                ()
+                if visual.unavailable_reason is None
+                else (visual.unavailable_reason,)
+            )
+            conversation_context = (
+                None
+                if self._trajectory_conversation is None
+                else self._trajectory_conversation.to_context()
             )
         except Exception as error:
             self.panel.show_error(str(error), session_staged=self.session_staged)
@@ -584,12 +620,15 @@ class AIAssistantController:
 
         def work(token):
             return asyncio.run(
-                self._run_text_motion(
+                self._run_compact_motion(
                     instruction,
-                    tools,
+                    motion,
+                    metadata,
                     context,
+                    visual.frames,
+                    conversation_context,
+                    context_warnings,
                     token,
-                    progress_callback=self._emit_progress,
                 )
             )
 
@@ -617,6 +656,37 @@ class AIAssistantController:
             # The panel may have been destroyed while a worker is shutting down.
             pass
 
+    async def _run_compact_motion(
+        self,
+        instruction,
+        motion,
+        metadata,
+        context,
+        frames,
+        conversation_context,
+        context_warnings,
+        token,
+    ):
+        provider = self._provider()
+        try:
+            return await CompactMotionWorkflow(
+                provider,
+                motion,
+                metadata,
+                diagnostics=MotionAssistantDiagnostics.from_environment(),
+            ).run(
+                instruction,
+                model=self.model,
+                context=context,
+                session=self.session,
+                motion_frames=frames,
+                conversation_context=conversation_context,
+                context_warnings=context_warnings,
+                cancellation_token=token,
+            )
+        finally:
+            await provider.aclose()
+
     async def _run_text_motion(
         self,
         instruction,
@@ -625,6 +695,8 @@ class AIAssistantController:
         token,
         progress_callback: AIProgressCallback | None = None,
     ):
+        """Retained legacy/developer workflow; normal UI uses compact planning."""
+
         provider = self._provider()
         try:
             return await TextMotionWorkflow(provider, tools).run(
@@ -641,10 +713,15 @@ class AIAssistantController:
         key = api_key or self._session_api_keys.get(self.provider_name)
         return self.provider_registry.create(self.provider_name, api_key=key)
 
-    def _request_succeeded(self, result: TextMotionRunResult) -> None:
+    def _request_succeeded(self, result: CompactMotionRunResult) -> None:
         self.active_handle = None
         changes = self._proposal_lines(result)
         if self.session_staged:
+            if self._pending_refinement and self._trajectory_conversation is not None:
+                self._trajectory_conversation.record_refinement(
+                    self._pending_refinement
+                )
+            self._pending_refinement = ""
             self.panel.show_proposal(
                 result.text,
                 changes,
@@ -657,10 +734,13 @@ class AIAssistantController:
             )
             self.session = None
             self._session_goal = ""
+            self._trajectory_conversation = None
+            self._pending_refinement = ""
             self.host.set_ai_motion_controls_enabled(True)
 
     def _request_failed(self, error: Exception) -> None:
         self.active_handle = None
+        self._pending_refinement = ""
         if isinstance(error, ProviderCancelledError):
             self._request_cancelled()
             return
@@ -673,6 +753,7 @@ class AIAssistantController:
 
     def _request_cancelled(self) -> None:
         self.active_handle = None
+        self._pending_refinement = ""
         self.panel.show_cancelled(session_staged=self.session_staged)
         self._clear_visual_refinement()
         if self.session_staged:
@@ -764,6 +845,8 @@ class AIAssistantController:
         self.panel.reset_session(message)
         self.session = None
         self._session_goal = ""
+        self._trajectory_conversation = None
+        self._pending_refinement = ""
         self._clear_visual_refinement()
         self.host.set_ai_motion_controls_enabled(True)
 
@@ -781,6 +864,8 @@ class AIAssistantController:
         )
         self._metadata_service().seed_document_as_user_owned(document)
         self.session = None
+        self._trajectory_conversation = None
+        self._pending_refinement = ""
 
     def reset_motion_metadata(self, document) -> None:
         """Start conservative metadata for a new empty project workspace."""
@@ -790,6 +875,8 @@ class AIAssistantController:
         self._metadata_stores[document.document_id] = self.metadata_store
         self._metadata_service().seed_document_as_user_owned(document)
         self.session = None
+        self._trajectory_conversation = None
+        self._pending_refinement = ""
 
     def restore_motion_metadata(self, payload, document) -> None:
         """Restore a saved workspace or conservatively seed a legacy one."""
@@ -801,6 +888,8 @@ class AIAssistantController:
         self.metadata_store = store
         self._metadata_stores[document.document_id] = store
         self.session = None
+        self._trajectory_conversation = None
+        self._pending_refinement = ""
 
     def project_motion_metadata(self, document):
         """Return the versioned metadata section stored in project workspace."""
@@ -832,6 +921,8 @@ class AIAssistantController:
         self.panel.reset_session("AI working copy rejected; committed motion is unchanged.")
         self.session = None
         self._session_goal = ""
+        self._trajectory_conversation = None
+        self._pending_refinement = ""
         self._clear_visual_refinement()
         self.host.set_ai_motion_controls_enabled(True)
 
