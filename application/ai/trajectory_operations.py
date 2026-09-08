@@ -18,6 +18,7 @@ from application.ai.trajectory_edit_spec import (
     TrajectoryOperationType,
 )
 from application.ai.trajectory_executor import TrajectoryExecutionContext
+from application.ai.semantic_tools import SemanticToolContext, retime_segment
 
 
 class TrajectoryOperationError(ValueError):
@@ -41,6 +42,13 @@ def build_trajectory_operation_handlers(motion_service, metadata_service):
                 operation,
                 context,
                 motion_service,
+                metadata_service,
+            )
+        ),
+        TrajectoryOperationType.RETIME_INTERVAL: (
+            lambda operation, context: _retime_interval(
+                operation,
+                context,
                 metadata_service,
             )
         ),
@@ -219,6 +227,32 @@ def _hold_pose(
         "body_scope": scope,
         "body_name": body_name,
         "held_qpos_keyframes": len(target_times),
+    }
+
+
+def _retime_interval(
+    operation: TrajectoryOperation,
+    context: TrajectoryExecutionContext,
+    metadata: MotionMetadataService,
+):
+    arguments = operation.arguments
+    start = float(arguments["start_time"])
+    end = float(arguments["end_time"])
+    scale = float(arguments["scale"])
+    if end > context.session.working_document.timeline_duration + 1e-9:
+        raise TrajectoryOperationError("retime_interval exceeds the motion duration")
+    output = retime_segment(
+        SemanticToolContext(context.session, metadata),
+        {
+            "start_time_seconds": start,
+            "end_time_seconds": end,
+            "speed": 1.0 / scale,
+        },
+        allow_user_override=True,
+    )
+    return {
+        **output,
+        "duration_scale": scale,
     }
 
 

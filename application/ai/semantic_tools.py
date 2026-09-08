@@ -171,7 +171,7 @@ def build_semantic_tool_registry(
         ),
         ToolCategory.EDIT,
         True,
-        lambda arguments, context: _retime_segment(_context(context), arguments),
+        lambda arguments, context: retime_segment(_context(context), arguments),
     ))
     registry.register(_spec(
         "validate_motion",
@@ -412,7 +412,7 @@ def _protect_keyframe(context, arguments):
     }
 
 
-def _retime_segment(context, arguments):
+def retime_segment(context, arguments, *, allow_user_override=False):
     document = context.session.working_document
     start = float(arguments["start_time_seconds"])
     end = float(arguments["end_time_seconds"])
@@ -432,6 +432,7 @@ def _retime_segment(context, arguments):
     context.session.apply_ai(
         ApplyTimelineEditPlan(plan),
         affected_entities=affected,
+        allow_user_override=allow_user_override,
     )
     _remap_timeline_metadata(
         metadata,

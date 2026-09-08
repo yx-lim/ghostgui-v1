@@ -237,5 +237,57 @@ class HoldPoseTests(unittest.TestCase):
         self.assertTrue(session.can_accept)
 
 
+class RetimeIntervalTests(unittest.TestCase):
+    def test_duration_scale_reuses_atomic_timeline_retiming(self):
+        committed = ProjectDocument(
+            "g1",
+            timeline_duration=1.0,
+            qpos_timeline=Timeline(),
+        )
+        committed.trajectory.add_frame(
+            TargetFrame(time=0.0, frame_name="pelvis", z=0.8)
+        )
+        committed.trajectory.add_frame(
+            TargetFrame(time=1.0, frame_name="pelvis", z=0.9)
+        )
+        store = InMemoryMotionMetadataStore()
+        metadata = MotionMetadataService(store, TimestampMotionIdentityResolver())
+        metadata.seed_document_as_user_owned(committed)
+        session = AIEditSession(committed, metadata_store=store)
+        motion = _HoldMotion()
+        executor = TrajectorySpecExecutor(
+            build_trajectory_operation_handlers(motion, metadata),
+            motion.validate_motion,
+        )
+        spec = TrajectoryEditSpec(
+            TrajectoryEditMode.EDIT,
+            "Make the interval 50 percent slower.",
+            (TrajectoryOperation(
+                TrajectoryOperationType.RETIME_INTERVAL,
+                {"start_time": 0.0, "end_time": 1.0, "scale": 1.5},
+            ),),
+        )
+
+        result = executor.execute(
+            spec,
+            context=TrajectoryExecutionContext(session, object()),
+        )
+
+        self.assertEqual(
+            session.working_document.qpos_timeline.times(),
+            [0.0, 1.5],
+        )
+        self.assertEqual(
+            [frame.time for frame in session.working_document.trajectory.frames],
+            [0.0, 1.5],
+        )
+        self.assertAlmostEqual(session.working_document.timeline_duration, 1.5)
+        self.assertAlmostEqual(
+            result.operations[0].output["duration_scale"],
+            1.5,
+        )
+        self.assertTrue(session.can_accept)
+
+
 if __name__ == "__main__":
     unittest.main()
