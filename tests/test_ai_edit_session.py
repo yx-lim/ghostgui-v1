@@ -90,6 +90,7 @@ class AIEditSessionTests(unittest.TestCase):
             [record.author for record in session.edits],
             [EditAuthor.AI, EditAuthor.USER],
         )
+        self.assertFalse(session.current_revision_validated)
         with self.assertRaisesRegex(AIEditSessionError, "user-authored"):
             session.apply_ai(
                 UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.6)),
@@ -132,6 +133,7 @@ class AIEditSessionTests(unittest.TestCase):
             affected_entities=(reference,),
         )
         session.working_document.qpos_timeline.set_state(0.0, [2.0, 3.0])
+        session.mark_current_revision_validated()
 
         result = session.accept(committed_controller)
 
@@ -156,6 +158,7 @@ class AIEditSessionTests(unittest.TestCase):
             affected_entities=(reference,),
             allow_user_override=True,
         )
+        session.mark_current_revision_validated()
 
         def fail_checkpoint():
             raise RuntimeError("history unavailable")
@@ -188,6 +191,7 @@ class AIEditSessionTests(unittest.TestCase):
         session.apply_ai(
             UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.7))
         )
+        session.mark_current_revision_validated()
         changed = []
         events = EditorEventBus()
         events.subscribe(DocumentChanged, changed.append)
@@ -200,6 +204,21 @@ class AIEditSessionTests(unittest.TestCase):
         self.assertEqual(committed.revision, 0)
         self.assertEqual(changed, [])
         self.assertEqual(session.state, AIEditSessionState.STAGED)
+
+    def test_accept_rejects_unvalidated_current_working_revision(self):
+        committed = _document()
+        session = AIEditSession(committed)
+        session.apply_ai(
+            UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.7))
+        )
+
+        self.assertEqual(session.state, AIEditSessionState.STAGED)
+        self.assertFalse(session.can_accept)
+        with self.assertRaisesRegex(AIEditSessionError, "passed validation"):
+            session.accept(EditorController(committed))
+
+        self.assertEqual(committed.trajectory.frames[0].z, 0.9)
+        self.assertEqual(committed.revision, 0)
 
     def test_reject_discards_working_copy_and_metadata(self):
         committed = _document()

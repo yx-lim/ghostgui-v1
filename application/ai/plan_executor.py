@@ -153,6 +153,7 @@ class PlanExecutor:
         _raise_if_cancelled(cancellation_token)
         validation = None
         if context.session.has_changes:
+            context.session.invalidate_validation()
             report_progress(
                 progress_callback,
                 AIProgressEvent(AIProgressStage.VALIDATION, repair=repair),
@@ -163,6 +164,8 @@ class PlanExecutor:
             )
             if not isinstance(validation, dict) or "valid" not in validation:
                 raise PlanExecutionError("motion validation returned an invalid result")
+            if validation["valid"] is True:
+                context.session.mark_current_revision_validated()
         return PlanExecutionResult(plan, tuple(results), validation)
 
 

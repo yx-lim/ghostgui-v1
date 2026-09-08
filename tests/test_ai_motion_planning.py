@@ -6,7 +6,12 @@ import asyncio
 import json
 import unittest
 
-from application.ai.edit_session import AIEditSession, AIEditSessionState
+from application.ai.edit_session import (
+    AIEditSession,
+    AIEditSessionError,
+    AIEditSessionState,
+)
+from application.ai.errors import ProviderCancelledError
 from application.ai.metadata import (
     InMemoryMotionMetadataStore,
     MotionMetadataService,
@@ -36,6 +41,7 @@ from application.ai.semantic_tools import (
 from application.ai.text_planner import TextMotionWorkflow
 from application.ai.tool_registry import ToolCategory, ToolSpec
 from application.editor_commands import UpdateKeyframe
+from application.editor_controller import EditorController
 from core.trajectory import TargetFrame
 from gui.ai_assistant_controller import AIAssistantController
 from tests.test_ai_semantic_tools import (
@@ -278,6 +284,29 @@ class PlanExecutorTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             other.restore_checkpoint(session.checkpoint())
 
+    def test_cancellation_after_candidate_mutation_keeps_accept_disabled(self):
+        committed, session, context, tools, _delegate, _provider = _setup()
+
+        class CancelAfterFirstCheck:
+            checks = 0
+
+            @property
+            def cancellation_requested(self):
+                self.checks += 1
+                return self.checks > 1
+
+        with self.assertRaises(ProviderCancelledError):
+            PlanExecutor(tools).execute(
+                _plan(_ensure_operation(0.5)),
+                context=context,
+                cancellation_token=CancelAfterFirstCheck(),
+            )
+
+        self.assertEqual(session.state, AIEditSessionState.STAGED)
+        self.assertFalse(session.can_accept)
+        with self.assertRaisesRegex(AIEditSessionError, "passed validation"):
+            session.accept(EditorController(committed))
+
 
 class TextMotionWorkflowTests(unittest.IsolatedAsyncioTestCase):
     async def test_progress_tracks_local_operations_without_extra_requests(self):
@@ -444,7 +473,7 @@ class TextMotionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         response = ProviderResponse(text=json.dumps(_payload([
             _logical_operation(),
         ])))
-        _committed, _session, context, tools, _delegate, provider = _setup(
+        committed, session, context, tools, _delegate, provider = _setup(
             [response],
             motion=_InvalidMotion(),
         )
@@ -456,6 +485,42 @@ class TextMotionWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 context=context,
             )
         self.assertEqual(provider.counter.counts.total, 1)
+        self.assertEqual(session.state, AIEditSessionState.STAGED)
+        self.assertFalse(session.can_accept)
+        with self.assertRaisesRegex(AIEditSessionError, "passed validation"):
+            session.accept(EditorController(committed))
+
+    def test_stale_ready_session_is_rebuilt_before_retry(self):
+        committed = _document()
+        stale_session = AIEditSession(committed)
+        EditorController(committed).execute(
+            UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.95))
+        )
+
+        class Host:
+            document = committed
+            baseline_refreshes = 0
+
+            def _refresh_history_baseline(self):
+                self.baseline_refreshes += 1
+
+        controller = AIAssistantController.__new__(AIAssistantController)
+        controller.host = Host()
+        controller.session = stale_session
+        controller.active_handle = None
+        controller.metadata_store = InMemoryMotionMetadataStore()
+        controller._session_goal = ""
+        requests = []
+        controller._start_request = lambda instruction, refinement: requests.append(
+            (instruction, refinement)
+        )
+
+        controller.start_edit("Retry the edit.")
+
+        self.assertIsNot(controller.session, stale_session)
+        self.assertTrue(controller.session.committed_revision_current)
+        self.assertEqual(controller.host.baseline_refreshes, 1)
+        self.assertEqual(requests, [("Retry the edit.", False)])
 
     async def test_controller_default_text_path_uses_new_workflow(self):
         response = ProviderResponse(text=json.dumps(_payload([

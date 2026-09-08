@@ -51,6 +51,8 @@ class AIEditSessionCheckpoint:
     metadata: dict[MotionEntityRef, MotionEditMetadata]
     edits: tuple[SessionEditRecord, ...]
     state: AIEditSessionState
+    working_revision: int
+    validated_revision: int | None
     owner_token: object
 
 
@@ -72,6 +74,7 @@ class AIEditSession:
         self._state = AIEditSessionState.READY
         self._state_before_request = AIEditSessionState.READY
         self._edits: list[SessionEditRecord] = []
+        self._validated_revision: int | None = None
         self._checkpoint_token = object()
 
     @property
@@ -90,6 +93,31 @@ class AIEditSession:
     def provider_request_active(self) -> bool:
         return self._state is AIEditSessionState.REQUESTING
 
+    @property
+    def working_revision(self) -> int:
+        return int(self.working_document.revision)
+
+    @property
+    def validated_revision(self) -> int | None:
+        return self._validated_revision
+
+    @property
+    def current_revision_validated(self) -> bool:
+        return self._validated_revision == self.working_revision
+
+    @property
+    def committed_revision_current(self) -> bool:
+        return self._committed_document.revision == self._base_revision
+
+    @property
+    def can_accept(self) -> bool:
+        return (
+            self._state is AIEditSessionState.STAGED
+            and self.has_changes
+            and self.current_revision_validated
+            and self.committed_revision_current
+        )
+
     def checkpoint(self) -> AIEditSessionCheckpoint:
         """Capture the working copy without exposing its identity strategy."""
 
@@ -99,6 +127,8 @@ class AIEditSession:
             metadata=dict(self.metadata.snapshot()),
             edits=tuple(self._edits),
             state=self._state,
+            working_revision=self.working_revision,
+            validated_revision=self._validated_revision,
             owner_token=self._checkpoint_token,
         )
 
@@ -115,6 +145,23 @@ class AIEditSession:
         self.metadata.replace(checkpoint.metadata)
         self._edits = list(checkpoint.edits)
         self._state = checkpoint.state
+        self._validated_revision = (
+            self.working_revision
+            if checkpoint.validated_revision == checkpoint.working_revision
+            else None
+        )
+
+    def invalidate_validation(self) -> None:
+        """Prevent acceptance until the current working revision validates."""
+
+        self._require_state(AIEditSessionState.READY, AIEditSessionState.STAGED)
+        self._validated_revision = None
+
+    def mark_current_revision_validated(self) -> None:
+        """Record successful validation of exactly the current working copy."""
+
+        self._require_state(AIEditSessionState.READY, AIEditSessionState.STAGED)
+        self._validated_revision = self.working_revision
 
     def begin_provider_request(self) -> None:
         self._require_state(AIEditSessionState.READY, AIEditSessionState.STAGED)
@@ -211,6 +258,10 @@ class AIEditSession:
             )
         if not self.has_changes:
             raise AIEditSessionError("cannot accept an AI session with no motion changes")
+        if not self.current_revision_validated:
+            raise AIEditSessionError(
+                "cannot accept an AI working copy that has not passed validation"
+            )
         before_motion = capture_motion_state(self._committed_document)
         before_metadata = dict(self._committed_metadata.snapshot())
         before_revision = self._committed_document.revision
@@ -252,6 +303,7 @@ class AIEditSession:
     ) -> CommandResult:
         result = self.controller.execute(command)
         if result.changed:
+            self._validated_revision = None
             for reference in affected_entities:
                 self.metadata.record(reference, author)
             self._edits.append(

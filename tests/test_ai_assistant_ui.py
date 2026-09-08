@@ -38,12 +38,18 @@ class AIAssistantPanelTests(unittest.TestCase):
         self.assertFalse(self.panel.cancel_button.isHidden())
         self.assertFalse(self.panel.prompt_input.isEnabled())
 
-        self.panel.show_proposal("Done", ("Modified 2 Keyframes",))
+        self.panel.show_proposal(
+            "Done",
+            ("Modified 2 Keyframes",),
+            accept_permitted=True,
+        )
         self.assertEqual(self.panel.state, AIAssistantPanelState.STAGED)
         self.assertTrue(self.panel.accept_button.isEnabled())
         self.assertTrue(self.panel.visual_refine_button.isEnabled())
         self.assertTrue(self.panel.visual_verify_button.isEnabled())
         self.assertEqual(self.panel.proposal_list.item(0).text(), "Modified 2 Keyframes")
+        self.panel.set_accept_permitted(False)
+        self.assertFalse(self.panel.accept_button.isEnabled())
         self.panel.preview_button.click()
         self.assertEqual(previews, [True])
 
@@ -78,7 +84,11 @@ class AIAssistantPanelTests(unittest.TestCase):
         self.panel.submit_button.click()
         self.assertEqual(submitted, ["lower the pelvis"])
 
-        self.panel.show_proposal("Done", ("Moved pelvis",))
+        self.panel.show_proposal(
+            "Done",
+            ("Moved pelvis",),
+            accept_permitted=True,
+        )
         self.panel.prompt_input.setPlainText("  make it subtler  ")
         self.panel.submit_button.click()
         self.assertEqual(refined, ["make it subtler"])
@@ -120,7 +130,11 @@ class AIAssistantPanelTests(unittest.TestCase):
         self.panel.visual_verify_requested.connect(verifications.append)
         self.assertFalse(self.panel.visual_verify_button.isEnabled())
 
-        self.panel.show_proposal("Done", ("Moved pelvis",))
+        self.panel.show_proposal(
+            "Done",
+            ("Moved pelvis",),
+            accept_permitted=True,
+        )
         self.panel.prompt_input.setPlainText("  check the original goal  ")
         self.panel.visual_verify_button.click()
 

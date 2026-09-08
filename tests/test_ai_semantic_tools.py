@@ -318,6 +318,7 @@ class SemanticToolTests(unittest.TestCase):
             context=context,
         )
 
+        session.mark_current_revision_validated()
         accepted = session.accept(EditorController(committed))
 
         frame = next(

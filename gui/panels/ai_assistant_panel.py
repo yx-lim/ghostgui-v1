@@ -46,6 +46,7 @@ class AIAssistantPanel(QWidget):
         self.setObjectName("aiAssistantPanel")
         self.setMinimumWidth(0)
         self._state = AIAssistantPanelState.READY
+        self._accept_permitted = False
         self.progress_received.connect(
             self.show_progress,
             Qt.ConnectionType.QueuedConnection,
@@ -183,11 +184,20 @@ class AIAssistantPanel(QWidget):
         self.critique_button.setEnabled(not running)
         self.cancel_button.setVisible(running)
         self.preview_button.setEnabled(staged)
-        self.accept_button.setEnabled(staged)
+        self.accept_button.setEnabled(staged and self._accept_permitted)
         self.reject_button.setEnabled(staged)
         self.refine_button.setEnabled(staged)
         self.visual_refine_button.setEnabled(staged)
         self.visual_verify_button.setEnabled(staged)
+
+    def set_accept_permitted(self, permitted: bool) -> None:
+        """Reflect application-layer validation without owning its policy."""
+
+        self._accept_permitted = bool(permitted)
+        self.accept_button.setEnabled(
+            self._state is AIAssistantPanelState.STAGED
+            and self._accept_permitted
+        )
 
     def begin_request(
         self,
@@ -218,7 +228,13 @@ class AIAssistantPanel(QWidget):
         ):
             self.response_label.setText(event.message)
 
-    def show_proposal(self, response: str, changes: tuple[str, ...]) -> None:
+    def show_proposal(
+        self,
+        response: str,
+        changes: tuple[str, ...],
+        *,
+        accept_permitted: bool = False,
+    ) -> None:
         self.response_label.setText(response.strip() or "AI edit staged for review.")
         self.proposal_heading.setText("Proposed changes")
         self.proposal_list.clear()
@@ -226,6 +242,7 @@ class AIAssistantPanel(QWidget):
         self.proposal_heading.show()
         self.proposal_list.show()
         self.prompt_input.clear()
+        self._accept_permitted = bool(accept_permitted)
         self.set_state(AIAssistantPanelState.STAGED)
 
     def show_critique(

@@ -298,6 +298,7 @@ class GhostGUIAgent:
     def _validate_if_needed(self, context):
         if not self.auto_validate or not context.session.has_changes:
             return None
+        context.session.invalidate_validation()
         result = _json_value(
             self.tools.execute("validate_motion", {}, context=context),
             max_characters=self.limits.max_tool_result_characters,
@@ -309,6 +310,7 @@ class GhostGUIAgent:
                 "staged motion structural/kinematic validation failed: "
                 f"{detail}"
             )
+        context.session.mark_current_revision_validated()
         return result
 
     @staticmethod

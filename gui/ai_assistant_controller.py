@@ -132,7 +132,10 @@ class AIAssistantController:
         if self.session is None or self.session.state in {
             AIEditSessionState.ACCEPTED,
             AIEditSessionState.REJECTED,
-        }:
+        } or (
+            self.session.state is AIEditSessionState.READY
+            and not self.session.committed_revision_current
+        ):
             self.host._refresh_history_baseline()
             self.session = AIEditSession(
                 self.host.document,
@@ -237,6 +240,7 @@ class AIAssistantController:
         self.panel.show_proposal(
             result.text,
             lines or ("No visual motion change was needed",),
+            accept_permitted=self.session.can_accept,
         )
         self._session_goal = self._visual_refinement_goal
         self._clear_visual_refinement()
@@ -641,7 +645,11 @@ class AIAssistantController:
         self.active_handle = None
         changes = self._proposal_lines(result)
         if self.session_staged:
-            self.panel.show_proposal(result.text, changes)
+            self.panel.show_proposal(
+                result.text,
+                changes,
+                accept_permitted=self.session.can_accept,
+            )
             self.preview()
         else:
             self.panel.reset_session(
@@ -679,6 +687,7 @@ class AIAssistantController:
     def preview(self) -> None:
         if not self.session_staged:
             return
+        self.panel.set_accept_permitted(self.session.can_accept)
         viewer = self.host.viewer_3d
         if viewer.preview_state is None:
             self.panel.show_error(
