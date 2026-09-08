@@ -68,6 +68,11 @@ def build_trajectory_operation_handlers(motion_service, metadata_service):
                 operation, context, motion_service, metadata_service
             )
         ),
+        TrajectoryOperationType.SET_LOGICAL_FRAME_TARGET: (
+            lambda operation, context: _set_logical_frame_target(
+                operation, context, motion_service, metadata_service
+            )
+        ),
         TrajectoryOperationType.LOCK_END_EFFECTOR: (
             lambda operation, context: _lock_end_effector(
                 operation, context, motion_service, metadata_service
@@ -394,6 +399,41 @@ def _set_end_effector_target(operation, context, motion, metadata):
     )
 
 
+def _set_logical_frame_target(operation, context, motion, metadata):
+    arguments = operation.arguments
+    logical_frame = arguments["logical_frame"]
+    if logical_frame not in motion.logical_frames:
+        raise TrajectoryOperationError(f"unknown logical frame: {logical_frame}")
+    mode = "delta" if arguments["mode"] == "relative" else "absolute"
+    times = _interval_keyframe_times(
+        context.session.working_document,
+        float(arguments["start_time"]),
+        float(arguments["end_time"]),
+    )
+    return _apply_logical_frame_targets(
+        context,
+        motion,
+        metadata,
+        targets={
+            logical_frame: (
+                None
+                if arguments["position_m"] is None
+                else tuple(arguments["position_m"])
+            ),
+        },
+        orientations={
+            logical_frame: (
+                None
+                if arguments["orientation_rpy_rad"] is None
+                else tuple(arguments["orientation_rpy_rad"])
+            ),
+        },
+        times=times,
+        mode=mode,
+        operation_name="set_logical_frame_target",
+    )
+
+
 def _lock_end_effector(operation, context, motion, metadata):
     arguments = operation.arguments
     names = tuple(arguments["end_effectors"])
@@ -473,6 +513,15 @@ def _apply_logical_frame_targets(
     for time in times:
         solved_names = []
         for name, position in targets.items():
+            if position is None:
+                if mode == "delta":
+                    position = (0.0, 0.0, 0.0)
+                else:
+                    qpos = candidate.qpos_timeline.sample_state(time)
+                    state = motion.adapter.create_state()
+                    state.set_qpos(qpos)
+                    kind, object_name = motion.adapter.logical_frame_bindings[name]
+                    position, _quaternion = state.get_body_pose(object_name, kind)
             solved = motion.solve_logical_frame_target(
                 candidate,
                 logical_frame=name,

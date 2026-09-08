@@ -83,6 +83,18 @@ class TrajectoryEditSpecTests(unittest.TestCase):
                 "retime_interval",
                 {"start_time": 2.0, "end_time": 3.0, "scale": 1.5},
             ),
+            (
+                "edit",
+                "set_logical_frame_target",
+                {
+                    "logical_frame": "torso",
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    "mode": "relative",
+                    "position_m": None,
+                    "orientation_rpy_rad": [0.0, 0.1, 0.0],
+                },
+            ),
             ("generate", "sparse_keyframes", _sparse_keyframes()),
         )
 
@@ -113,6 +125,18 @@ class TrajectoryEditSpecTests(unittest.TestCase):
                 {"start_time": 0.0, "end_time": 1.0, "translation_m": [0, 0, float("nan")]},
             ),
             _wire("edit", "sparse_keyframes", _sparse_keyframes()),
+            _wire(
+                "edit",
+                "set_logical_frame_target",
+                {
+                    "logical_frame": "torso",
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    "mode": "relative",
+                    "position_m": None,
+                    "orientation_rpy_rad": None,
+                },
+            ),
         )
 
         for text in invalid:

@@ -369,6 +369,7 @@ class _EndEffectorState:
 
 class _EndEffectorMotion:
     end_effectors = ("right_hand", "left_hand")
+    logical_frames = ("right_hand", "left_hand", "torso")
     joint_names = ()
     joint_groups = {}
 
@@ -379,6 +380,7 @@ class _EndEffectorMotion:
             logical_frame_bindings={
                 "right_hand": ("site", "right_hand_site"),
                 "left_hand": ("site", "left_hand_site"),
+                "torso": ("body", "torso_site"),
             },
         )
 
@@ -459,6 +461,25 @@ class EndEffectorOperationTests(unittest.TestCase):
         self.assertEqual([call["mode"] for call in motion.calls], ["absolute", "absolute"])
         for call in motion.calls:
             np.testing.assert_allclose(call["position_m"], [1.5, 0.1, 0.85])
+
+    def test_torso_orientation_target_uses_general_logical_frame_ik(self):
+        _committed, _session, motion = self._execute(TrajectoryOperation(
+            TrajectoryOperationType.SET_LOGICAL_FRAME_TARGET,
+            {
+                "logical_frame": "torso",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "mode": "relative",
+                "position_m": None,
+                "orientation_rpy_rad": [0.0, 0.1, 0.0],
+            },
+        ))
+
+        self.assertEqual([call["logical_frame"] for call in motion.calls], ["torso", "torso"])
+        self.assertEqual([call["mode"] for call in motion.calls], ["delta", "delta"])
+        for call in motion.calls:
+            self.assertEqual(call["position_m"], (0.0, 0.0, 0.0))
+            self.assertEqual(call["orientation_rpy_rad"], (0.0, 0.1, 0.0))
 
 
 class _GenerationMotion(_EndEffectorMotion):

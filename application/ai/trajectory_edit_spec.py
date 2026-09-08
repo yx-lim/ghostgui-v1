@@ -30,6 +30,7 @@ class TrajectoryOperationType(str, Enum):
     SET_JOINT_TARGET = "set_joint_target"
     SET_JOINT_GROUP_TARGET = "set_joint_group_target"
     SET_END_EFFECTOR_TARGET = "set_end_effector_target"
+    SET_LOGICAL_FRAME_TARGET = "set_logical_frame_target"
     LOCK_END_EFFECTOR = "lock_end_effector"
     SPARSE_KEYFRAMES = "sparse_keyframes"
 
@@ -154,6 +155,13 @@ def trajectory_operation_argument_contracts() -> dict[str, Any]:
             "mode": "absolute|relative",
             "position_m": "[x, y, z]",
         },
+        "set_logical_frame_target": {
+            "logical_frame": "named body/logical frame such as pelvis or torso",
+            **time_scope,
+            "mode": "absolute|relative",
+            "position_m": "nullable [x, y, z]",
+            "orientation_rpy_rad": "nullable [roll, pitch, yaw]",
+        },
         "lock_end_effector": {
             "end_effectors": "non-empty unique names",
             "source_time": "finite seconds >= 0",
@@ -209,6 +217,7 @@ def _validate_arguments(operation_type: TrajectoryOperationType, values: dict[st
         TrajectoryOperationType.SET_JOINT_TARGET: _validate_joint,
         TrajectoryOperationType.SET_JOINT_GROUP_TARGET: _validate_joint_group,
         TrajectoryOperationType.SET_END_EFFECTOR_TARGET: _validate_end_effector,
+        TrajectoryOperationType.SET_LOGICAL_FRAME_TARGET: _validate_logical_frame,
         TrajectoryOperationType.LOCK_END_EFFECTOR: _validate_lock,
         TrajectoryOperationType.SPARSE_KEYFRAMES: _validate_sparse_keyframes,
     }
@@ -298,6 +307,27 @@ def _validate_end_effector(values):
     if values["mode"] not in {"absolute", "relative"}:
         raise ValueError("End Effector target mode is invalid")
     _vector(values["position_m"], "position_m")
+
+
+def _validate_logical_frame(values):
+    _exact_fields(values, (
+        "logical_frame",
+        "start_time",
+        "end_time",
+        "mode",
+        "position_m",
+        "orientation_rpy_rad",
+    ))
+    _name(values["logical_frame"], "logical_frame")
+    _time_scope(values)
+    if values["mode"] not in {"absolute", "relative"}:
+        raise ValueError("logical frame target mode is invalid")
+    if values["position_m"] is not None:
+        _vector(values["position_m"], "position_m")
+    if values["orientation_rpy_rad"] is not None:
+        _vector(values["orientation_rpy_rad"], "orientation_rpy_rad")
+    if values["position_m"] is None and values["orientation_rpy_rad"] is None:
+        raise ValueError("logical frame target requires position or orientation")
 
 
 def _validate_lock(values):
