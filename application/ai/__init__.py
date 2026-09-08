@@ -55,6 +55,7 @@ from application.ai.edit_session import (
     AIEditSessionState,
     SessionEditRecord,
 )
+from application.ai.diagnostics import MotionAssistantDiagnostics
 from application.ai.metadata import (
     InMemoryMotionMetadataStore,
     MotionEditMetadata,
@@ -271,6 +272,7 @@ __all__ = [
     "MotionEditMetadata",
     "MotionEditPlan",
     "MotionAssistantContextBuilder",
+    "MotionAssistantDiagnostics",
     "MOTION_ASSISTANT_SYSTEM_PROMPT",
     "MAX_SPARSE_KEYFRAMES",
     "MAX_TRAJECTORY_OPERATIONS",

@@ -76,6 +76,7 @@ class ProviderFingerprintTests(unittest.TestCase):
             ("anthropic", request),
             ("gemini", _request(model="model-b")),
             ("gemini", _request(prompt="different context")),
+            ("gemini", replace(request, temperature=0.0)),
             ("gemini", replace(
                 request,
                 tools=(ToolDefinition(

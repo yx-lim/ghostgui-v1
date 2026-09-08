@@ -285,6 +285,7 @@ def provider_request_fingerprint(provider_name: str, request: ProviderRequest) -
             None if request.response_schema is None else dict(request.response_schema)
         ),
         "max_output_tokens": request.max_output_tokens,
+        "temperature": request.temperature,
     }
     try:
         encoded = json.dumps(

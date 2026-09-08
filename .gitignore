@@ -80,3 +80,4 @@ outputs/
 /logs/
 *.log
 MUJOCO_LOG.TXT
+/.ghostgui-ai-debug/
