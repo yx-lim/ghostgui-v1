@@ -53,6 +53,7 @@ class AIEditSessionCheckpoint:
     state: AIEditSessionState
     working_revision: int
     validated_revision: int | None
+    manual_priority_entities: frozenset[MotionEntityRef]
     owner_token: object
 
 
@@ -75,6 +76,7 @@ class AIEditSession:
         self._state_before_request = AIEditSessionState.READY
         self._edits: list[SessionEditRecord] = []
         self._validated_revision: int | None = None
+        self._manual_priority_entities: set[MotionEntityRef] = set()
         self._checkpoint_token = object()
 
     @property
@@ -129,6 +131,7 @@ class AIEditSession:
             state=self._state,
             working_revision=self.working_revision,
             validated_revision=self._validated_revision,
+            manual_priority_entities=frozenset(self._manual_priority_entities),
             owner_token=self._checkpoint_token,
         )
 
@@ -144,6 +147,7 @@ class AIEditSession:
         self.controller.execute(ReplaceMotionState(checkpoint.motion_state))
         self.metadata.replace(checkpoint.metadata)
         self._edits = list(checkpoint.edits)
+        self._manual_priority_entities = set(checkpoint.manual_priority_entities)
         self._state = checkpoint.state
         self._validated_revision = (
             self.working_revision
@@ -191,7 +195,7 @@ class AIEditSession:
         blocked = tuple(
             reference
             for reference in affected_entities
-            if (
+            if reference in self._manual_priority_entities or (
                 self.metadata.get(reference) is not None
                 and not self.metadata.permits_ai_edit(
                     reference,
@@ -304,6 +308,8 @@ class AIEditSession:
         result = self.controller.execute(command)
         if result.changed:
             self._validated_revision = None
+            if author is EditAuthor.USER:
+                self._manual_priority_entities.update(affected_entities)
             for reference in affected_entities:
                 self.metadata.record(reference, author)
             self._edits.append(

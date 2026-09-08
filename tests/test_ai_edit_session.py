@@ -98,6 +98,49 @@ class AIEditSessionTests(unittest.TestCase):
             )
         self.assertEqual(session.working_document.trajectory.frames[0].z, 0.75)
 
+    def test_baseline_override_does_not_override_in_session_manual_correction(self):
+        session = AIEditSession(_document())
+        reference = MotionEntityRef("pelvis-keyframe")
+        session.metadata.record(reference, EditAuthor.USER)
+        session.apply_ai(
+            UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.8)),
+            affected_entities=(reference,),
+            allow_user_override=True,
+        )
+        session.apply_manual(
+            UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.75)),
+            affected_entities=(reference,),
+        )
+
+        with self.assertRaisesRegex(AIEditSessionError, "user-authored"):
+            session.apply_ai(
+                UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.6)),
+                affected_entities=(reference,),
+                allow_user_override=True,
+            )
+        self.assertEqual(session.working_document.trajectory.frames[0].z, 0.75)
+
+    def test_checkpoint_restores_manual_priority_boundary(self):
+        session = AIEditSession(_document())
+        reference = MotionEntityRef("pelvis-keyframe")
+        session.metadata.record(reference, EditAuthor.AI)
+        checkpoint = session.checkpoint()
+        session.apply_ai(
+            UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.8)),
+            affected_entities=(reference,),
+        )
+        session.apply_manual(
+            UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.75)),
+            affected_entities=(reference,),
+        )
+        session.restore_checkpoint(checkpoint)
+
+        session.apply_ai(
+            UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.7)),
+            affected_entities=(reference,),
+        )
+        self.assertEqual(session.working_document.trajectory.frames[0].z, 0.7)
+
     def test_refine_request_keeps_manually_modified_working_copy(self):
         session = AIEditSession(_document())
         session.apply_ai(
