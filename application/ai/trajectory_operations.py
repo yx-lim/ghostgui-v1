@@ -12,6 +12,7 @@ from application.ai.motion_state import (
     capture_motion_state,
     detached_document,
 )
+from application.ai.motion_services import JointAngleEditResult
 from application.ai.trajectory_edit_spec import (
     TrajectoryOperation,
     TrajectoryOperationType,
@@ -29,6 +30,14 @@ def build_trajectory_operation_handlers(motion_service, metadata_service):
     return {
         TrajectoryOperationType.ROOT_OFFSET: (
             lambda operation, context: _root_offset(
+                operation,
+                context,
+                motion_service,
+                metadata_service,
+            )
+        ),
+        TrajectoryOperationType.HOLD_POSE: (
+            lambda operation, context: _hold_pose(
                 operation,
                 context,
                 motion_service,
@@ -111,3 +120,160 @@ def _root_offset(
         "affected_qpos_keyframes": len(state_times),
         "affected_logical_keyframes": len(frames),
     }
+
+
+def _hold_pose(
+    operation: TrajectoryOperation,
+    context: TrajectoryExecutionContext,
+    motion,
+    metadata: MotionMetadataService,
+):
+    document = context.session.working_document
+    timeline = document.qpos_timeline
+    if timeline is None:
+        raise TrajectoryOperationError("hold_pose requires an editable qpos timeline")
+    arguments = operation.arguments
+    source_time = float(arguments["source_time"])
+    start = float(arguments["start_time"])
+    end = float(arguments["end_time"])
+    if max(source_time, end) > document.timeline_duration + 1e-9:
+        raise TrajectoryOperationError("hold_pose time exceeds the motion duration")
+    scope = arguments["body_scope"]
+    body_name = arguments["body_name"]
+    if scope == "end_effector":
+        raise TrajectoryOperationError(
+            "End Effector holds require lock_end_effector"
+        )
+
+    source_qpos = timeline.sample_state(source_time)
+    if source_qpos is None:
+        raise TrajectoryOperationError("hold_pose source state is unavailable")
+    names = _held_joint_names(scope, body_name, motion)
+    source_state = motion.adapter.create_state()
+    source_state.set_qpos(source_qpos)
+    values = {
+        name: source_state.get_joint_value(name)
+        for name in names
+    }
+    existing_times = tuple(float(time) for time in timeline.times())
+    target_times = tuple(sorted({
+        start,
+        end,
+        *(
+            time for time in existing_times
+            if start - 1e-9 <= time <= end + 1e-9
+        ),
+    }))
+    candidate = detached_document(document)
+    working_metadata = MotionMetadataService(
+        context.session.metadata,
+        metadata.resolver,
+    )
+    protected_frames = _protected_logical_frames(document, working_metadata)
+    affected = []
+    created = []
+    for time in target_times:
+        existed = any(abs(time - value) <= 1e-9 for value in existing_times)
+        qpos_reference = working_metadata.reference_for_qpos_keyframe(time)
+        affected.append(qpos_reference)
+        if not existed:
+            created.append(qpos_reference)
+        if scope == "whole_body":
+            qpos = np.asarray(source_qpos, dtype=float).copy()
+            changed_frames = _synchronize_logical_frames(candidate, motion, time, qpos)
+        else:
+            solved = motion.set_joint_angles(
+                candidate,
+                time_seconds=time,
+                values=values,
+                protected_logical_frames=protected_frames,
+            )
+            if not isinstance(solved, JointAngleEditResult):
+                raise TrajectoryOperationError(
+                    "Joint Angle service returned an invalid hold result"
+                )
+            qpos = solved.qpos
+            changed_frames = solved.logical_frames
+            for frame in changed_frames:
+                candidate.trajectory.upsert_frame(frame)
+        candidate.qpos_timeline.set_state(time, qpos)
+        affected.extend(
+            working_metadata.reference_for_keyframe(frame)
+            for frame in changed_frames
+        )
+    result = context.session.apply_ai(
+        ReplaceMotionState(
+            capture_motion_state(candidate),
+            operation="hold_pose",
+        ),
+        affected_entities=tuple(dict.fromkeys(affected)),
+        created_entities=tuple(dict.fromkeys(created)),
+        allow_user_override=True,
+    )
+    if not result.changed:
+        raise TrajectoryOperationError("hold_pose made no motion change")
+    return {
+        "source_time": source_time,
+        "start_time": start,
+        "end_time": end,
+        "body_scope": scope,
+        "body_name": body_name,
+        "held_qpos_keyframes": len(target_times),
+    }
+
+
+def _held_joint_names(scope, body_name, motion):
+    if scope == "whole_body":
+        return tuple(motion.joint_names)
+    if scope == "joint":
+        if body_name not in motion.joint_names:
+            raise TrajectoryOperationError(f"unknown Joint Angle: {body_name}")
+        return (body_name,)
+    if scope == "joint_group":
+        try:
+            names = tuple(motion.joint_groups[body_name])
+        except KeyError as error:
+            raise TrajectoryOperationError(
+                f"unknown Joint Angle group: {body_name}"
+            ) from error
+        if not names:
+            raise TrajectoryOperationError(
+                f"Joint Angle group is empty: {body_name}"
+            )
+        return names
+    raise TrajectoryOperationError(f"unsupported hold_pose scope: {scope}")
+
+
+def _protected_logical_frames(document, metadata):
+    return tuple(sorted({
+        frame.frame_name
+        for frame in document.trajectory.frames
+        if (
+            metadata.metadata_for_keyframe(frame) is not None
+            and metadata.metadata_for_keyframe(frame).protected
+        )
+    }))
+
+
+def _synchronize_logical_frames(document, motion, time, qpos):
+    state = motion.adapter.create_state()
+    state.set_qpos(qpos)
+    changed = []
+    for frame in document.frames_at_time(time):
+        kind, object_name = motion.adapter.logical_frame_bindings[frame.frame_name]
+        position, quaternion = state.get_body_pose(object_name, kind)
+        from core.trajectory import quat_to_rpy
+
+        roll, pitch, yaw = quat_to_rpy(quaternion)
+        updated = replace(
+            frame,
+            x=float(position[0]),
+            y=float(position[1]),
+            z=float(position[2]),
+            roll=float(roll),
+            pitch=float(pitch),
+            yaw=float(yaw),
+        )
+        document.trajectory.upsert_frame(updated)
+        changed.append(updated)
+    return tuple(changed)
