@@ -6,6 +6,7 @@ import asyncio
 import base64
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import replace
 import json
 from typing import Any
 
@@ -59,11 +60,13 @@ class AnthropicProvider:
         client: Any | None = None,
         credential_source: CredentialSource | None = None,
         capabilities: ProviderCapabilities = DEFAULT_ANTHROPIC_CAPABILITIES,
+        temperature_capable_models: frozenset[str] = frozenset(),
         cancellation_poll_seconds: float = 0.05,
     ) -> None:
         if cancellation_poll_seconds <= 0.0:
             raise ValueError("cancellation_poll_seconds must be positive")
         self._capabilities = capabilities
+        self._temperature_capable_models = frozenset(temperature_capable_models)
         self._cancellation_poll_seconds = float(cancellation_poll_seconds)
         self._owns_client = client is None
         if client is None:
@@ -91,12 +94,22 @@ class AnthropicProvider:
     def capabilities(self) -> ProviderCapabilities:
         return self._capabilities
 
+    def supports_temperature_for_model(self, model: str) -> bool:
+        return (
+            self._capabilities.supports_temperature
+            and model in self._temperature_capable_models
+        )
+
     async def generate(
         self,
         request: ProviderRequest,
         cancellation_token: CancellationSignal | None = None,
     ) -> ProviderResponse:
-        validate_provider_request(request, self._capabilities)
+        capabilities = replace(
+            self._capabilities,
+            supports_temperature=self.supports_temperature_for_model(request.model),
+        )
+        validate_provider_request(request, capabilities)
         if _cancelled(cancellation_token):
             raise ProviderCancelledError("Anthropic request was cancelled")
         arguments = _build_anthropic_request(request)

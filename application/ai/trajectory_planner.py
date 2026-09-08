@@ -20,12 +20,17 @@ from application.ai.limits import (
     MAX_MOTION_IMAGES,
     MAX_MOTION_REQUEST_TIMEOUT_SECONDS,
 )
-from application.ai.providers.base import CancellationSignal, LLMProvider
+from application.ai.providers.base import (
+    CancellationSignal,
+    LLMProvider,
+    supports_temperature_for_model,
+)
 from application.ai.schemas import (
     MessageRole,
     MotionFrameImage,
     ProviderMessage,
     ProviderRequest,
+    ProviderResponse,
     Usage,
 )
 from application.ai.trajectory_edit_spec import (
@@ -76,7 +81,8 @@ class TrajectoryPlanningResult:
     transcript: tuple[ProviderMessage, ...]
     provider_requests: int = 1
     requests: tuple[ProviderRequest, ...] = ()
-    responses: tuple[Any, ...] = ()
+    responses: tuple[ProviderResponse, ...] = ()
+    parser_errors: tuple[str | None, ...] = ()
 
 
 class TrajectoryPlanner:
@@ -144,7 +150,7 @@ class TrajectoryPlanner:
             messages=messages,
             response_schema=trajectory_edit_spec_response_schema(),
             max_output_tokens=self.limits.max_output_tokens,
-            temperature=self._temperature(),
+            temperature=self._temperature(model),
         )
 
         response = await self._request(request, session, cancellation_token)
@@ -168,7 +174,7 @@ class TrajectoryPlanner:
                 messages=repair_messages,
                 response_schema=trajectory_edit_spec_response_schema(),
                 max_output_tokens=self.limits.max_output_tokens,
-                temperature=self._temperature(),
+                temperature=self._temperature(model),
             )
             repair = await self._request(
                 repair_request,
@@ -205,6 +211,7 @@ class TrajectoryPlanner:
                 2,
                 (request, repair_request),
                 (response, repair),
+                (str(initial_error), None),
             )
         return TrajectoryPlanningResult(
             spec,
@@ -213,6 +220,7 @@ class TrajectoryPlanner:
             1,
             (request,),
             (response,),
+            (None,),
         )
 
     async def _request(self, request, session, cancellation_token):
@@ -259,8 +267,8 @@ class TrajectoryPlanner:
             motion_frames=motion_frames,
         ),)
 
-    def _temperature(self):
-        return 0.0 if self.provider.capabilities.supports_temperature else None
+    def _temperature(self, model):
+        return 0.0 if supports_temperature_for_model(self.provider, model) else None
 
 
 def _raise_if_cancelled(token):

@@ -9,6 +9,7 @@ import unittest
 from application.ai.credentials import EnvironmentCredentialSource
 from application.ai.errors import (
     ProviderAuthenticationError,
+    ProviderCapabilityError,
     ProviderCancelledError,
     ProviderConfigurationError,
     ProviderError,
@@ -103,7 +104,11 @@ class AnthropicProviderTests(unittest.IsolatedAsyncioTestCase):
         client = _FakeClient(_response(
             SimpleNamespace(type="text", text='{"ok":true}'),
         ))
-        provider = AnthropicProvider(client=client, cancellation_poll_seconds=0.001)
+        provider = AnthropicProvider(
+            client=client,
+            cancellation_poll_seconds=0.001,
+            temperature_capable_models=frozenset({"claude-temperature-capable"}),
+        )
         frame = MotionFrameImage(
             data=b"png-bytes",
             mime_type="image/png",
@@ -127,6 +132,7 @@ class AnthropicProviderTests(unittest.IsolatedAsyncioTestCase):
         }
 
         result = await provider.generate(_request(
+            model="claude-temperature-capable",
             messages=(
                 ProviderMessage(MessageRole.SYSTEM, text="Stay bounded."),
                 ProviderMessage(
@@ -153,6 +159,15 @@ class AnthropicProviderTests(unittest.IsolatedAsyncioTestCase):
         output_schema = call["output_config"]["format"]["schema"]
         self.assertNotIn("minimum", output_schema["properties"]["score"])
         self.assertEqual(schema["properties"]["score"]["minimum"], 0)
+
+    async def test_sonnet_5_rejects_unsupported_temperature(self):
+        client = _FakeClient(_response(SimpleNamespace(type="text", text="ok")))
+        provider = AnthropicProvider(client=client)
+
+        with self.assertRaisesRegex(ProviderCapabilityError, "temperature"):
+            await provider.generate(_request(temperature=0.0))
+
+        self.assertEqual(client.messages.calls, [])
 
     async def test_converts_tool_history_and_parallel_calls(self):
         raw = _response(

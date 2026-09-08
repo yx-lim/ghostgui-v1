@@ -9,6 +9,7 @@ from application.ai import (
     AIEditSessionState,
     AIProgressCallback,
     AIProgressEvent,
+    AutomaticMotionFrames,
     ConnectionTestCache,
     CompactMotionRunResult,
     CompactMotionWorkflow,
@@ -59,6 +60,33 @@ from application.ai.schemas import (
 from application.editor_events import DocumentChanged
 from gui.ai_frame_capture import RobotViewerFrameRenderer
 from gui.ai_settings_dialog import AISettingsDialog
+
+
+def _capture_automatic_visual_context(
+    document,
+    viewer,
+    capabilities,
+    *,
+    selected_interval,
+    current_time,
+    variant,
+):
+    """Keep normal Apply/Refine usable when only visual setup fails."""
+
+    try:
+        renderer = RobotViewerFrameRenderer(viewer)
+        return capture_automatic_motion_frames(
+            document,
+            renderer,
+            capabilities,
+            selected_interval=selected_interval,
+            current_time=current_time,
+            variant=variant,
+        )
+    except Exception as error:
+        return AutomaticMotionFrames(
+            unavailable_reason=f"visual context unavailable ({type(error).__name__})"
+        )
 
 
 class AIAssistantController:
@@ -587,9 +615,9 @@ class AIAssistantController:
             )
             document = self.session.working_document
             capabilities = self._provider_capabilities(self.provider_name)
-            visual = capture_automatic_motion_frames(
+            visual = _capture_automatic_visual_context(
                 document,
-                RobotViewerFrameRenderer(self.host.viewer_3d),
+                self.host.viewer_3d,
                 capabilities,
                 selected_interval=selection.time_interval,
                 current_time=document.current_time,

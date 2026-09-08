@@ -1,22 +1,140 @@
 """Integration tests for one-shot compact planning and local execution."""
 
 import json
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from application.ai.edit_session import AIEditSession
+from application.ai.diagnostics import MotionAssistantDiagnostics
 from application.ai.metadata import InMemoryMotionMetadataStore, MotionMetadataService, TimestampMotionIdentityResolver
 from application.ai.motion_services import MotionValidationReport
 from application.ai.motion_state import ReplaceMotionState, capture_motion_state
 from application.ai.providers import MockProvider, RequestCountingProvider
-from application.ai.schemas import ProviderResponse
+from application.ai.schemas import ImageVariant, ProviderCapabilities, ProviderResponse
 from application.ai.trajectory_workflow import CompactMotionWorkflow
 from application.project_document import ProjectDocument
 from application.editor_controller import EditorController
 from application.history import HistoryStack
+from gui.ai_assistant_controller import _capture_automatic_visual_context
 from tests.test_ai_trajectory_operations import Timeline, _HoldMotion
 
 
 class CompactMotionWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_successful_repair_persists_both_diagnostic_attempts(self):
+        committed = ProjectDocument("g1", timeline_duration=1.0, qpos_timeline=Timeline())
+        store = InMemoryMotionMetadataStore()
+        metadata = MotionMetadataService(store, TimestampMotionIdentityResolver())
+        metadata.seed_document_as_user_owned(committed)
+        session = AIEditSession(committed, metadata_store=store)
+        valid = {
+            "mode": "edit",
+            "summary": "Raise the robot.",
+            "operations": [{
+                "type": "root_offset",
+                "arguments": json.dumps({
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    "translation_m": [0, 0, 0.05],
+                }),
+            }],
+        }
+        provider = RequestCountingProvider(MockProvider([
+            ProviderResponse(text="malformed"),
+            ProviderResponse(text=json.dumps(valid)),
+        ]))
+        motion = _HoldMotion()
+        motion.adapter.free_joints_by_body = {
+            0: type("Joint", (), {"qpos_address": 0})()
+        }
+        motion.validate_motion = lambda _document: MotionValidationReport(True)
+
+        with tempfile.TemporaryDirectory() as directory:
+            diagnostics = MotionAssistantDiagnostics(
+                enabled=True,
+                directory=directory,
+            )
+            result = await CompactMotionWorkflow(
+                provider,
+                motion,
+                metadata,
+                diagnostics=diagnostics,
+            ).run(
+                "Move the entire robot 5 cm higher.",
+                model="mock",
+                context={"motion": {"working_copy": True}},
+                session=session,
+            )
+            path = next(Path(directory).glob("motion-assistant-*.json"))
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.provider_requests, 2)
+        self.assertEqual(provider.counter.counts.total, 2)
+        self.assertEqual(len(payload["planning_attempts"]), 2)
+        self.assertIsNotNone(payload["planning_attempts"][0]["parser_error"])
+        self.assertIsNone(payload["planning_attempts"][1]["parser_error"])
+        self.assertEqual(
+            payload["planning_attempts"][1]["parsed_spec"]["summary"],
+            "Raise the robot.",
+        )
+
+    async def test_renderer_initialization_failure_falls_back_to_numerical_context(self):
+        committed = ProjectDocument("g1", timeline_duration=1.0, qpos_timeline=Timeline())
+        store = InMemoryMotionMetadataStore()
+        metadata = MotionMetadataService(store, TimestampMotionIdentityResolver())
+        metadata.seed_document_as_user_owned(committed)
+        session = AIEditSession(committed, metadata_store=store)
+        provider = RequestCountingProvider(MockProvider([ProviderResponse(text=json.dumps({
+            "mode": "edit",
+            "summary": "Raise the robot.",
+            "operations": [{
+                "type": "root_offset",
+                "arguments": json.dumps({
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    "translation_m": [0, 0, 0.05],
+                }),
+            }],
+        }))]))
+        capabilities = ProviderCapabilities(
+            supports_tools=False,
+            supports_vision=True,
+            supports_structured_output=True,
+            max_images_per_request=8,
+        )
+        with patch(
+            "gui.ai_assistant_controller.RobotViewerFrameRenderer",
+            side_effect=RuntimeError("renderer unavailable"),
+        ):
+            visual = _capture_automatic_visual_context(
+                committed,
+                object(),
+                capabilities,
+                selected_interval=None,
+                current_time=0.0,
+                variant=ImageVariant.ORIGINAL,
+            )
+        motion = _HoldMotion()
+        motion.adapter.free_joints_by_body = {0: type("Joint", (), {"qpos_address": 0})()}
+        motion.validate_motion = lambda _document: MotionValidationReport(True)
+
+        result = await CompactMotionWorkflow(provider, motion, metadata).run(
+            "Move the entire robot 5 cm higher.",
+            model="mock",
+            context={"motion": {"working_copy": True}},
+            session=session,
+            motion_frames=visual.frames,
+            context_warnings=(visual.unavailable_reason,),
+        )
+
+        self.assertEqual(provider.counter.counts.total, 1)
+        self.assertTrue(session.can_accept)
+        self.assertIn(
+            "Warning: visual context unavailable (RuntimeError)",
+            result.proposal_lines,
+        )
+
     async def test_mock_plan_executes_locally_and_validates_staged_candidate(self):
         committed = ProjectDocument("g1", timeline_duration=1.0, qpos_timeline=Timeline())
         store = InMemoryMotionMetadataStore()

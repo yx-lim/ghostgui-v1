@@ -41,6 +41,17 @@ class LLMProvider(Protocol):
         ...
 
 
+def supports_temperature_for_model(provider: LLMProvider, model: str) -> bool:
+    """Combine provider-wide and optional selected-model temperature support."""
+
+    if not provider.capabilities.supports_temperature:
+        return False
+    model_check = getattr(provider, "supports_temperature_for_model", None)
+    if callable(model_check):
+        return bool(model_check(model))
+    return True
+
+
 def validate_provider_request(
     request: ProviderRequest,
     capabilities: ProviderCapabilities,

@@ -55,31 +55,58 @@ class MotionAssistantDiagnostics:
     ) -> None:
         if not self.enabled:
             return
-        self._payload["planning"] = _sanitize({
-            "provider": provider_name,
-            "model": request.model,
-            "messages": [
-                {
-                    "role": message.role.value,
-                    "text": message.text,
-                    "frames": [
-                        {
-                            "timestamp_seconds": frame.time_seconds,
-                            "variant": frame.variant.value,
-                            "comparison_id": frame.comparison_id,
-                            "mime_type": frame.mime_type,
-                            "content_sha256": hashlib.sha256(frame.data).hexdigest(),
-                        }
-                        for frame in message.motion_frames
-                    ],
-                }
-                for message in request.messages
-            ],
-            "normalized_response": asdict(response),
-            "parsed_spec": asdict(parsed_spec),
-            "token_usage": asdict(response.usage),
-            "latency_seconds": float(latency_seconds),
-        })
+        planning = _planning_payload(
+            provider_name=provider_name,
+            request=request,
+            response=response,
+            parsed_spec=parsed_spec,
+            latency_seconds=latency_seconds,
+        )
+        self._payload["planning"] = _sanitize(planning)
+        self._payload["planning_attempts"] = [_sanitize({
+            "attempt": 1,
+            **planning,
+            "parser_error": None,
+        })]
+
+    def record_planning_attempts(
+        self,
+        *,
+        provider_name: str,
+        requests: tuple[ProviderRequest, ...],
+        responses: tuple[ProviderResponse, ...],
+        parser_errors: tuple[str | None, ...],
+        parsed_spec,
+        latency_seconds: float,
+    ) -> None:
+        if not self.enabled:
+            return
+        if not 1 <= len(requests) <= 2 or not (
+            len(requests) == len(responses) == len(parser_errors)
+        ):
+            raise ValueError("diagnostics require one or two aligned planning attempts")
+        attempts = []
+        for index, (request, response, parser_error) in enumerate(
+            zip(requests, responses, parser_errors),
+            start=1,
+        ):
+            attempts.append(_sanitize({
+                "attempt": index,
+                **_planning_payload(
+                    provider_name=provider_name,
+                    request=request,
+                    response=response,
+                    parsed_spec=(
+                        parsed_spec if index == len(requests) and parser_error is None else None
+                    ),
+                    latency_seconds=(
+                        latency_seconds if index == len(requests) else None
+                    ),
+                ),
+                "parser_error": parser_error,
+            }))
+        self._payload["planning_attempts"] = attempts
+        self._payload["planning"] = attempts[-1]
 
     def record_execution(self, execution_result) -> None:
         if not self.enabled:
@@ -115,6 +142,43 @@ class MotionAssistantDiagnostics:
             if temporary is not None and temporary.exists():
                 temporary.unlink()
         return destination
+
+
+def _planning_payload(
+    *,
+    provider_name,
+    request,
+    response,
+    parsed_spec,
+    latency_seconds,
+):
+    return {
+        "provider": provider_name,
+        "model": request.model,
+        "messages": [
+            {
+                "role": message.role.value,
+                "text": message.text,
+                "frames": [
+                    {
+                        "timestamp_seconds": frame.time_seconds,
+                        "variant": frame.variant.value,
+                        "comparison_id": frame.comparison_id,
+                        "mime_type": frame.mime_type,
+                        "content_sha256": hashlib.sha256(frame.data).hexdigest(),
+                    }
+                    for frame in message.motion_frames
+                ],
+            }
+            for message in request.messages
+        ],
+        "normalized_response": asdict(response),
+        "parsed_spec": None if parsed_spec is None else asdict(parsed_spec),
+        "token_usage": asdict(response.usage),
+        "latency_seconds": (
+            None if latency_seconds is None else float(latency_seconds)
+        ),
+    }
 
 
 def _sanitize(value: Any, *, key: str = "") -> Any:

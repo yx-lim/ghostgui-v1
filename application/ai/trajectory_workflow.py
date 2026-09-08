@@ -108,12 +108,11 @@ class CompactMotionWorkflow:
             cancellation_token=cancellation_token,
         )
         elapsed = monotonic() - started
-        diagnostic_request = planning.requests[-1]
-        diagnostic_response = planning.responses[-1]
-        self.diagnostics.record_planning(
+        self.diagnostics.record_planning_attempts(
             provider_name=self.provider.provider_name,
-            request=diagnostic_request,
-            response=diagnostic_response,
+            requests=planning.requests,
+            responses=planning.responses,
+            parser_errors=planning.parser_errors,
             parsed_spec=planning.spec,
             latency_seconds=elapsed,
         )

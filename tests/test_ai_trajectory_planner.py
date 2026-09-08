@@ -186,6 +186,25 @@ class TrajectoryPlannerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(provider.requests[0].temperature, 0.0)
 
+    async def test_sonnet_5_omits_temperature_despite_provider_capability(self):
+        capabilities = ProviderCapabilities(
+            supports_tools=False,
+            supports_vision=False,
+            supports_structured_output=True,
+            supports_temperature=True,
+        )
+        provider = MockProvider([_response()], capabilities=capabilities)
+        provider.supports_temperature_for_model = lambda model: model != "claude-sonnet-5"
+
+        await TrajectoryPlanner(provider).plan(
+            "Raise the robot.",
+            model="claude-sonnet-5",
+            context={},
+            session=AIEditSession(ProjectDocument("g1")),
+        )
+
+        self.assertIsNone(provider.requests[0].temperature)
+
 
 if __name__ == "__main__":
     unittest.main()

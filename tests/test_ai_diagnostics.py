@@ -63,6 +63,41 @@ class MotionAssistantDiagnosticsTests(unittest.TestCase):
         })
         self.assertEqual(payload["execution"]["authorization"], "[REDACTED]")
 
+    def test_structural_repair_retains_both_bounded_attempts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = MotionAssistantDiagnostics(enabled=True, directory=directory)
+            requests = (
+                ProviderRequest(
+                    model="claude-test",
+                    messages=(ProviderMessage(MessageRole.USER, text="Raise it"),),
+                ),
+                ProviderRequest(
+                    model="claude-test",
+                    messages=(ProviderMessage(MessageRole.USER, text="Repair it"),),
+                ),
+            )
+            responses = (
+                ProviderResponse(text="malformed", usage=Usage(10, 2)),
+                ProviderResponse(text='{"valid":true}', usage=Usage(8, 4)),
+            )
+            recorder.record_planning_attempts(
+                provider_name="anthropic",
+                requests=requests,
+                responses=responses,
+                parser_errors=("invalid JSON", None),
+                parsed_spec=_spec(),
+                latency_seconds=0.5,
+            )
+            payload = json.loads(recorder.write().read_text(encoding="utf-8"))
+
+        attempts = payload["planning_attempts"]
+        self.assertEqual([item["attempt"] for item in attempts], [1, 2])
+        self.assertEqual(attempts[0]["normalized_response"]["text"], "malformed")
+        self.assertEqual(attempts[0]["parser_error"], "invalid JSON")
+        self.assertIsNone(attempts[0]["parsed_spec"])
+        self.assertEqual(attempts[1]["parsed_spec"]["summary"], "Raise robot.")
+        self.assertIsNone(attempts[1]["parser_error"])
+
 
 if __name__ == "__main__":
     unittest.main()
