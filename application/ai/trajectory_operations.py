@@ -52,6 +52,16 @@ def build_trajectory_operation_handlers(motion_service, metadata_service):
                 metadata_service,
             )
         ),
+        TrajectoryOperationType.SET_JOINT_TARGET: (
+            lambda operation, context: _set_joint_target(
+                operation, context, motion_service, metadata_service
+            )
+        ),
+        TrajectoryOperationType.SET_JOINT_GROUP_TARGET: (
+            lambda operation, context: _set_joint_group_target(
+                operation, context, motion_service, metadata_service
+            )
+        ),
     }
 
 
@@ -253,6 +263,96 @@ def _retime_interval(
     return {
         **output,
         "duration_scale": scale,
+    }
+
+
+def _set_joint_target(operation, context, motion, metadata):
+    arguments = operation.arguments
+    return _apply_joint_values(
+        context,
+        motion,
+        metadata,
+        float(arguments["time_seconds"]),
+        {arguments["joint"]: float(arguments["angle_rad"])},
+        "set_joint_target",
+    )
+
+
+def _set_joint_group_target(operation, context, motion, metadata):
+    arguments = operation.arguments
+    group = arguments["joint_group"]
+    if group not in motion.joint_groups:
+        raise TrajectoryOperationError(f"unknown Joint Angle group: {group}")
+    allowed = set(motion.joint_groups[group])
+    values = {
+        item["joint"]: float(item["angle_rad"])
+        for item in arguments["joint_angles_rad"]
+    }
+    unknown = set(values) - allowed
+    if unknown:
+        raise TrajectoryOperationError(
+            f"Joint Angle {sorted(unknown)[0]} is not part of group {group}"
+        )
+    return _apply_joint_values(
+        context,
+        motion,
+        metadata,
+        float(arguments["time_seconds"]),
+        values,
+        "set_joint_group_target",
+    )
+
+
+def _apply_joint_values(context, motion, metadata, time, values, operation_name):
+    document = context.session.working_document
+    if time > document.timeline_duration + 1e-9:
+        raise TrajectoryOperationError("Joint Angle target exceeds the motion duration")
+    timeline = document.qpos_timeline
+    if timeline is None:
+        raise TrajectoryOperationError("Joint Angle target requires a qpos timeline")
+    existing_times = tuple(float(value) for value in timeline.times())
+    existed = any(abs(time - value) <= 1e-9 for value in existing_times)
+    working_metadata = MotionMetadataService(
+        context.session.metadata,
+        metadata.resolver,
+    )
+    solved = motion.set_joint_angles(
+        document,
+        time_seconds=time,
+        values=values,
+        protected_logical_frames=_protected_logical_frames(
+            document,
+            working_metadata,
+        ),
+    )
+    if not isinstance(solved, JointAngleEditResult):
+        raise TrajectoryOperationError(
+            "Joint Angle service returned an invalid target result"
+        )
+    candidate = detached_document(document)
+    for frame in solved.logical_frames:
+        candidate.trajectory.upsert_frame(frame)
+    candidate.qpos_timeline.set_state(time, solved.qpos)
+    qpos_reference = working_metadata.reference_for_qpos_keyframe(time)
+    affected = tuple(
+        working_metadata.reference_for_keyframe(frame)
+        for frame in solved.logical_frames
+    ) + (qpos_reference,)
+    context.session.apply_ai(
+        ReplaceMotionState(
+            capture_motion_state(candidate),
+            operation=operation_name,
+        ),
+        affected_entities=affected,
+        created_entities=() if existed else (qpos_reference,),
+        allow_user_override=True,
+    )
+    return {
+        "time_seconds": time,
+        "joint_angles_rad": dict(values),
+        "updated_logical_frames": [
+            frame.frame_name for frame in solved.logical_frames
+        ],
     }
 
 

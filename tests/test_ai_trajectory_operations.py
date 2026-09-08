@@ -289,5 +289,67 @@ class RetimeIntervalTests(unittest.TestCase):
         self.assertTrue(session.can_accept)
 
 
+class JointTargetTests(unittest.TestCase):
+    def _execute(self, operation):
+        committed = ProjectDocument(
+            "g1",
+            timeline_duration=1.0,
+            qpos_timeline=Timeline(),
+        )
+        committed.qpos_timeline.states[0.0] = np.array(
+            [1, 2, 0.8, 1, 0, 0, 0, 0.1, 0.2], dtype=float
+        )
+        committed.qpos_timeline.states[1.0] = np.array(
+            [2, 3, 0.9, 1, 0, 0, 0, 0.9, 0.6], dtype=float
+        )
+        store = InMemoryMotionMetadataStore()
+        metadata = MotionMetadataService(store, TimestampMotionIdentityResolver())
+        metadata.seed_document_as_user_owned(committed)
+        session = AIEditSession(committed, metadata_store=store)
+        motion = _HoldMotion()
+        executor = TrajectorySpecExecutor(
+            build_trajectory_operation_handlers(motion, metadata),
+            motion.validate_motion,
+        )
+        executor.execute(
+            TrajectoryEditSpec(
+                TrajectoryEditMode.EDIT,
+                "Set explicit Joint Angles.",
+                (operation,),
+            ),
+            context=TrajectoryExecutionContext(session, object()),
+        )
+        return committed, session
+
+    def test_named_joint_target_uses_interpolated_posture_and_preserves_others(self):
+        committed, session = self._execute(TrajectoryOperation(
+            TrajectoryOperationType.SET_JOINT_TARGET,
+            {
+                "joint": "right_shoulder",
+                "time_seconds": 0.5,
+                "angle_rad": 0.25,
+            },
+        ))
+
+        qpos = session.working_document.qpos_timeline.get_state(0.5)
+        self.assertAlmostEqual(qpos[7], 0.25)
+        self.assertAlmostEqual(qpos[8], 0.4)
+        self.assertIsNone(committed.qpos_timeline.states.get(0.5))
+        self.assertTrue(session.can_accept)
+
+    def test_joint_group_target_rejects_names_outside_registered_group(self):
+        with self.assertRaisesRegex(Exception, "not part of group"):
+            self._execute(TrajectoryOperation(
+                TrajectoryOperationType.SET_JOINT_GROUP_TARGET,
+                {
+                    "joint_group": "right_arm",
+                    "time_seconds": 0.5,
+                    "joint_angles_rad": [
+                        {"joint": "left_knee", "angle_rad": 0.3},
+                    ],
+                },
+            ))
+
+
 if __name__ == "__main__":
     unittest.main()
