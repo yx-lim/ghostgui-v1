@@ -65,6 +65,31 @@ class TrajectorySpecExecutorTests(unittest.TestCase):
         session.accept(EditorController(committed))
         self.assertEqual(committed.trajectory.frames[0].z, 0.85)
 
+    def test_authoring_warnings_do_not_block_validated_candidate(self):
+        _committed, session, reference = _session()
+
+        def edit(_operation, context):
+            context.session.apply_ai(
+                UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.85)),
+                affected_entities=(reference,),
+            )
+            return {"changed": True}
+
+        result = TrajectorySpecExecutor(
+            {TrajectoryOperationType.ROOT_OFFSET: edit},
+            lambda _document: MotionValidationReport(
+                True,
+                (),
+                ("qpos Keyframe has a blocking collision",),
+            ),
+        ).execute(_spec(), context=TrajectoryExecutionContext(session, object()))
+
+        self.assertEqual(
+            result.validation.warnings,
+            ("qpos Keyframe has a blocking collision",),
+        )
+        self.assertTrue(session.can_accept)
+
     def test_execution_failure_restores_checkpoint(self):
         committed, session, reference = _session()
 

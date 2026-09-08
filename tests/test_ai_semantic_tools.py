@@ -639,10 +639,11 @@ class GhostGUIMotionServiceTests(unittest.TestCase):
 
         report = motion.validate_motion(document)
         message = "\n".join(report.issues)
+        warnings = "\n".join(report.warnings)
 
         self.assertFalse(report.valid)
         self.assertIn("does not match qpos forward kinematics", message)
-        self.assertIn("1 blocking collision", message)
+        self.assertIn("1 blocking collision", warnings)
 
         document.timeline_duration = float("nan")
         duration_report = motion.validate_motion(document)

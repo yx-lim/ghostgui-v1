@@ -42,6 +42,7 @@ class MotionValidationReport:
 
     valid: bool
     issues: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
 
 
 class SemanticMotionService(Protocol):
@@ -322,6 +323,7 @@ class GhostGUIMotionService:
         if self.validator is not None:
             return self.validator(document)
         issues = []
+        warnings = []
         duration = _finite_float(document.timeline_duration)
         if duration is None or duration <= 0.0:
             issues.append("Motion duration must be positive and finite")
@@ -469,7 +471,7 @@ class GhostGUIMotionService:
                         if getattr(collision, "blocking", False)
                     )
                     if blocking:
-                        issues.append(
+                        warnings.append(
                             f"qpos Keyframe at {time:.3f} s has "
                             f"{len(blocking)} blocking collision(s)"
                         )
@@ -477,7 +479,7 @@ class GhostGUIMotionService:
                 issues.extend(
                     self._target_fk_issues(valid_frames, qpos_by_time)
                 )
-        return MotionValidationReport(not issues, tuple(issues))
+        return MotionValidationReport(not issues, tuple(issues), tuple(warnings))
 
     def _joint_limit_issues(self, qpos, time_seconds):
         issues = []
