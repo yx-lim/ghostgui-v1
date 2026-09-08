@@ -1168,6 +1168,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
             affected_entities=(reference,),
             allow_user_override=True,
         )
+        session.mark_current_revision_validated()
         controller.session = session
         controller.accept()
 
@@ -1203,6 +1204,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         session.apply_ai(
             UpdateKeyframe(0, replace(frame, z=frame.z + 0.04))
         )
+        session.mark_current_revision_validated()
         controller.session = session
         undo_count = len(self.window.undo_stack)
 
