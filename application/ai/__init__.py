@@ -102,6 +102,13 @@ from application.ai.trajectory_edit_spec import (
     trajectory_edit_spec_response_schema,
     trajectory_operation_argument_contracts,
 )
+from application.ai.trajectory_planner import (
+    MOTION_ASSISTANT_SYSTEM_PROMPT,
+    TrajectoryPlanner,
+    TrajectoryPlannerError,
+    TrajectoryPlannerLimits,
+    TrajectoryPlanningResult,
+)
 from application.ai.plan_executor import (
     PlanExecutionError,
     PlanExecutionResult,
@@ -249,6 +256,7 @@ __all__ = [
     "MotionEditMetadata",
     "MotionEditPlan",
     "MotionAssistantContextBuilder",
+    "MOTION_ASSISTANT_SYSTEM_PROMPT",
     "MAX_SPARSE_KEYFRAMES",
     "MAX_TRAJECTORY_OPERATIONS",
     "MotionEntityRef",
@@ -325,6 +333,10 @@ __all__ = [
     "TrajectoryEditSpecError",
     "TrajectoryOperation",
     "TrajectoryOperationType",
+    "TrajectoryPlanner",
+    "TrajectoryPlannerError",
+    "TrajectoryPlannerLimits",
+    "TrajectoryPlanningResult",
     "Usage",
     "VISUAL_CRITIQUE_RESPONSE_SCHEMA",
     "VISUAL_MOTION_PLANNER_SYSTEM_PROMPT",
