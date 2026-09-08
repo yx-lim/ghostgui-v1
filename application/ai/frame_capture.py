@@ -11,6 +11,7 @@ from application.ai.schemas import (
     MotionFrameImage,
     ProviderCapabilities,
 )
+from application.ai.limits import MAX_MOTION_IMAGES
 from application.project_document import ProjectDocument
 
 
@@ -206,7 +207,7 @@ def capture_automatic_motion_frames(
 
     if not capabilities.supports_vision:
         return AutomaticMotionFrames(unavailable_reason="provider does not support vision")
-    maximum = min(8, int(capabilities.max_images_per_request))
+    maximum = min(MAX_MOTION_IMAGES, int(capabilities.max_images_per_request))
     if maximum < 4:
         return AutomaticMotionFrames(
             unavailable_reason="provider image limit is below the motion-context minimum"

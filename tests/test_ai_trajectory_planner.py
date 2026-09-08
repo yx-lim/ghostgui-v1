@@ -20,6 +20,7 @@ from application.ai.trajectory_edit_spec import TrajectoryOperationType
 from application.ai.trajectory_planner import (
     TrajectoryPlanner,
     TrajectoryPlannerError,
+    TrajectoryPlannerLimits,
 )
 from application.project_document import ProjectDocument
 
@@ -160,6 +161,12 @@ class TrajectoryPlannerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result.provider_requests, 1)
+
+    def test_workflow_limits_are_locally_bounded(self):
+        with self.assertRaisesRegex(ValueError, "timeout"):
+            TrajectoryPlannerLimits(request_timeout_seconds=181.0)
+        with self.assertRaisesRegex(ValueError, "image"):
+            TrajectoryPlannerLimits(max_images=9)
 
 
 if __name__ == "__main__":

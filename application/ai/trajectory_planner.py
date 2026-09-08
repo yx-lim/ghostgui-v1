@@ -15,6 +15,10 @@ from application.ai.limits import (
     MAX_AI_INSTRUCTION_CHARACTERS,
     MAX_AI_OUTPUT_TOKENS,
     MAX_AI_RESPONSE_CHARACTERS,
+    DEFAULT_MOTION_REQUEST_TIMEOUT_SECONDS,
+    MAX_MOTION_CONTEXT_CHARACTERS,
+    MAX_MOTION_IMAGES,
+    MAX_MOTION_REQUEST_TIMEOUT_SECONDS,
 )
 from application.ai.providers.base import CancellationSignal, LLMProvider
 from application.ai.schemas import (
@@ -46,11 +50,11 @@ class TrajectoryPlannerError(RuntimeError):
 @dataclass(frozen=True)
 class TrajectoryPlannerLimits:
     max_instruction_characters: int = MAX_AI_INSTRUCTION_CHARACTERS
-    max_context_characters: int = 120_000
+    max_context_characters: int = MAX_MOTION_CONTEXT_CHARACTERS
     max_response_characters: int = MAX_AI_RESPONSE_CHARACTERS
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
-    max_images: int = 8
-    request_timeout_seconds: float = 90.0
+    max_images: int = MAX_MOTION_IMAGES
+    request_timeout_seconds: float = DEFAULT_MOTION_REQUEST_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
         if self.max_instruction_characters <= 0 or self.max_context_characters <= 0:
@@ -59,9 +63,9 @@ class TrajectoryPlannerLimits:
             raise ValueError("planner response limit is invalid")
         if not 0 < self.max_output_tokens <= MAX_AI_OUTPUT_TOKENS:
             raise ValueError("planner output-token limit is invalid")
-        if not 0 <= self.max_images <= 8:
+        if not 0 <= self.max_images <= MAX_MOTION_IMAGES:
             raise ValueError("planner image limit must be between zero and eight")
-        if self.request_timeout_seconds <= 0.0:
+        if not 0.0 < self.request_timeout_seconds <= MAX_MOTION_REQUEST_TIMEOUT_SECONDS:
             raise ValueError("planner timeout must be positive")
 
 
@@ -113,6 +117,13 @@ class TrajectoryPlanner:
             raise TrajectoryPlannerError("visual motion context exceeds the image limit")
         if motion_frames and not self.provider.capabilities.supports_vision:
             raise ProviderCapabilityError("selected provider/model does not support vision")
+        provider_image_limit = self.provider.capabilities.max_images_per_request
+        if motion_frames and (
+            provider_image_limit <= 0 or len(motion_frames) > provider_image_limit
+        ):
+            raise ProviderCapabilityError(
+                "selected provider/model image limit is below the supplied context"
+            )
         _raise_if_cancelled(cancellation_token)
 
         payload = context.to_dict() if isinstance(context, AIContext) else dict(context)

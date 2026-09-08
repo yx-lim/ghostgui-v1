@@ -6,12 +6,18 @@ from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, Qt, QThread
 from PySide6.QtGui import QColor, QFont, QPainter
 
 from application.ai.frame_capture import EncodedFrame, FrameCaptureError
+from application.ai.limits import MAX_MOTION_IMAGE_DIMENSION
 
 
 class RobotViewerFrameRenderer:
     """Capture a clean robot pose without changing editor or camera state."""
 
-    def __init__(self, viewer, *, maximum_dimension: int = 512):
+    def __init__(
+        self,
+        viewer,
+        *,
+        maximum_dimension: int = MAX_MOTION_IMAGE_DIMENSION,
+    ):
         if viewer.robot_model is None:
             raise FrameCaptureError("robot frame capture requires a loaded model")
         if maximum_dimension <= 0:

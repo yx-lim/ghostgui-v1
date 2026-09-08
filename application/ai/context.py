@@ -8,6 +8,7 @@ import math
 from typing import Iterable
 
 from application.ai.edit_session import AIEditSession, SessionEditRecord
+from application.ai.limits import MAX_MOTION_NUMERICAL_SAMPLES
 from application.ai.metadata import MotionMetadataService
 from application.ai.schemas import EditAuthor
 from application.project_document import ProjectDocument
@@ -241,7 +242,7 @@ class MotionAssistantContextBuilder(ContextBuilder):
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-        if not 8 <= max_numerical_samples <= 20:
+        if not 8 <= max_numerical_samples <= MAX_MOTION_NUMERICAL_SAMPLES:
             raise ValueError("numerical motion samples must be bounded from 8 to 20")
         self.adapter = adapter
         self.max_numerical_samples = int(max_numerical_samples)
