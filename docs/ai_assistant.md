@@ -110,7 +110,8 @@ network failures, malformed responses, and cancellation leave committed motion
 unchanged. Requests are bounded by instruction/context size, 8 images at a
 512-pixel maximum dimension, 4,096 default output tokens, 16 operations, 16
 sparse Keyframes, and a 90-second default timeout. Gemini uses one outbound SDK
-attempt by default and does not automatically retry quota errors.
+request by default and does not automatically retry quota errors. Generated
+motion is capped at the editor's 120-second timeline limit.
 
 Developer diagnostics are disabled by default. Setting `GHOSTGUI_AI_DEBUG=1`
 records bounded, secret-scrubbed JSON in `.ghostgui-ai-debug/`, which is

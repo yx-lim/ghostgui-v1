@@ -137,6 +137,14 @@ class TrajectoryEditSpecTests(unittest.TestCase):
                     "orientation_rpy_rad": None,
                 },
             ),
+            _wire(
+                "generate",
+                "sparse_keyframes",
+                {
+                    **_sparse_keyframes(),
+                    "duration_seconds": 121.0,
+                },
+            ),
         )
 
         for text in invalid:

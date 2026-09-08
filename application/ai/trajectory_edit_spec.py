@@ -8,6 +8,8 @@ import json
 import math
 from typing import Any, Mapping
 
+from application.ai.limits import MAX_GENERATED_MOTION_DURATION_SECONDS
+
 
 MAX_TRAJECTORY_OPERATIONS = 16
 MAX_SPARSE_KEYFRAMES = 16
@@ -345,6 +347,8 @@ def _validate_lock(values):
 def _validate_sparse_keyframes(values):
     _exact_fields(values, ("duration_seconds", "keyframes"))
     duration = _number(values["duration_seconds"], "duration_seconds", positive=True)
+    if duration > MAX_GENERATED_MOTION_DURATION_SECONDS:
+        raise ValueError("generated motion duration exceeds the local limit")
     keyframes = values["keyframes"]
     if not isinstance(keyframes, list) or not 4 <= len(keyframes) <= MAX_SPARSE_KEYFRAMES:
         raise ValueError("sparse_keyframes requires 4-16 Keyframes")
