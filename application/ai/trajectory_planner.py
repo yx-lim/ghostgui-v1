@@ -133,6 +133,60 @@ class TrajectoryPlanner:
             max_output_tokens=self.limits.max_output_tokens,
         )
 
+        response = await self._request(request, session, cancellation_token)
+        _raise_if_cancelled(cancellation_token)
+
+        if response.tool_calls:
+            raise TrajectoryPlannerError(
+                "motion planner returned tool calls instead of a compact specification"
+            )
+        if len(response.text) > self.limits.max_response_characters:
+            raise TrajectoryPlannerError("motion planner response exceeds the local size limit")
+        transcript = messages + (
+            ProviderMessage(MessageRole.ASSISTANT, text=response.text),
+        )
+        try:
+            spec = parse_trajectory_edit_spec(response.text)
+        except Exception as initial_error:
+            repair_messages = self._repair_messages(instruction, initial_error)
+            repair_request = ProviderRequest(
+                model=model,
+                messages=repair_messages,
+                response_schema=trajectory_edit_spec_response_schema(),
+                max_output_tokens=self.limits.max_output_tokens,
+            )
+            repair = await self._request(
+                repair_request,
+                session,
+                cancellation_token,
+            )
+            _raise_if_cancelled(cancellation_token)
+            if repair.tool_calls:
+                raise TrajectoryPlannerError(
+                    "motion specification repair returned unexpected tool calls"
+                )
+            if len(repair.text) > self.limits.max_response_characters:
+                raise TrajectoryPlannerError(
+                    "motion specification repair exceeds the local size limit"
+                )
+            try:
+                spec = parse_trajectory_edit_spec(repair.text)
+            except Exception as repair_error:
+                raise TrajectoryPlannerError(
+                    f"motion specification remained invalid after one repair: "
+                    f"{repair_error}"
+                ) from repair_error
+            transcript += repair_messages + (
+                ProviderMessage(MessageRole.ASSISTANT, text=repair.text),
+            )
+            usage = Usage(
+                response.usage.input_tokens + repair.usage.input_tokens,
+                response.usage.output_tokens + repair.usage.output_tokens,
+            )
+            return TrajectoryPlanningResult(spec, usage, transcript, 2)
+        return TrajectoryPlanningResult(spec, response.usage, transcript)
+
+    async def _request(self, request, session, cancellation_token):
         session.begin_provider_request()
         try:
             response = await asyncio.wait_for(
@@ -146,22 +200,18 @@ class TrajectoryPlanner:
             session.finish_provider_request(result_staged=False)
             raise
         session.finish_provider_request(result_staged=session.has_changes)
-        _raise_if_cancelled(cancellation_token)
+        return response
 
-        if response.tool_calls:
-            raise TrajectoryPlannerError(
-                "motion planner returned tool calls instead of a compact specification"
-            )
-        if len(response.text) > self.limits.max_response_characters:
-            raise TrajectoryPlannerError("motion planner response exceeds the local size limit")
-        try:
-            spec = parse_trajectory_edit_spec(response.text)
-        except Exception as error:
-            raise TrajectoryPlannerError(str(error)) from error
-        transcript = messages + (
-            ProviderMessage(MessageRole.ASSISTANT, text=response.text),
-        )
-        return TrajectoryPlanningResult(spec, response.usage, transcript)
+    def _repair_messages(self, instruction, error):
+        payload = json.dumps({
+            "original_instruction": instruction,
+            "parser_error": str(error),
+            "operation_argument_contracts": trajectory_operation_argument_contracts(),
+            "repair_requirement": (
+                "Return one complete corrected TrajectoryEditSpec. Do not explain."
+            ),
+        }, sort_keys=True, separators=(",", ":"))
+        return self._messages(payload, ())
 
     def _messages(self, user_text, motion_frames):
         user = ProviderMessage(

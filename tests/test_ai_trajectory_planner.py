@@ -87,11 +87,36 @@ class TrajectoryPlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.state, AIEditSessionState.READY)
         delegate.assert_exhausted()
 
-    async def test_malformed_response_fails_after_exactly_one_request(self):
-        delegate = MockProvider([ProviderResponse(text="not json")])
+    async def test_malformed_response_receives_exactly_one_successful_repair(self):
+        delegate = MockProvider([
+            ProviderResponse(text="not json", usage=Usage(10, 2)),
+            _response(),
+        ])
         provider = RequestCountingProvider(delegate)
 
-        with self.assertRaises(TrajectoryPlannerError):
+        result = await TrajectoryPlanner(provider).plan(
+            "Raise the robot.",
+            model="mock",
+            context={},
+            session=AIEditSession(ProjectDocument("g1")),
+        )
+
+        self.assertEqual(provider.counter.counts.total, 2)
+        self.assertEqual(result.provider_requests, 2)
+        self.assertEqual(result.usage, Usage(130, 47))
+        repair_text = delegate.requests[1].messages[-1].text
+        self.assertIn("parser_error", repair_text)
+        self.assertIn("original_instruction", repair_text)
+        delegate.assert_exhausted()
+
+    async def test_invalid_repair_stops_after_second_request(self):
+        delegate = MockProvider([
+            ProviderResponse(text="not json"),
+            ProviderResponse(text="still not json"),
+        ])
+        provider = RequestCountingProvider(delegate)
+
+        with self.assertRaisesRegex(TrajectoryPlannerError, "after one repair"):
             await TrajectoryPlanner(provider).plan(
                 "Raise the robot.",
                 model="mock",
@@ -99,7 +124,7 @@ class TrajectoryPlannerTests(unittest.IsolatedAsyncioTestCase):
                 session=AIEditSession(ProjectDocument("g1")),
             )
 
-        self.assertEqual(provider.counter.counts.total, 1)
+        self.assertEqual(provider.counter.counts.total, 2)
         delegate.assert_exhausted()
 
     async def test_pre_cancelled_request_consumes_no_provider_call(self):
