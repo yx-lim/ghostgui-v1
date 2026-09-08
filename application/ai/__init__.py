@@ -116,6 +116,10 @@ from application.ai.trajectory_executor import (
     TrajectoryOperationResult,
     TrajectorySpecExecutor,
 )
+from application.ai.trajectory_operations import (
+    TrajectoryOperationError,
+    build_trajectory_operation_handlers,
+)
 from application.ai.plan_executor import (
     PlanExecutionError,
     PlanExecutionResult,
@@ -342,6 +346,7 @@ __all__ = [
     "TrajectoryExecutionError",
     "TrajectoryExecutionResult",
     "TrajectoryOperation",
+    "TrajectoryOperationError",
     "TrajectoryOperationType",
     "TrajectoryOperationResult",
     "TrajectoryPlanner",
@@ -369,6 +374,7 @@ __all__ = [
     "VisualVerificationResult",
     "VisualVerifier",
     "build_semantic_tool_registry",
+    "build_trajectory_operation_handlers",
     "capture_comparison_frames",
     "capture_automatic_motion_frames",
     "capture_motion_frames",
