@@ -109,6 +109,13 @@ from application.ai.trajectory_planner import (
     TrajectoryPlannerLimits,
     TrajectoryPlanningResult,
 )
+from application.ai.trajectory_executor import (
+    TrajectoryExecutionContext,
+    TrajectoryExecutionError,
+    TrajectoryExecutionResult,
+    TrajectoryOperationResult,
+    TrajectorySpecExecutor,
+)
 from application.ai.plan_executor import (
     PlanExecutionError,
     PlanExecutionResult,
@@ -331,12 +338,17 @@ __all__ = [
     "TrajectoryEditMode",
     "TrajectoryEditSpec",
     "TrajectoryEditSpecError",
+    "TrajectoryExecutionContext",
+    "TrajectoryExecutionError",
+    "TrajectoryExecutionResult",
     "TrajectoryOperation",
     "TrajectoryOperationType",
+    "TrajectoryOperationResult",
     "TrajectoryPlanner",
     "TrajectoryPlannerError",
     "TrajectoryPlannerLimits",
     "TrajectoryPlanningResult",
+    "TrajectorySpecExecutor",
     "Usage",
     "VISUAL_CRITIQUE_RESPONSE_SCHEMA",
     "VISUAL_MOTION_PLANNER_SYSTEM_PROMPT",
