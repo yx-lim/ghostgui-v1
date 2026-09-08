@@ -461,5 +461,70 @@ class EndEffectorOperationTests(unittest.TestCase):
             np.testing.assert_allclose(call["position_m"], [1.5, 0.1, 0.85])
 
 
+class _GenerationMotion(_EndEffectorMotion):
+    logical_frames = ("torso", "right_hand", "left_hand")
+    joint_names = ("right_shoulder",)
+
+    def __init__(self):
+        super().__init__()
+        self.adapter.free_joints_by_body = {0: SimpleNamespace(qpos_address=0)}
+        self.adapter.trajectory_frames = self.logical_frames
+        self.adapter.logical_frame_bindings["torso"] = ("body", "torso_site")
+
+    def set_joint_angles(self, document, **arguments):
+        qpos = document.qpos_timeline.sample_state(arguments["time_seconds"])
+        qpos[7] = arguments["values"]["right_shoulder"]
+        return JointAngleEditResult(qpos)
+
+
+class SparseGenerationTests(unittest.TestCase):
+    def test_sparse_targets_are_solved_then_interpolated_to_dense_qpos(self):
+        committed = ProjectDocument("g1", timeline_duration=1.0, qpos_timeline=Timeline())
+        store = InMemoryMotionMetadataStore()
+        metadata = MotionMetadataService(store, TimestampMotionIdentityResolver())
+        metadata.seed_document_as_user_owned(committed)
+        session = AIEditSession(committed, metadata_store=store)
+        motion = _GenerationMotion()
+        executor = TrajectorySpecExecutor(
+            build_trajectory_operation_handlers(motion, metadata),
+            motion.validate_motion,
+        )
+        keyframes = []
+        for time, z, shoulder in (
+            (0.0, 0.8, 0.0),
+            (0.25, 0.6, 0.3),
+            (0.5, 0.7, 0.6),
+            (1.0, 0.9, 0.1),
+        ):
+            keyframes.append({
+                "time_seconds": time,
+                "root_position_m": [0.0, 0.0, z],
+                "torso_rpy_rad": None,
+                "end_effector_targets": [],
+                "joint_targets": [
+                    {"joint": "right_shoulder", "angle_rad": shoulder},
+                ],
+            })
+        executor.execute(
+            TrajectoryEditSpec(
+                TrajectoryEditMode.GENERATE,
+                "Generate a short motion.",
+                (TrajectoryOperation(
+                    TrajectoryOperationType.SPARSE_KEYFRAMES,
+                    {"duration_seconds": 1.0, "keyframes": keyframes},
+                ),),
+            ),
+            context=TrajectoryExecutionContext(session, object()),
+        )
+
+        generated = session.working_document
+        self.assertEqual(len(generated.qpos_timeline.times()), 101)
+        self.assertAlmostEqual(generated.qpos_timeline.get_state(0.25)[2], 0.6)
+        self.assertAlmostEqual(generated.qpos_timeline.get_state(0.25)[7], 0.3)
+        self.assertEqual(generated.timeline_duration, 1.0)
+        self.assertTrue(session.can_accept)
+        self.assertEqual(committed.qpos_timeline.times(), [0.0, 1.0])
+
+
 if __name__ == "__main__":
     unittest.main()

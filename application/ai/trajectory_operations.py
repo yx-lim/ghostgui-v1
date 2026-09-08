@@ -19,6 +19,7 @@ from application.ai.trajectory_edit_spec import (
 )
 from application.ai.trajectory_executor import TrajectoryExecutionContext
 from application.ai.semantic_tools import SemanticToolContext, retime_segment
+from core.trajectory import TargetFrame, Trajectory, quat_to_rpy
 
 
 class TrajectoryOperationError(ValueError):
@@ -69,6 +70,11 @@ def build_trajectory_operation_handlers(motion_service, metadata_service):
         ),
         TrajectoryOperationType.LOCK_END_EFFECTOR: (
             lambda operation, context: _lock_end_effector(
+                operation, context, motion_service, metadata_service
+            )
+        ),
+        TrajectoryOperationType.SPARSE_KEYFRAMES: (
+            lambda operation, context: _generate_sparse_keyframes(
                 operation, context, motion_service, metadata_service
             )
         ),
@@ -532,6 +538,212 @@ def _interval_keyframe_times(document, start, end):
     }))
 
 
+def _generate_sparse_keyframes(operation, context, motion, metadata):
+    arguments = operation.arguments
+    document = context.session.working_document
+    timeline = document.qpos_timeline
+    if timeline is None:
+        raise TrajectoryOperationError(
+            "sparse_keyframes requires an editable qpos timeline"
+        )
+    initial_qpos = timeline.sample_state(document.current_time)
+    if initial_qpos is None:
+        raise TrajectoryOperationError("current robot pose is unavailable")
+
+    candidate = detached_document(document)
+    candidate.trajectory = Trajectory()
+    candidate.qpos_timeline.states = {}
+    candidate.set_timeline_duration(float(arguments["duration_seconds"]))
+    candidate.current_time = min(candidate.current_time, candidate.timeline_duration)
+    previous_qpos = np.asarray(initial_qpos, dtype=float).copy()
+    sparse_times = []
+    warnings = []
+    for keyframe in arguments["keyframes"]:
+        time = float(keyframe["time_seconds"])
+        candidate.qpos_timeline.set_state(time, previous_qpos)
+        qpos = _apply_sparse_root(candidate, motion, time, keyframe)
+        candidate.qpos_timeline.set_state(time, qpos)
+
+        joint_values = {
+            target["joint"]: float(target["angle_rad"])
+            for target in keyframe["joint_targets"]
+        }
+        if joint_values:
+            solved_joints = motion.set_joint_angles(
+                candidate,
+                time_seconds=time,
+                values=joint_values,
+                protected_logical_frames=(),
+            )
+            if not isinstance(solved_joints, JointAngleEditResult):
+                raise TrajectoryOperationError(
+                    "Joint Angle service returned an invalid generation result"
+                )
+            candidate.qpos_timeline.set_state(time, solved_joints.qpos)
+
+        torso_orientation = keyframe["torso_rpy_rad"]
+        if torso_orientation is not None:
+            _solve_sparse_logical_target(
+                candidate,
+                motion,
+                time=time,
+                name="torso",
+                position=None,
+                orientation=tuple(torso_orientation),
+                protected=(),
+                warnings=warnings,
+            )
+
+        solved_names = []
+        for target in keyframe["end_effector_targets"]:
+            name = target["end_effector"]
+            if name not in motion.end_effectors:
+                raise TrajectoryOperationError(f"unknown End Effector: {name}")
+            _solve_sparse_logical_target(
+                candidate,
+                motion,
+                time=time,
+                name=name,
+                position=tuple(target["position_m"]),
+                orientation=None,
+                protected=tuple(solved_names),
+                warnings=warnings,
+            )
+            solved_names.append(name)
+
+        previous_qpos = candidate.qpos_timeline.get_state(time)
+        _capture_generation_frames(candidate, motion, time, previous_qpos)
+        sparse_times.append(time)
+
+    sparse_timeline = detached_document(candidate).qpos_timeline
+    candidate.qpos_timeline.states = {}
+    dense_times = _uniform_times(candidate.timeline_duration, 0.01)
+    for time in dense_times:
+        candidate.qpos_timeline.set_state(time, sparse_timeline.sample_state(time))
+
+    working_metadata = MotionMetadataService(
+        context.session.metadata,
+        metadata.resolver,
+    )
+    existing = set(_motion_references(document, working_metadata))
+    replacement = set(_motion_references(candidate, working_metadata))
+    affected = tuple(existing | replacement)
+    created = tuple(replacement - existing)
+    result = context.session.apply_ai(
+        ReplaceMotionState(
+            capture_motion_state(candidate),
+            operation="sparse_keyframes",
+        ),
+        affected_entities=affected,
+        created_entities=created,
+        allow_user_override=True,
+    )
+    if not result.changed:
+        raise TrajectoryOperationError("sparse_keyframes made no motion change")
+    return {
+        "duration_seconds": candidate.timeline_duration,
+        "sparse_keyframes": len(sparse_times),
+        "dense_qpos_samples": len(dense_times),
+        "collision_warnings": list(dict.fromkeys(warnings)),
+    }
+
+
+def _apply_sparse_root(document, motion, time, keyframe):
+    qpos = np.asarray(document.qpos_timeline.get_state(time), dtype=float).copy()
+    position = keyframe["root_position_m"]
+    if position is None:
+        return qpos
+    free_joints = tuple(motion.adapter.free_joints_by_body.values())
+    if not free_joints:
+        raise TrajectoryOperationError("robot model has no floating root target")
+    address = int(free_joints[0].qpos_address)
+    if address < 0 or address + 7 > len(qpos):
+        raise TrajectoryOperationError("floating-root qpos layout is invalid")
+    qpos[address:address + 3] = np.asarray(position, dtype=float)
+    return qpos
+
+
+def _solve_sparse_logical_target(
+    document,
+    motion,
+    *,
+    time,
+    name,
+    position,
+    orientation,
+    protected,
+    warnings,
+):
+    if name not in motion.logical_frames:
+        raise TrajectoryOperationError(f"unknown logical frame: {name}")
+    if position is None:
+        qpos = document.qpos_timeline.get_state(time)
+        state = motion.adapter.create_state()
+        state.set_qpos(qpos)
+        kind, object_name = motion.adapter.logical_frame_bindings[name]
+        position, _quaternion = state.get_body_pose(object_name, kind)
+    solved = motion.solve_logical_frame_target(
+        document,
+        logical_frame=name,
+        time_seconds=time,
+        position_m=tuple(float(value) for value in position),
+        orientation_rpy_rad=orientation,
+        mode="absolute",
+        protected_logical_frames=protected,
+    )
+    if not isinstance(solved, LogicalFrameSolveResult):
+        raise TrajectoryOperationError("IK service returned an invalid generation result")
+    document.trajectory.upsert_frame(solved.frame)
+    document.qpos_timeline.set_state(time, solved.qpos)
+    warnings.extend(solved.collisions)
+
+
+def _capture_generation_frames(document, motion, time, qpos):
+    state = motion.adapter.create_state()
+    state.set_qpos(qpos)
+    names = tuple(getattr(motion.adapter, "trajectory_frames", ()))
+    if not names:
+        names = tuple(motion.adapter.logical_frame_bindings)
+    for name in names:
+        kind, object_name = motion.adapter.logical_frame_bindings[name]
+        position, quaternion = state.get_body_pose(object_name, kind)
+        roll, pitch, yaw = quat_to_rpy(quaternion)
+        document.trajectory.upsert_frame(TargetFrame(
+            time=time,
+            phase="ai_generate",
+            frame_name=name,
+            x=float(position[0]),
+            y=float(position[1]),
+            z=float(position[2]),
+            roll=float(roll),
+            pitch=float(pitch),
+            yaw=float(yaw),
+        ))
+
+
+def _uniform_times(duration, dt):
+    count = int(np.floor(float(duration) / dt + 1e-9))
+    times = [round(index * dt, 9) for index in range(count + 1)]
+    if not times or abs(times[-1] - duration) > 1e-9:
+        times.append(float(duration))
+    else:
+        times[-1] = float(duration)
+    return tuple(times)
+
+
+def _motion_references(document, metadata):
+    references = [
+        metadata.reference_for_keyframe(frame)
+        for frame in document.trajectory.frames
+    ]
+    if document.qpos_timeline is not None:
+        references.extend(
+            metadata.reference_for_qpos_keyframe(time)
+            for time in document.qpos_timeline.times()
+        )
+    return tuple(dict.fromkeys(references))
+
+
 def _held_joint_names(scope, body_name, motion):
     if scope == "whole_body":
         return tuple(motion.joint_names)
@@ -572,8 +784,6 @@ def _synchronize_logical_frames(document, motion, time, qpos):
     for frame in document.frames_at_time(time):
         kind, object_name = motion.adapter.logical_frame_bindings[frame.frame_name]
         position, quaternion = state.get_body_pose(object_name, kind)
-        from core.trajectory import quat_to_rpy
-
         roll, pitch, yaw = quat_to_rpy(quaternion)
         updated = replace(
             frame,
