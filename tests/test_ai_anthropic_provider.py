@@ -138,12 +138,14 @@ class AnthropicProviderTests(unittest.IsolatedAsyncioTestCase):
             tools=(tool,),
             response_schema=schema,
             max_output_tokens=800,
+            temperature=0.0,
         ))
 
         self.assertEqual(result.text, '{"ok":true}')
         call = client.messages.calls[0]
         self.assertEqual(call["system"], "Stay bounded.")
         self.assertEqual(call["max_tokens"], 800)
+        self.assertEqual(call["temperature"], 0.0)
         self.assertEqual(call["tools"][0]["input_schema"], tool.input_schema)
         content = call["messages"][0]["content"]
         self.assertEqual(content[1]["text"], "frame_3 (candidate) = t=2.800000 s")

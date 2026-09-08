@@ -168,6 +168,24 @@ class TrajectoryPlannerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "image"):
             TrajectoryPlannerLimits(max_images=9)
 
+    async def test_low_randomness_is_used_only_when_provider_supports_it(self):
+        capabilities = ProviderCapabilities(
+            supports_tools=False,
+            supports_vision=False,
+            supports_structured_output=True,
+            supports_temperature=True,
+        )
+        provider = MockProvider([_response()], capabilities=capabilities)
+
+        await TrajectoryPlanner(provider).plan(
+            "Raise the robot.",
+            model="mock",
+            context={},
+            session=AIEditSession(ProjectDocument("g1")),
+        )
+
+        self.assertEqual(provider.requests[0].temperature, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

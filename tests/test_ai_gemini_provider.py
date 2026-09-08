@@ -22,6 +22,7 @@ from application.ai.schemas import (
     MotionFrameImage,
     ProviderMessage,
     ProviderRequest,
+    ProviderCapabilities,
     StopReason,
     ToolCall,
     ToolDefinition,
@@ -89,6 +90,21 @@ def _request(**changes):
 
 
 class GeminiProviderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_optional_temperature_is_forwarded_only_when_capability_enabled(self):
+        client = _FakeClient(_response(SimpleNamespace(text="OK", function_call=None)))
+        capabilities = ProviderCapabilities(
+            supports_tools=True,
+            supports_vision=True,
+            supports_structured_output=True,
+            max_images_per_request=16,
+            supports_temperature=True,
+        )
+        provider = GeminiProvider(client=client, capabilities=capabilities)
+
+        await provider.generate(_request(temperature=0.0))
+
+        self.assertEqual(client.models.calls[0]["config"]["temperature"], 0.0)
+
     async def test_converts_text_tools_and_response_to_common_contract(self):
         function_call = SimpleNamespace(
             id="call-4",

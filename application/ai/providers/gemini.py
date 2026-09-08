@@ -182,6 +182,8 @@ def _build_gemini_request(
         config["system_instruction"] = "\n\n".join(system_parts)
     if request.max_output_tokens is not None:
         config["max_output_tokens"] = request.max_output_tokens
+    if request.temperature is not None:
+        config["temperature"] = request.temperature
     if request.tools:
         config["tools"] = [
             {

@@ -142,6 +142,7 @@ class TrajectoryPlanner:
             messages=messages,
             response_schema=trajectory_edit_spec_response_schema(),
             max_output_tokens=self.limits.max_output_tokens,
+            temperature=self._temperature(),
         )
 
         response = await self._request(request, session, cancellation_token)
@@ -165,6 +166,7 @@ class TrajectoryPlanner:
                 messages=repair_messages,
                 response_schema=trajectory_edit_spec_response_schema(),
                 max_output_tokens=self.limits.max_output_tokens,
+                temperature=self._temperature(),
             )
             repair = await self._request(
                 repair_request,
@@ -240,6 +242,9 @@ class TrajectoryPlanner:
             text=f"Instructions:\n{self.system_prompt}\n\n{user_text}",
             motion_frames=motion_frames,
         ),)
+
+    def _temperature(self):
+        return 0.0 if self.provider.capabilities.supports_temperature else None
 
 
 def _raise_if_cancelled(token):

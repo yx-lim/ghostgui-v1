@@ -44,6 +44,7 @@ DEFAULT_ANTHROPIC_CAPABILITIES = ProviderCapabilities(
     supports_parallel_tool_calls=True,
     supports_system_messages=True,
     max_images_per_request=16,
+    supports_temperature=True,
 )
 _DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
@@ -167,6 +168,8 @@ def _build_anthropic_request(request: ProviderRequest) -> dict[str, Any]:
                 "schema": _structured_output_schema(request.response_schema),
             }
         }
+    if request.temperature is not None:
+        arguments["temperature"] = request.temperature
     return arguments
 
 

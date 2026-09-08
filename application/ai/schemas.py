@@ -82,6 +82,7 @@ class ProviderCapabilities:
     supports_parallel_tool_calls: bool = False
     supports_system_messages: bool = True
     max_images_per_request: int = 0
+    supports_temperature: bool = False
 
     def __post_init__(self) -> None:
         if self.max_images_per_request < 0:
@@ -168,6 +169,7 @@ class ProviderRequest:
     tools: tuple[ToolDefinition, ...] = ()
     response_schema: Mapping[str, Any] | None = None
     max_output_tokens: int | None = None
+    temperature: float | None = None
 
     def __post_init__(self) -> None:
         if not self.model.strip():
@@ -181,6 +183,8 @@ class ProviderRequest:
             raise TypeError("provider response_schema must be an object")
         if self.max_output_tokens is not None and self.max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be positive")
+        if self.temperature is not None and not 0.0 <= self.temperature <= 1.0:
+            raise ValueError("temperature must be between zero and one")
 
 
 @dataclass(frozen=True)

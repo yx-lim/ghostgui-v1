@@ -53,6 +53,10 @@ def validate_provider_request(
         raise ProviderCapabilityError(
             "selected provider/model does not support structured output"
         )
+    if request.temperature is not None and not capabilities.supports_temperature:
+        raise ProviderCapabilityError(
+            "selected provider/model does not support temperature control"
+        )
     if (
         any(message.role is MessageRole.SYSTEM for message in request.messages)
         and not capabilities.supports_system_messages
