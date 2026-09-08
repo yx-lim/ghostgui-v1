@@ -230,6 +230,167 @@ class ContextBuilder:
         return values[: self.max_constraint_keyframes], truncated
 
 
+class MotionAssistantContextBuilder(ContextBuilder):
+    """Add bounded sampled robot state using the existing timeline and FK."""
+
+    def __init__(
+        self,
+        adapter,
+        *,
+        max_numerical_samples: int = 12,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        if not 8 <= max_numerical_samples <= 20:
+            raise ValueError("numerical motion samples must be bounded from 8 to 20")
+        self.adapter = adapter
+        self.max_numerical_samples = int(max_numerical_samples)
+
+    def build(
+        self,
+        document: ProjectDocument,
+        *,
+        selection: EditorSelectionContext | None = None,
+        robot_capabilities: RobotCapabilityContext | None = None,
+        **kwargs,
+    ) -> AIContext:
+        selection = selection or EditorSelectionContext()
+        capabilities = robot_capabilities or self._adapter_capabilities()
+        base = super().build(
+            document,
+            selection=selection,
+            robot_capabilities=capabilities,
+            **kwargs,
+        ).to_dict()
+        base["robot"]["qpos_layout"] = self._qpos_layout()
+        states = self._sampled_states(document, selection, capabilities)
+        base["current_state"] = self._state_payload(
+            document,
+            document.current_time,
+            tuple(capabilities.joints),
+        )
+        base["motion"]["numerical_samples"] = states
+        base["motion"]["numerical_sample_count"] = len(states)
+        return AIContext(base)
+
+    def _adapter_capabilities(self) -> RobotCapabilityContext:
+        return RobotCapabilityContext(
+            logical_frames=tuple(self.adapter.logical_frame_bindings),
+            end_effectors=tuple(self.adapter.end_effectors),
+            joints=tuple(self.adapter.joint_names),
+            joint_groups=tuple(
+                (name, tuple(members))
+                for name, members in sorted(self.adapter.joint_groups.items())
+            ),
+        )
+
+    def _qpos_layout(self) -> dict:
+        free_joints = tuple(self.adapter.free_joints_by_body.values())
+        root = free_joints[0] if free_joints else None
+        return {
+            "width": int(self.adapter.mj_model.nq),
+            "root": (
+                None
+                if root is None
+                else {
+                    "qpos_address": int(root.qpos_address),
+                    "layout": "xyz + quaternion wxyz",
+                }
+            ),
+            "ordered_joint_names": list(self.adapter.joint_names),
+            "joint_units": "radians for hinge joints; metres for slide joints",
+            "quaternion_convention": "wxyz",
+        }
+
+    def _sampled_states(self, document, selection, capabilities):
+        if document.qpos_timeline is None:
+            return []
+        relevant_joints = self._relevant_joints(selection, capabilities)
+        return [
+            self._state_payload(document, time_seconds, relevant_joints)
+            for time_seconds in _motion_sample_times(
+                document.timeline_duration,
+                document.current_time,
+                selection.time_interval,
+                self.max_numerical_samples,
+            )
+        ]
+
+    def _relevant_joints(self, selection, capabilities):
+        if selection.joint:
+            return (selection.joint,)
+        groups = dict(capabilities.joint_groups)
+        if selection.joint_group and selection.joint_group in groups:
+            return tuple(groups[selection.joint_group])
+        selected_frame = selection.end_effector or selection.logical_frame
+        if selected_frame:
+            lower = selected_frame.lower()
+            for side in ("left", "right"):
+                if side in lower:
+                    for suffix in ("arm", "leg"):
+                        group = f"{side}_{suffix}"
+                        if group in groups and (
+                            ("hand" in lower and suffix == "arm")
+                            or ("foot" in lower and suffix == "leg")
+                        ):
+                            return tuple(groups[group])
+        return tuple(capabilities.joints)
+
+    def _state_payload(self, document, time_seconds, joint_names):
+        timeline = document.qpos_timeline
+        if timeline is None:
+            return {"time_seconds": _rounded(time_seconds), "available": False}
+        qpos = timeline.sample_state(
+            float(time_seconds),
+            fallback_qpos=self.adapter.home_qpos,
+        )
+        state = self.adapter.create_state()
+        state.set_qpos(qpos)
+        return {
+            "time_seconds": _rounded(time_seconds),
+            "available": True,
+            "root": self._root_payload(qpos),
+            "joint_angles": {
+                name: _rounded(state.get_joint_value(name))
+                for name in joint_names
+                if name in self.adapter.joints
+            },
+            "end_effectors": {
+                name: self._pose_payload(state, name)
+                for name in self.adapter.end_effectors
+            },
+            "pelvis": self._optional_pose_payload(state, "pelvis"),
+            "torso": self._optional_pose_payload(state, "torso"),
+        }
+
+    def _root_payload(self, qpos):
+        free_joints = tuple(self.adapter.free_joints_by_body.values())
+        if not free_joints:
+            return None
+        address = int(free_joints[0].qpos_address)
+        return {
+            "position_m": [_rounded(value) for value in qpos[address:address + 3]],
+            "orientation_quaternion_wxyz": [
+                _rounded(value) for value in qpos[address + 3:address + 7]
+            ],
+        }
+
+    def _optional_pose_payload(self, state, logical_name):
+        if logical_name not in self.adapter.logical_frame_bindings:
+            return None
+        return self._pose_payload(state, logical_name)
+
+    def _pose_payload(self, state, logical_name):
+        kind, object_name = self.adapter.logical_frame_bindings[logical_name]
+        position, quaternion = state.get_body_pose(object_name, kind)
+        return {
+            "position_m": [_rounded(value) for value in position],
+            "orientation_quaternion_wxyz": [
+                _rounded(value) for value in quaternion
+            ],
+        }
+
+
 def _selection_payload(selection, active_frame):
     payload = {
         "time_interval_seconds": (
@@ -276,3 +437,43 @@ def _bounded_times(values, limit):
             for index in range(limit)
         ]
     return {"values": selected, "total_count": len(times), "truncated": True}
+
+
+def _motion_sample_times(duration, current_time, interval, limit):
+    duration = max(0.0, float(duration))
+    current = min(duration, max(0.0, float(current_time)))
+    if interval is not None:
+        start, end = interval
+        if abs(end - start) <= 1e-12:
+            return (round(start, 6),)
+        count = min(limit, 12)
+        return tuple(
+            round(start + (end - start) * index / (count - 1), 6)
+            for index in range(count)
+        )
+
+    representative_count = min(8, limit)
+    if duration <= 1e-12:
+        return (0.0,)
+    values = {
+        round(duration * index / (representative_count - 1), 6)
+        for index in range(representative_count)
+    }
+    local_step = min(0.1, duration / 20.0)
+    values.update(
+        round(min(duration, max(0.0, current + offset * local_step)), 6)
+        for offset in (-2, -1, 0, 1, 2)
+    )
+    ordered = sorted(values)
+    if len(ordered) <= limit:
+        return tuple(ordered)
+    keep = {0, len(ordered) - 1, min(range(len(ordered)), key=lambda i: abs(ordered[i] - current))}
+    for index in range(len(ordered)):
+        if len(keep) >= limit:
+            break
+        keep.add(index)
+    return tuple(ordered[index] for index in sorted(keep))
+
+
+def _rounded(value):
+    return round(float(value), 6)

@@ -161,6 +161,7 @@ from application.ai.context import (
     AIContext,
     ContextBuilder,
     EditorSelectionContext,
+    MotionAssistantContextBuilder,
     RobotCapabilityContext,
 )
 from application.ai.motion_services import (
@@ -244,6 +245,7 @@ __all__ = [
     "MockStep",
     "MotionEditMetadata",
     "MotionEditPlan",
+    "MotionAssistantContextBuilder",
     "MAX_SPARSE_KEYFRAMES",
     "MAX_TRAJECTORY_OPERATIONS",
     "MotionEntityRef",
