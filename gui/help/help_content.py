@@ -84,7 +84,7 @@ Use the single Time slider to scrub the robot live or follow time-based playback
 ## Right Sidebar
 
 - **Status** shows the latest important event or problem. Expand **Details** for the latest operation's frame, IK result, and solver diagnostics.
-- **Motion Assistant** stages focused language edits on a detached working copy. Configure Gemini or Anthropic through **Settings**, choose **Preview candidate** to scrub or play the staged motion in Orange against the committed reference, then choose **Accept**, **Reject**, or **Refine**. API keys can be kept in the system credential store and are never saved in a project.
+- **Motion Assistant** automatically supplies bounded robot-state and timestamped visual context for natural-language motion creation or editing. GhostGUI performs IK, interpolation, retiming, and dense qpos work locally on a detached working copy. Choose **Preview candidate** to scrub or play it in Orange, then choose **Accept**, **Reject**, or **Refine**. API keys can be kept in the system credential store and are never saved in a project.
 - **IK / Constraints** exposes IK weights, solver settings, collision checks, and preview controls.
 """.strip(),
     ),

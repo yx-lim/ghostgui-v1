@@ -1,190 +1,124 @@
 # Motion Assistant
 
-The right-sidebar **Motion Assistant** applies focused language edits to the
-current motion. AI support is optional: standard GhostGUI editing continues to
-work without an AI package or API key.
+The right-sidebar **Motion Assistant** creates and edits motion from ordinary
+language. AI support is optional; standard GhostGUI editing works without an AI
+package or API key.
 
-## Configure Gemini Or Claude
+## Configure A Provider
 
-Open **Settings** in the Motion Assistant and choose the provider and model.
-Choose **Gemini** or **Anthropic**. The model field is editable so a newer
-compatible Gemini or Claude model can be selected without changing GhostGUI.
+Open **Settings**, choose Gemini or Anthropic, and select a compatible model.
+Keys can be stored in the operating-system credential store, kept only for the
+current process, or supplied through `GOOGLE_API_KEY`, `GEMINI_API_KEY`, or
+`ANTHROPIC_API_KEY`. GhostGUI never saves a key in a project or plain UI
+preferences. **Test Connection** makes a small read-only provider request and
+caches a successful result for that provider, model, and key identity during
+the current process.
 
-Enter a Bring Your Own Key only when AI support is wanted. With **Store
-securely** enabled, GhostGUI writes the key to the operating-system credential
-store. Without it, the entered key remains in memory for the current process.
-GhostGUI never writes the key to a project or its plain UI preferences. The
-official `GOOGLE_API_KEY`, `GEMINI_API_KEY`, and `ANTHROPIC_API_KEY`
-environment variables remain supported. Session-only keys are kept separately
-per provider so switching providers cannot reuse a key with the wrong service.
-**Test Connection** performs a small provider request without changing the
-motion. A successful result is cached for the current provider, model, and API
-key identity during this GhostGUI process. Repeating the identical test uses
-the cached result; changing any of those settings invalidates it. GhostGUI does
-not test the connection automatically at startup.
-
-The optional AI dependency versions are pinned to the known-working live-smoke
-baseline used for the normalized provider adapters:
+The pinned optional AI baseline is:
 
 - `google-genai==2.21.0` with `gemini-3.7-flash`;
 - `anthropic==1.4.0` with `claude-sonnet-5`;
 - `keyring==25.7.0` for secure credential storage.
 
-The live checks covered text, structured output, tool calling, and vision for
-each provider. Upgrading one of these packages requires rerunning the offline
-adapter contract tests and the corresponding opt-in live smoke test before
-updating this baseline.
+## Create Or Edit Motion
 
-## Edit And Review
-
-1. Select the relevant logical frame and active time. To target an interval,
-   select Keyframe-table rows at both ends of the range with Shift or the
-   platform multi-select modifier.
-2. Describe one focused motion edit and choose **Apply**.
-3. Continue inspecting the camera and timeline while the request runs.
-4. Review the proposed changes and Orange preview.
-5. Choose **Accept**, **Reject**, or enter another instruction and choose
+1. Optionally select a Keyframe, End Effector, Joint Angle, or time range.
+2. Describe the result naturally, such as “Move the entire robot 5 cm higher,”
+   “keep both hands planted,” or “create a 5-second burpee.”
+3. Choose **Apply**.
+4. Review the proposed changes and **Orange preview**. Use **Preview candidate**
+   to scrub or play the whole staged result.
+5. Choose **Accept**, **Reject**, or enter another direction and choose
    **Refine**.
 
-AI changes are made on a detached working copy. The Orange preview presents
-that copy but is not its source of truth. While a result is staged, choose
-**Preview candidate** and use the normal timeline scrubber or **Play** control to
-inspect the whole working motion. Orange shows the staged candidate while the
-reference robot samples committed motion at the same time. Scrubbing and
-playback are read-only and do not move, add, or commit a Keyframe. **Accept**
-atomically replaces the committed motion and creates one history entry.
-**Reject** discards the complete working copy. **Refine** continues from the
-staged copy rather than restarting from committed motion.
+GhostGUI automatically supplies a bounded description of the active robot and
+motion. It includes named Joint Angles, root pose, End Effector forward
+kinematics, pelvis and torso state, current time, the selected interval, and
+8–20 representative numerical samples. For vision-capable models, normal
+**Apply** and **Refine** also capture up to eight rendered views automatically.
+Each image carries an explicit motion time in both its metadata and a visible
+timestamp overlay. The user does not need to take screenshots or calculate
+coordinates.
 
-Each normal **Apply** or **Refine** action asks the provider once for a complete,
-structured semantic plan. GhostGUI then validates and executes every operation
-locally through its strict tool registry, runs structural and kinematic checks
-on the resulting working copy, and builds the proposal summary from recorded
-local results. Plans containing one operation or many operations therefore use
-the same single provider request; GhostGUI does not send a second request merely
-to obtain a “done” message.
+If frame capture is unavailable, numerical context is still used and the
+candidate shows a warning. A text-only provider can use the same workflow
+without images.
 
-While that action runs, the status advances through deterministic local stages:
-planning, plan completion, operation 1/N through N/N, validation, and candidate
-completion. These updates describe work GhostGUI already performs and do not
-make additional provider requests. Provider text is currently consumed as one
-complete structured response rather than streamed token by token.
+## How Motion Is Produced
 
-The local motion check covers positive finite duration, current and Keyframe
-times, active-model and qpos compatibility, finite qpos values, Joint Angle
-limits, blocking collisions reported by the configured collision checker,
-logical TargetFrame names, and consistency between same-time TargetFrames and
-qpos forward kinematics. It is an authoring-time structural and kinematic check.
-It does not assess dynamics, balance, actuator or torque limits, contact
-stability, or hardware feasibility.
+The provider returns a compact motion specification, not CSV or dense qpos.
+GhostGUI performs all numerical work locally using its existing robot model,
+timeline interpolation, FK, IK, Joint Angle editing, retiming, and constraint
+machinery. Supported intent includes:
 
-When an explicit Joint Angle or joint-group operation changes a qpos Keyframe,
-GhostGUI runs forward kinematics locally and updates every existing logical
-Keyframe affected by those joints in the same atomic working-copy change. This
-keeps the two editable motion representations aligned. If one of those logical
-Keyframes is user-authored or protected, the complete Joint Angle operation is
-rejected rather than partially changing qpos.
+- exact root offsets over a time range;
+- holding a sampled whole-body, Joint Angle, or joint-group pose;
+- retiming an interval;
+- explicit named Joint Angle and joint-group targets;
+- End Effector targets and locks through IK;
+- pelvis, torso, and other logical-frame targets through IK; and
+- sparse semantic Keyframes for new motion, interpolated locally to a normal
+  dense qpos trajectory.
 
-At request time, the controller takes one snapshot from the editor's existing
-authoritative controls. It includes the current timeline time, a multi-row
-Keyframe interval, active Keyframe, selected logical frame or End Effector,
-recently manipulated Joint Angle while Joint Angles mode is active, an
-unambiguous model-defined joint group, edit mode, active view and 3D camera,
-current robot capabilities, and protected or user-owned Keyframes. The same
-snapshot path is used by Apply, Refine, Critique, Visual refine, and Verify
-visually. Selecting the right hand therefore gives “this” the semantic context
-`right_hand`; selecting rows at 2.0 s and 3.0 s gives “this section” the interval
-`[2.0, 3.0]`.
+The default workflow makes one provider planning request. If the returned
+structure is malformed, GhostGUI may make exactly one repair request containing
+the original instruction, parser error, and expected compact contract. An IK or
+execution failure does not start an autonomous repair loop. No path accepts raw
+dense qpos generation, arbitrary code, shell commands, DSMS, RL, hardware, or
+robot-control operations.
 
-For the Unitree G1, model capabilities advertise left/right arms, both arms,
-left/right legs, both legs, waist, and upper-body Joint Angle groups. These
-group names and their ordered members come from the robot registry and are
-included in semantic context; the AI layer does not hard-code G1 joints.
+The older semantic ToolRegistry/PlanExecutor workflow remains available in the
+codebase for compatibility and developer use, but it is not the normal Motion
+Assistant path.
 
-If a planned operation fails local validation or execution, GhostGUI may make
-one additional repair request. That request contains the original intent,
-compact failure information, successful operations already applied, the
-updated semantic motion context, and important user constraints. It requests
-replacement operations only. If those replacements also fail, GhostGUI stops
-without a third request and presents the partial working copy plus unresolved
-failure information for human review.
+## Working Copy And Review
 
-Motion-mutating direct controls are temporarily disabled while the current UI
-owns an unresolved AI session. This prevents them from editing the committed
-document by accident. The underlying session already distinguishes user and AI
-authorship so direct manipulation can later target the same working copy.
+AI work happens in a detached document-level working copy. Orange is only its
+presentation. **Accept** atomically replaces the committed motion and creates
+one history entry, so Undo restores the exact previous motion. **Reject** drops
+the complete candidate. **Refine** samples and renders the current staged
+candidate rather than restarting from committed motion, and retains only the
+original goal plus a bounded number of recent refinements.
 
-## Visual Critique
+Motion-mutating controls are currently disabled while the UI owns an unresolved
+AI session. The session and motion-service boundaries already support manual
+edits on the working copy: those edits are recorded as human-authored, invalidate
+validation, and take priority over later AI refinement. This direct-manipulation
+UI can therefore be enabled later without redesigning the AI layer.
 
-Choose **Critique** to inspect the motion without editing it. The Motion
-Assistant captures 4--8 representative frames using the current 3D camera,
-adds a visible timestamp to every frame, and asks the configured vision-capable
-provider for structured observations. Leave the prompt empty for a general
-critique, or enter a focused question first.
+Existing motion is conservatively seeded as human-authored. Metadata and
+protection persist with projects, and unknown content fails closed. Baseline
+human motion may change only when the requested operation explicitly scopes it;
+protected content and human corrections made during the current session remain
+immutable to later AI operations. All identity lookup stays behind the metadata
+service so timestamp-based MVP identity can be migrated to stable Keyframe IDs.
 
-Observations use approximate motion times such as “Around 2.10 s” rather than
-image indexes. Critique-only mode sends no semantic edit tools, does not open an
-AI edit session, and does not change committed motion. If an Orange preview is
-already staged, **Critique** inspects that detached working copy while leaving
-it available for Accept, Reject, or Refine.
+## Validation And Warnings
 
-## Visual Refinement
+After local execution, GhostGUI validates the exact current candidate revision.
+Malformed trajectories, invalid time data or qpos width, NaN/Inf, out-of-range
+Joint Angles, inconsistent FK targets, impossible execution, and protection
+violations prevent **Accept**. Collision observations are authoring warnings and
+remain visible for review; they do not claim dynamics, balance, actuator,
+contact-stability, or hardware feasibility. Any later candidate mutation
+invalidates validation until that exact revision passes again.
 
-After an edit is staged, choose **Visual refine** to inspect 4--8 timestamped
-frames from the staged candidate. One multimodal provider request returns both
-structured observations and a complete semantic `MotionEditPlan`. GhostGUI
-then executes that plan locally through the same strict `PlanExecutor` used by
-ordinary AI edits and updates the Orange preview. It never sends the visual
-observations through a second language-model turn, asks the provider for raw
-trajectory samples, or executes provider-generated code.
+## Failures, Limits, And Diagnostics
 
-Visual refinement does not automatically repeat. Any text entered before
-choosing **Visual refine** is treated as additional user direction, and
-user-authored or protected Keyframes retain priority.
+Missing credentials, authentication errors, provider rate limits, timeouts,
+network failures, malformed responses, and cancellation leave committed motion
+unchanged. Requests are bounded by instruction/context size, 8 images at a
+512-pixel maximum dimension, 4,096 default output tokens, 16 operations, 16
+sparse Keyframes, and a 90-second default timeout. Gemini uses one outbound SDK
+attempt by default and does not automatically retry quota errors.
 
-Existing project and imported motion is seeded as user-authored when no saved
-provenance is available. Unknown provenance also fails closed as user-owned, so
-missing metadata never grants the provider permission to replace a Keyframe.
-The AI tool can add Keyframe protection but cannot remove it; unprotecting is a
-human action outside autonomous provider execution.
+Developer diagnostics are disabled by default. Setting `GHOSTGUI_AI_DEBUG=1`
+records bounded, secret-scrubbed JSON in `.ghostgui-ai-debug/`, which is
+gitignored. It records prompts, selected timestamps and frame hashes, normalized
+responses, parsed specifications, execution and validation results, usage, and
+latency—never API keys, authorization headers, keyring contents, or image bytes.
 
-Choose **Verify visually** when a staged candidate should be compared with the
-committed motion. Verification sends original and candidate frames captured at
-identical timestamps in one separate, read-only request. It reports which view
-better satisfies the goal and any remaining timestamped observations, but
-cannot edit the working copy. Thus Visual refine normally uses one provider
-request; Visual refine followed by explicit verification uses two.
-
-## Failures And Cancellation
-
-Use **Cancel request** to stop a running provider call. Missing credentials,
-authentication failure, rate limits, timeouts, network failure, and malformed
-responses are shown inside the assistant. These failures leave committed
-motion unchanged and do not stop standard GhostGUI workflows.
-
-Gemini uses one outbound SDK attempt by default so a transient failure cannot
-silently consume extra free-tier requests. Developers may explicitly configure
-a small retry count for transient server failures. Quota exhaustion and HTTP
-429 responses are never retried automatically.
-
-The assistant can call only GhostGUI's registered semantic motion tools. It
-cannot execute arbitrary code or generate an unrestricted raw qpos trajectory.
-
-Provenance and protection are saved as a versioned section of the project
-workspace and are included in autosave. Older projects remain compatible: on
-first open, their existing logical and qpos Keyframes are conservatively seeded
-as user-authored, then persisted on the next save.
-See [Motion Assistant Security And Data Boundaries](ai_security.md) for the
-exact provider disclosure, credential, payload-limit, and safety contracts.
-
-## Compare Providers
-
-Provider evaluation uses the same committed motion, selection, instruction,
-semantic ToolRegistry, and a fresh detached session for each model. Compare
-validated tool arguments, edit authorship, deterministic validation, and the
-resulting motion rather than wording in the provider response. Token use and
-provider turns are operational measurements, not semantic quality scores.
-
-Normal tests use MockProvider and do not consume provider credits. Live
-Gemini-versus-Claude checks are explicit manual smoke tests requiring both SDKs
-and locally configured credentials.
+See [Motion Assistant Security And Data Boundaries](ai_security.md) for provider
+disclosure and safety boundaries. Normal automated tests use MockProvider and
+consume no provider credits; live checks are explicit and require local SDKs
+and credentials.

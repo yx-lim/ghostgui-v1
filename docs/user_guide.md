@@ -196,12 +196,11 @@ mode, and **Gizmo** shows or hides it.
 
 The right sidebar contains a compact **Status** summary, the optional **Motion
 Assistant**, and **IK / Constraints** controls. Expand **Details** to inspect
-solver and operation diagnostics. Motion Assistant stages language edits on a
-detached working copy; use **Critique** for read-only visual observations, or
-**Visual refine** for a one-request visual semantic plan. Use **Verify visually**
-for an optional read-only comparison of the committed and staged motion. Use
-**Preview candidate** to scrub or play the staged motion in Orange against the
-same-time committed reference, then use **Accept**, **Reject**, or **Refine**.
+solver and operation diagnostics. Motion Assistant automatically supplies
+robot-state samples and timestamped rendered views, then stages natural-language
+edits on a detached working copy. Use **Preview candidate** to inspect the
+Orange preview, or enter another instruction and choose **Refine** before
+**Accept** or **Reject**.
 See
 [Motion Assistant](ai_assistant.md) for secure API-key
 setup and failure behavior.

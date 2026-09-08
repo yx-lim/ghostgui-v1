@@ -2,7 +2,7 @@
 
 The Motion Assistant is an optional authoring aid, not a robot controller or a
 safety system. Provider output is untrusted. GhostGUI converts that output into
-strict semantic tool requests, executes deterministic application services on a
+strict compact motion operations, executes deterministic application services on a
 detached working copy, validates the result, and waits for human review before
 Accept can change the committed motion.
 
@@ -11,13 +11,14 @@ Accept can change the committed motion.
 A text edit can send:
 
 - the user's instruction;
-- a compact semantic summary containing the robot model, logical-frame, End
-  Effector, Joint Angle, selection, current timeline time, selected Keyframe
-  interval, active view/3D camera, Keyframe-time, and protection context;
-- the strict semantic tool names and argument schemas; and
-- after a local operation failure, at most one compact repair payload containing
-  the failed operations and reasons, successful operations already applied,
-  updated semantic context, and important user constraints.
+- a compact numerical summary containing the robot model, named Joint Angles,
+  root pose, logical-frame and End Effector FK, pelvis/torso state, selection,
+  current time, representative samples, and protection context;
+- up to eight automatically captured timestamped renders when vision is
+  supported;
+- the strict compact operation contracts; and
+- after a structural parsing failure, at most one compact repair payload with
+  the original instruction, exact error, and expected contract.
 
 The compact context intentionally excludes raw qpos values, project file paths,
 terminal logs, credentials, and unrestricted application state. A project or
@@ -29,11 +30,11 @@ request begins; the Motion Assistant does not maintain a second document,
 timeline, or camera selection model. A time interval is disclosed only when at
 least two distinct Keyframe times are selected.
 
-Critique and Visual refine additionally send 4--8 rendered images from the
-current 3D camera. **Verify visually** sends 4--8 original/candidate image pairs.
-Every image has explicit time metadata, and each verification pair uses an
-identical timestamp. Treat anything visible in those renders as data disclosed
-to the selected provider. GhostGUI does not upload video.
+Every image has explicit time metadata and a visible timestamp overlay. Refine
+renders the staged candidate, not the committed original. Before/after pairs,
+when used by a developer-only legacy path, use identical timestamps. Treat
+anything visible in those renders as data disclosed to the selected provider.
+GhostGUI does not upload video.
 
 Provider handling, retention, and regional processing of submitted content are
 governed by the selected provider and account. Review those terms before using
@@ -57,32 +58,32 @@ network connection, or provider credential.
 
 ## Enforced Boundaries
 
-- The ToolRegistry is an explicit allowlist with closed argument schemas.
+- The default TrajectoryEditSpec vocabulary is an explicit allowlist with closed
+  argument schemas; the legacy ToolRegistry remains developer-only.
 - There is no shell, filesystem, arbitrary-code, raw-qpos-trajectory, RL,
   hardware, or DSMS tool.
-- Agent provider turns, tool calls, request time, instruction size, response
-  size, tool-result size, and requested output tokens are locally bounded.
-- Normal text edits use one planning request. A local operation failure may use
-  one replacement-operation request, after which autonomous execution stops.
+- Request time, instruction/context size, response size, output tokens,
+  operation count, sparse Keyframes, numerical samples, and images are bounded.
+- Normal edits use one planning request. Only structural parsing failure may use
+  one repair request, after which autonomous execution stops.
 - A rendered frame is limited to 8 MiB, and provider capability limits still
   constrain the total image count.
-- Critique, Visual refine, and visual verification receive no executable tool
-  declarations. Visual refine accepts semantic operation data through a strict
-  structured schema and executes it only through the local ToolRegistry.
-- Visual refine makes one multimodal planning request and does not automatically
-  repeat. **Verify visually** is an optional separate read-only request.
+- Normal Apply/Refine receives no executable tool declarations. It accepts a
+  compact structured plan and executes deterministic local handlers only.
 - Gemini makes one outbound attempt by default. Explicit transient-server retry
   settings never make quota-exhaustion or HTTP 429 responses retryable.
-- User-authored and protected Keyframes take priority over later AI edits.
-  Missing provenance is treated as user-owned, never as implicit AI ownership.
+- Baseline user-authored content may change only within the explicit operation
+  scope. Protected content and in-session human corrections take priority over
+  later AI edits. Missing provenance is treated as user-owned.
 - Joint Angle tools stage qpos plus FK-derived affected logical Keyframes in one
   atomic replacement. Provenance checks cover both representations before
   mutation, preventing a partial qpos-only edit.
 - Local motion validation checks finite values, time and model contracts, qpos
-  shape, Joint Angle limits, configured blocking collisions, logical TargetFrame
+  shape, Joint Angle limits, logical TargetFrame
   names, and same-time TargetFrame/qpos forward-kinematics consistency. Its
   machine-readable result explicitly identifies this scope as structural and
-  kinematic and reports that dynamic feasibility was not assessed.
+  kinematic and reports that dynamic feasibility was not assessed. Collision
+  observations are surfaced separately as authoring warnings.
 - The provider-facing protection tool can only add protection. Removing a
   protection requires a human-owned path outside autonomous tool execution.
 - Accept uses one atomic `ReplaceMotionState` command and rejects a session if
