@@ -6,7 +6,11 @@ from dataclasses import dataclass
 import math
 from typing import Any, Protocol
 
-from application.ai.schemas import ImageVariant, MotionFrameImage
+from application.ai.schemas import (
+    ImageVariant,
+    MotionFrameImage,
+    ProviderCapabilities,
+)
 from application.project_document import ProjectDocument
 
 
@@ -20,7 +24,7 @@ class FrameSamplingRequest:
 
     selected_interval: tuple[float, float] | None = None
     suspected_times: tuple[float, ...] = ()
-    minimum_frames: int = 4
+    minimum_frames: int = 6
     maximum_frames: int = 8
 
     def __post_init__(self) -> None:
@@ -66,6 +70,18 @@ class EncodedFrame:
             raise ValueError("rendered frame data must not be empty")
         if self.mime_type not in {"image/jpeg", "image/png", "image/webp"}:
             raise ValueError("unsupported rendered frame MIME type")
+
+
+@dataclass(frozen=True)
+class AutomaticMotionFrames:
+    """Optional visual context that never makes numerical planning unavailable."""
+
+    frames: tuple[MotionFrameImage, ...] = ()
+    unavailable_reason: str | None = None
+
+    @property
+    def available(self) -> bool:
+        return bool(self.frames)
 
 
 class MotionFrameRenderer(Protocol):
@@ -175,6 +191,45 @@ def capture_motion_frames(
             label=comparison_id,
         ))
     return tuple(frames)
+
+
+def capture_automatic_motion_frames(
+    document: ProjectDocument,
+    renderer: MotionFrameRenderer,
+    capabilities: ProviderCapabilities,
+    *,
+    selected_interval: tuple[float, float] | None = None,
+    current_time: float | None = None,
+    variant: ImageVariant = ImageVariant.ORIGINAL,
+) -> AutomaticMotionFrames:
+    """Capture normal Apply/Refine vision or return a graceful fallback."""
+
+    if not capabilities.supports_vision:
+        return AutomaticMotionFrames(unavailable_reason="provider does not support vision")
+    maximum = min(8, int(capabilities.max_images_per_request))
+    if maximum < 4:
+        return AutomaticMotionFrames(
+            unavailable_reason="provider image limit is below the motion-context minimum"
+        )
+    minimum = min(6, maximum)
+    suspected = () if current_time is None else (float(current_time),)
+    try:
+        plan = FrameSampler().plan(
+            document,
+            FrameSamplingRequest(
+                selected_interval=selected_interval,
+                suspected_times=suspected,
+                minimum_frames=minimum,
+                maximum_frames=maximum,
+            ),
+        )
+        return AutomaticMotionFrames(
+            capture_motion_frames(document, plan, renderer, variant=variant)
+        )
+    except Exception as error:
+        return AutomaticMotionFrames(
+            unavailable_reason=f"visual context unavailable ({type(error).__name__})"
+        )
 
 
 def _sample_qpos(document: ProjectDocument, time_seconds: float) -> Any:

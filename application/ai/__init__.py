@@ -122,6 +122,7 @@ from application.ai.repair_planner import (
 )
 from application.ai.preview import sample_working_preview_qpos
 from application.ai.frame_capture import (
+    AutomaticMotionFrames,
     EncodedFrame,
     FrameCaptureError,
     FrameSampler,
@@ -129,6 +130,7 @@ from application.ai.frame_capture import (
     FrameSamplingRequest,
     MotionFrameRenderer,
     capture_comparison_frames,
+    capture_automatic_motion_frames,
     capture_motion_frames,
 )
 from application.ai.visual_critique import (
@@ -220,6 +222,7 @@ __all__ = [
     "AIProgressStage",
     "AIContext",
     "AnthropicProvider",
+    "AutomaticMotionFrames",
     "ContextBuilder",
     "ConnectionTestCache",
     "ConnectionTestIdentity",
@@ -343,6 +346,7 @@ __all__ = [
     "VisualVerifier",
     "build_semantic_tool_registry",
     "capture_comparison_frames",
+    "capture_automatic_motion_frames",
     "capture_motion_frames",
     "connection_test_identity",
     "compare_provider_agents",

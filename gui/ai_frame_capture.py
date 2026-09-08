@@ -11,7 +11,7 @@ from application.ai.frame_capture import EncodedFrame, FrameCaptureError
 class RobotViewerFrameRenderer:
     """Capture a clean robot pose without changing editor or camera state."""
 
-    def __init__(self, viewer, *, maximum_dimension: int = 768):
+    def __init__(self, viewer, *, maximum_dimension: int = 512):
         if viewer.robot_model is None:
             raise FrameCaptureError("robot frame capture requires a loaded model")
         if maximum_dimension <= 0:

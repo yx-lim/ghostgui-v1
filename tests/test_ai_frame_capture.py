@@ -5,15 +5,22 @@ from __future__ import annotations
 import unittest
 
 from application.ai.frame_capture import (
+    AutomaticMotionFrames,
     EncodedFrame,
     FrameCaptureError,
     FrameSampler,
     FrameSamplingPlan,
     FrameSamplingRequest,
     capture_comparison_frames,
+    capture_automatic_motion_frames,
     capture_motion_frames,
 )
-from application.ai.schemas import ImageVariant, MessageRole, ProviderMessage
+from application.ai.schemas import (
+    ImageVariant,
+    MessageRole,
+    ProviderCapabilities,
+    ProviderMessage,
+)
 from application.project_document import ProjectDocument
 
 
@@ -42,6 +49,11 @@ class _RecordingRenderer:
         return EncodedFrame(payload)
 
 
+class _FailingRenderer:
+    def render_frame(self, qpos, *, time_seconds, variant):
+        raise FrameCaptureError("renderer unavailable")
+
+
 def _document(*, duration=5.0, states=()):
     return ProjectDocument(
         "g1",
@@ -63,6 +75,7 @@ class FrameSamplerTests(unittest.TestCase):
         self.assertEqual(plan.times_seconds[0], 0.0)
         self.assertEqual(plan.times_seconds[-1], 5.0)
         self.assertEqual(tuple(sorted(set(plan.times_seconds))), plan.times_seconds)
+        self.assertGreaterEqual(len(plan.times_seconds), 6)
 
     def test_selected_interval_and_suspected_area_are_retained(self):
         document = _document(
@@ -164,6 +177,60 @@ class ComparisonCaptureTests(unittest.TestCase):
                 plan,
                 _RecordingRenderer(),
             )
+
+
+class AutomaticMotionFrameTests(unittest.TestCase):
+    def test_normal_context_captures_six_timestamped_frames(self):
+        document = _document(
+            states=tuple((float(value), [value]) for value in range(6))
+        )
+        renderer = _RecordingRenderer()
+        capabilities = ProviderCapabilities(
+            supports_tools=False,
+            supports_vision=True,
+            max_images_per_request=16,
+        )
+
+        result = capture_automatic_motion_frames(
+            document,
+            renderer,
+            capabilities,
+            current_time=2.0,
+        )
+
+        self.assertIsInstance(result, AutomaticMotionFrames)
+        self.assertTrue(result.available)
+        self.assertEqual(len(result.frames), 6)
+        self.assertEqual(result.frames[0].time_seconds, 0.0)
+        self.assertEqual(result.frames[-1].time_seconds, 5.0)
+        self.assertIn(2.0, [frame.time_seconds for frame in result.frames])
+
+    def test_text_only_provider_and_capture_failure_degrade_gracefully(self):
+        document = _document(states=((0.0, [0.0]),))
+        text_only = ProviderCapabilities(
+            supports_tools=False,
+            supports_vision=False,
+        )
+
+        unavailable = capture_automatic_motion_frames(
+            document,
+            _RecordingRenderer(),
+            text_only,
+        )
+        failed_capture = capture_automatic_motion_frames(
+            document,
+            _FailingRenderer(),
+            ProviderCapabilities(
+                supports_tools=False,
+                supports_vision=True,
+                max_images_per_request=8,
+            ),
+        )
+
+        self.assertFalse(unavailable.available)
+        self.assertIn("does not support vision", unavailable.unavailable_reason)
+        self.assertFalse(failed_capture.available)
+        self.assertIn("visual context unavailable", failed_capture.unavailable_reason)
 
 
 if __name__ == "__main__":
