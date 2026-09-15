@@ -36,6 +36,7 @@ class TrajectoryOperationType(str, Enum):
     LOCK_END_EFFECTOR = "lock_end_effector"
     SPARSE_KEYFRAMES = "sparse_keyframes"
     QPOS_KEYFRAMES = "qpos_keyframes"
+    MOTION_PRIMITIVE = "motion_primitive"
 
 
 @dataclass(frozen=True)
@@ -83,9 +84,15 @@ class TrajectoryEditSpec:
             for operation in self.operations
             if operation.operation_type is TrajectoryOperationType.QPOS_KEYFRAMES
         )
-        if qpos_operations and len(self.operations) != 1:
+        primitive_operations = tuple(
+            operation
+            for operation in self.operations
+            if operation.operation_type is TrajectoryOperationType.MOTION_PRIMITIVE
+        )
+        exclusive_operations = qpos_operations + primitive_operations
+        if exclusive_operations and len(self.operations) != 1:
             raise ValueError(
-                "qpos_keyframes must be the only operation in a trajectory edit spec"
+                "whole-body generation must be the only operation in a trajectory edit spec"
             )
         if qpos_operations:
             qpos_mode = qpos_operations[0].arguments["mode"]
@@ -98,6 +105,9 @@ class TrajectoryEditSpec:
                 raise ValueError(
                     f"qpos_keyframes {qpos_mode} requires {expected_mode.value} mode"
                 )
+        elif primitive_operations:
+            if self.mode is not TrajectoryEditMode.GENERATE:
+                raise ValueError("motion_primitive requires generate mode")
         elif has_sparse_generation != (self.mode is TrajectoryEditMode.GENERATE):
             raise ValueError(
                 "generate mode requires sparse_keyframes and edit mode forbids it"
@@ -213,6 +223,10 @@ def trajectory_operation_argument_contracts() -> dict[str, Any]:
                 "the interval because GhostGUI preserves both boundaries"
             ),
         },
+        "motion_primitive": {
+            "primitive": "model-advertised primitive name",
+            "duration_seconds": "finite seconds > 0",
+        },
     }
 
 
@@ -259,6 +273,7 @@ def _validate_arguments(operation_type: TrajectoryOperationType, values: dict[st
         TrajectoryOperationType.LOCK_END_EFFECTOR: _validate_lock,
         TrajectoryOperationType.SPARSE_KEYFRAMES: _validate_sparse_keyframes,
         TrajectoryOperationType.QPOS_KEYFRAMES: _validate_qpos_keyframes,
+        TrajectoryOperationType.MOTION_PRIMITIVE: _validate_motion_primitive,
     }
     validators[operation_type](values)
 
@@ -477,6 +492,14 @@ def _validate_qpos_keyframes(values):
         raise ValueError(
             "qpos patch Keyframes must be strictly inside the patch interval"
         )
+
+
+def _validate_motion_primitive(values):
+    _exact_fields(values, ("primitive", "duration_seconds"))
+    _name(values["primitive"], "primitive")
+    duration = _number(values["duration_seconds"], "duration_seconds", positive=True)
+    if duration > MAX_GENERATED_MOTION_DURATION_SECONDS:
+        raise ValueError("motion primitive duration exceeds the local limit")
 
 
 def _validate_end_effector_targets(values):

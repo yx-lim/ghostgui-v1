@@ -46,6 +46,11 @@ class CompactMotionRunResult:
             for item in self.execution.operations
             for warning in item.output.get("collision_warnings", ())
         )
+        concessions = tuple(
+            concession
+            for item in self.execution.operations
+            for concession in item.output.get("concessions", ())
+        )
         warnings = tuple(
             f"Warning: {warning}"
             for warning in (
@@ -54,7 +59,7 @@ class CompactMotionRunResult:
                 *self.execution.validation.warnings,
             )
         )
-        return changes + tuple(dict.fromkeys(warnings))
+        return changes + tuple(dict.fromkeys((*concessions, *warnings)))
 
 
 class CompactMotionWorkflow:

@@ -317,7 +317,7 @@ cache invalidation, and viewer refresh happen only after the transaction; a
 presentation failure is reported as a warning and does not make a successfully
 accepted session appear staged or partially committed.
 
-The compact Motion Assistant supports two complementary motion representations.
+The compact Motion Assistant supports three complementary motion representations.
 Semantic operations use named Joint Angles and Cartesian IK for precise edits.
 The exclusive `qpos_keyframes` operation carries bounded complete sparse states
 for whole-body generation or interval patching. The active model supplies qpos
@@ -328,6 +328,22 @@ keeps qpos outside the interval and injects the original boundary states. After
 either mode, only FK-derived logical Keyframes are stored at the sparse anchor
 times, making qpos the authoritative representation without weakening FK
 consistency checks.
+
+The exclusive `motion_primitive` operation selects a model-advertised local
+recipe rather than accepting provider-authored qpos. Model-specific primitive
+and reference-pose registration belongs to `core/models/registry.py`; reusable
+loading, synthesis, and semantic gates belong to
+`application/ai/motion_primitives.py`. The initial G1 burpee recipe uses exact
+standing endpoints and the bundled front-down push-up reference, generates an
+eased dense path, corrects between-Keyframe environment penetration, rejects
+self-collision, and reports its no-jump concession. Its gates cover endpoint,
+facing/reference, support proximity, collision, root-continuity, Joint Angle
+speed, and acceleration invariants. They do not assert dynamics or hardware
+safety.
+
+A planner-side allowlist policy also converts provider-authored whole-body
+output to this primitive for narrowly recognized burpee creation and front-down
+refinement requests. It does not rewrite unrelated motion instructions.
 
 `GhostGUIMotionService.validate_motion` owns local working-copy validation. It
 checks duration and time domains, document/timeline model identity, qpos width

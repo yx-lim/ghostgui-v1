@@ -14,6 +14,7 @@ from application.ai.motion_state import (
     detached_document,
 )
 from application.ai.motion_services import JointAngleEditResult, LogicalFrameSolveResult
+from application.ai.motion_primitives import build_motion_primitive
 from application.ai.qpos_trajectory import (
     normalize_qpos_quaternions,
     validate_qpos_anchors,
@@ -90,6 +91,11 @@ def build_trajectory_operation_handlers(motion_service, metadata_service):
         ),
         TrajectoryOperationType.QPOS_KEYFRAMES: (
             lambda operation, context: _apply_qpos_keyframes(
+                operation, context, motion_service, metadata_service
+            )
+        ),
+        TrajectoryOperationType.MOTION_PRIMITIVE: (
+            lambda operation, context: _apply_motion_primitive(
                 operation, context, motion_service, metadata_service
             )
         ),
@@ -700,6 +706,133 @@ def _apply_qpos_keyframes(operation, context, motion, metadata):
             * len(_trajectory_frame_names(motion.adapter))
         ),
     }
+
+
+def _apply_motion_primitive(operation, context, motion, metadata):
+    document = context.session.working_document
+    if document.qpos_timeline is None:
+        raise TrajectoryOperationError(
+            "motion_primitive requires an editable qpos timeline"
+        )
+    arguments = operation.arguments
+    try:
+        plan = build_motion_primitive(
+            motion.adapter,
+            primitive=arguments["primitive"],
+            duration_seconds=float(arguments["duration_seconds"]),
+        )
+    except (TypeError, ValueError) as error:
+        raise TrajectoryOperationError(str(error)) from error
+
+    candidate = detached_document(document)
+    _replace_with_motion_primitive(
+        candidate,
+        motion,
+        plan.anchors,
+        float(arguments["duration_seconds"]),
+    )
+    candidate.trajectory = Trajectory()
+    candidate.active_index = -1
+    for anchor, phase in zip(plan.anchors, plan.phases):
+        _capture_generation_frames(
+            candidate,
+            motion,
+            anchor.time_seconds,
+            candidate.qpos_timeline.sample_state(anchor.time_seconds),
+            phase=f"ai_{phase}",
+        )
+
+    working_metadata = MotionMetadataService(
+        context.session.metadata,
+        metadata.resolver,
+    )
+    existing = set(_motion_references(document, working_metadata))
+    replacement = set(_motion_references(candidate, working_metadata))
+    result = context.session.apply_ai(
+        ReplaceMotionState(
+            capture_motion_state(candidate),
+            operation=f"motion_primitive_{plan.name}_{plan.variant}",
+        ),
+        affected_entities=tuple(existing | replacement),
+        created_entities=tuple(replacement - existing),
+        allow_user_override=True,
+    )
+    if not result.changed:
+        raise TrajectoryOperationError("motion_primitive made no motion change")
+    return {
+        "primitive": plan.name,
+        "variant": plan.variant,
+        "duration_seconds": candidate.timeline_duration,
+        "sparse_keyframes": len(plan.anchors),
+        "dense_qpos_samples": len(candidate.qpos_timeline.times()),
+        "quality_checks": list(plan.quality_checks),
+        "concessions": list(plan.concessions),
+    }
+
+
+def _replace_with_motion_primitive(candidate, motion, anchors, duration):
+    """Interpolate a primitive while preventing between-anchor floor cuts."""
+
+    from application.ai.motion_primitives import clear_environment_collisions
+
+    sparse_timeline = _empty_timeline_like(candidate.qpos_timeline)
+    for anchor in anchors:
+        sparse_timeline.set_state(anchor.time_seconds, anchor.qpos)
+    dense_times = tuple(sorted({
+        *_uniform_times(duration, 0.01),
+        *(anchor.time_seconds for anchor in anchors),
+    }))
+    candidate.qpos_timeline.states = {}
+    previous = None
+    previous_velocity = None
+    joint_addresses = np.asarray([
+        int(motion.adapter.joints[name].qpos_address)
+        for name in motion.adapter.joint_names
+    ])
+    for time in dense_times:
+        sample_time = _smooth_primitive_sample_time(time, anchors)
+        qpos = normalize_qpos_quaternions(
+            motion.adapter,
+            sparse_timeline.sample_state(sample_time),
+            context=f"interpolated motion primitive at {time:.3f} s",
+        )
+        qpos = clear_environment_collisions(motion.adapter, qpos)
+        if previous is not None:
+            elapsed = time - previous[0]
+            root = tuple(motion.adapter.free_joints_by_body.values())[0]
+            address = int(root.qpos_address)
+            root_speed = float(np.linalg.norm(
+                qpos[address:address + 3] - previous[1][address:address + 3]
+            )) / elapsed
+            if root_speed > 3.0:
+                raise TrajectoryOperationError(
+                    "motion primitive exceeds the root continuity speed limit"
+                )
+            velocity = (
+                qpos[joint_addresses]
+                - previous[1][joint_addresses]
+            ) / elapsed
+            if previous_velocity is not None:
+                acceleration = (velocity - previous_velocity) / elapsed
+                if float(np.max(np.abs(acceleration))) > 100.0:
+                    raise TrajectoryOperationError(
+                        "motion primitive exceeds the Joint Angle acceleration limit"
+                    )
+            previous_velocity = velocity
+        candidate.qpos_timeline.set_state(time, qpos)
+        previous = (time, qpos)
+    candidate.set_timeline_duration(duration)
+    candidate.current_time = min(candidate.current_time, duration)
+
+
+def _smooth_primitive_sample_time(time, anchors):
+    for start, end in zip(anchors, anchors[1:]):
+        if time <= end.time_seconds + 1e-12:
+            elapsed = end.time_seconds - start.time_seconds
+            fraction = min(1.0, max(0.0, (time - start.time_seconds) / elapsed))
+            eased = fraction * fraction * (3.0 - 2.0 * fraction)
+            return start.time_seconds + eased * elapsed
+    return anchors[-1].time_seconds
 
 
 def _replace_with_qpos_anchors(candidate, motion, anchors, duration):

@@ -70,6 +70,11 @@ class FakeState:
 
 class FakeAdapter:
     def __init__(self):
+        self.info = SimpleNamespace(
+            motion_primitives=("burpee",),
+            forward_axis=(1.0, 0.0, 0.0),
+            up_axis=(0.0, 0.0, 1.0),
+        )
         self.mj_model = SimpleNamespace(nq=9)
         self.home_qpos = np.array([0, 0, 0.8, 1, 0, 0, 0, 0, 0], dtype=float)
         self.free_joints_by_body = {0: SimpleNamespace(qpos_address=0)}
@@ -131,6 +136,18 @@ class MotionAssistantContextBuilderTests(unittest.TestCase):
             "wxyz",
         )
         self.assertEqual(
+            payload["robot"]["qpos_layout"]["ordered_joints"][0],
+            {
+                "name": "right_shoulder",
+                "qpos_address": 7,
+                "unit": None,
+                "limits": None,
+                "positive_direction_axis_model": None,
+            },
+        )
+        self.assertEqual(payload["robot"]["forward_axis"], [1.0, 0.0, 0.0])
+        self.assertEqual(payload["robot"]["motion_primitives"], ["burpee"])
+        self.assertEqual(
             current["qpos"],
             [0.0, 0.0, 0.9, 1.0, 0.0, 0.0, 0.0, 0.5, 0.4],
         )
@@ -177,6 +194,18 @@ class MotionAssistantContextBuilderTests(unittest.TestCase):
         self.assertLessEqual(payload["motion"]["numerical_sample_count"], 8)
         with self.assertRaisesRegex(ValueError, "8 to 20"):
             MotionAssistantContextBuilder(FakeAdapter(), max_numerical_samples=21)
+
+    def test_identical_consecutive_samples_are_compacted(self):
+        document = _document()
+        document.qpos_timeline.states[1.0] = document.qpos_timeline.states[0.0].copy()
+
+        payload = MotionAssistantContextBuilder(FakeAdapter()).build(document).to_dict()
+
+        self.assertEqual(payload["motion"]["numerical_sample_count"], 2)
+        self.assertEqual(
+            [item["time_seconds"] for item in payload["motion"]["numerical_samples"]],
+            [0.0, 1.0],
+        )
 
     def test_refine_samples_staged_candidate_not_committed_document(self):
         committed = _document()

@@ -55,9 +55,17 @@ class RobotCapabilityContext:
     end_effectors: tuple[str, ...] = ()
     joints: tuple[str, ...] = ()
     joint_groups: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    motion_primitives: tuple[str, ...] = ()
+    forward_axis: tuple[float, float, float] = (1.0, 0.0, 0.0)
+    up_axis: tuple[float, float, float] = (0.0, 0.0, 1.0)
 
     def __post_init__(self) -> None:
-        for values in (self.logical_frames, self.end_effectors, self.joints):
+        for values in (
+            self.logical_frames,
+            self.end_effectors,
+            self.joints,
+            self.motion_primitives,
+        ):
             if any(not str(value).strip() for value in values):
                 raise ValueError("robot capability names must not be empty")
         for group_name, members in self.joint_groups:
@@ -65,6 +73,12 @@ class RobotCapabilityContext:
                 not str(member).strip() for member in members
             ):
                 raise ValueError("joint group names and members must not be empty")
+        for field_name in ("forward_axis", "up_axis"):
+            axis = tuple(getattr(self, field_name))
+            if len(axis) != 3 or any(
+                not math.isfinite(float(value)) for value in axis
+            ):
+                raise ValueError(f"{field_name} must contain three finite values")
 
 
 @dataclass(frozen=True)
@@ -138,6 +152,9 @@ class ContextBuilder:
                     name: list(members)
                     for name, members in robot_capabilities.joint_groups
                 },
+                "motion_primitives": list(robot_capabilities.motion_primitives),
+                "forward_axis": list(robot_capabilities.forward_axis),
+                "up_axis": list(robot_capabilities.up_axis),
             },
             "motion": {
                 "name": motion_name,
@@ -238,7 +255,7 @@ class MotionAssistantContextBuilder(ContextBuilder):
         self,
         adapter,
         *,
-        max_numerical_samples: int = 12,
+        max_numerical_samples: int = 8,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -275,6 +292,7 @@ class MotionAssistantContextBuilder(ContextBuilder):
         return AIContext(base)
 
     def _adapter_capabilities(self) -> RobotCapabilityContext:
+        info = getattr(self.adapter, "info", None)
         return RobotCapabilityContext(
             logical_frames=tuple(self.adapter.logical_frame_bindings),
             end_effectors=tuple(self.adapter.end_effectors),
@@ -283,6 +301,9 @@ class MotionAssistantContextBuilder(ContextBuilder):
                 (name, tuple(members))
                 for name, members in sorted(self.adapter.joint_groups.items())
             ),
+            motion_primitives=tuple(getattr(info, "motion_primitives", ())),
+            forward_axis=tuple(getattr(info, "forward_axis", (1.0, 0.0, 0.0))),
+            up_axis=tuple(getattr(info, "up_axis", (0.0, 0.0, 1.0))),
         )
 
     def _qpos_layout(self) -> dict:
@@ -299,15 +320,43 @@ class MotionAssistantContextBuilder(ContextBuilder):
                 }
             ),
             "ordered_joint_names": list(self.adapter.joint_names),
+            "ordered_joints": [
+                self._joint_layout(name) for name in self.adapter.joint_names
+            ],
             "joint_units": "radians for hinge joints; metres for slide joints",
             "quaternion_convention": "wxyz",
+        }
+
+    def _joint_layout(self, name):
+        joint = self.adapter.joints[name]
+        limits = getattr(joint, "limits", None)
+        joint_type = getattr(joint, "joint_type", None)
+        axes = getattr(self.adapter.mj_model, "jnt_axis", None)
+        joint_id = getattr(joint, "joint_id", None)
+        axis = None
+        if axes is not None and joint_id is not None:
+            axis = [float(value) for value in axes[int(joint_id)]]
+        return {
+            "name": name,
+            "qpos_address": int(joint.qpos_address),
+            "unit": (
+                "metres"
+                if joint_type == 2
+                else "radians" if joint_type == 3 else None
+            ),
+            "limits": (
+                None
+                if limits is None
+                else [float(limits[0]), float(limits[1])]
+            ),
+            "positive_direction_axis_model": axis,
         }
 
     def _sampled_states(self, document, selection, capabilities):
         if document.qpos_timeline is None:
             return []
         relevant_joints = self._relevant_joints(selection, capabilities)
-        return [
+        samples = [
             self._state_payload(document, time_seconds, relevant_joints)
             for time_seconds in _motion_sample_times(
                 document.timeline_duration,
@@ -316,6 +365,14 @@ class MotionAssistantContextBuilder(ContextBuilder):
                 self.max_numerical_samples,
             )
         ]
+        compact = []
+        for index, sample in enumerate(samples):
+            if compact and sample["qpos"] == compact[-1]["qpos"]:
+                if index == len(samples) - 1:
+                    compact.append(sample)
+            else:
+                compact.append(sample)
+        return compact
 
     def _relevant_joints(self, selection, capabilities):
         if selection.joint:

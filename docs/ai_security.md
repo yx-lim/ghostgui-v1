@@ -62,11 +62,18 @@ network connection, or provider credential.
 
 - The default TrajectoryEditSpec vocabulary is an explicit allowlist with closed
   argument schemas; the legacy ToolRegistry remains developer-only.
+- Model-advertised `motion_primitive` operations contain only a primitive name
+  and duration. Their qpos path is synthesized and semantically gated locally;
+  the provider cannot replace the registered reference pose. Recognized G1
+  burpee creation and front-down refinement requests are normalized to the
+  registered primitive even if the provider returns free-form whole-body qpos.
 - There is no shell, filesystem, arbitrary-code, dense-qpos-trajectory, RL,
   hardware, or DSMS tool. The qpos operation accepts only bounded sparse,
   complete model states through the structured TrajectoryEditSpec.
 - Request time, instruction/context size, response size, output tokens,
   operation count, sparse Keyframes, numerical samples, and images are bounded.
+  Whole-motion planning uses a 180-second hard timeout and records only bounded
+  request-size metrics when that timeout is reached.
 - Normal edits use one planning request. An explicit output-limit stop may use
   one bounded retry, and structural parsing failure may use one repair request;
   the combined workflow is capped at three planning attempts.

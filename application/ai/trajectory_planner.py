@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, replace
 import json
+import re
 from typing import Any, Mapping
 
 from application.ai.context import AIContext
@@ -35,7 +36,10 @@ from application.ai.schemas import (
     Usage,
 )
 from application.ai.trajectory_edit_spec import (
+    TrajectoryEditMode,
     TrajectoryEditSpec,
+    TrajectoryOperation,
+    TrajectoryOperationType,
     parse_trajectory_edit_spec,
     trajectory_edit_spec_response_schema,
     trajectory_operation_argument_contracts,
@@ -46,7 +50,7 @@ MOTION_ASSISTANT_SYSTEM_PROMPT = """You are the motion-generation and editing as
 
 The user speaks naturally and does not know GhostGUI internals. You receive the current robot state, relevant motion samples, selected timeline context, timestamped rendered views when available, and compact motion operations GhostGUI can execute.
 
-Infer the intended motion edit and return one complete TrajectoryEditSpec. Encode each operation's arguments as compact JSON object text matching its supplied contract. Use semantic operations for simple, precise edits naturally expressed as Joint Angle or Cartesian targets. Use lock_end_effector for spatial holds of a hand, foot, ankle, or similar contact point; map the user's anatomy wording to a registered End Effector name from the supplied model context (for example, a right-ankle spatial hold normally targets right_foot). hold_pose is only for whole-body, Joint Angle, or joint-group values. Use qpos_keyframes for a new whole-body motion, or for a contact-rich, highly coordinated, novel, or otherwise IK-fragile edit. Always attempt a useful best-effort motion rather than rejecting a request merely because semantic IK is unsuitable. A qpos Keyframe must contain the complete ordered vector described by the active model's qpos layout. Keep qpos plans compact: use 4-8 meaningful anchors whenever that is sufficient and round finite numeric values to no more than six decimal places. Do not output CSV, dense sample-by-sample trajectories, Python, shell commands, direct hardware commands, or instructions for operating GhostGUI. Preserve motion outside the requested scope unless continuity requires otherwise. Respect protected content and explicit user constraints. Use only a small set of meaningful sparse Keyframes."""
+Infer the intended motion edit and return one complete TrajectoryEditSpec. Encode each operation's arguments as compact JSON object text matching its supplied contract. Use semantic operations for simple, precise edits naturally expressed as Joint Angle or Cartesian targets. Use lock_end_effector for spatial holds of a hand, foot, ankle, or similar contact point; map the user's anatomy wording to a registered End Effector name from the supplied model context (for example, a right-ankle spatial hold normally targets right_foot). hold_pose is only for whole-body, Joint Angle, or joint-group values. When the requested whole-body motion appears in robot.motion_primitives, use motion_primitive so GhostGUI can synthesize the model-owned, semantically checked closest available motion; do not free-form qpos for that motion. Otherwise use qpos_keyframes for a new whole-body motion, or for a contact-rich, highly coordinated, novel, or otherwise IK-fragile edit. Always attempt a useful best-effort motion rather than rejecting a request merely because semantic IK is unsuitable. A qpos Keyframe must contain the complete ordered vector described by the active model's qpos layout. Keep qpos plans compact: use 4-8 meaningful anchors whenever that is sufficient and round finite numeric values to no more than six decimal places. Do not output CSV, dense sample-by-sample trajectories, Python, shell commands, direct hardware commands, or instructions for operating GhostGUI. Preserve motion outside the requested scope unless continuity requires otherwise. Respect protected content and explicit user constraints. Use only a small set of meaningful sparse Keyframes."""
 
 
 class TrajectoryPlannerError(RuntimeError):
@@ -195,6 +199,7 @@ class TrajectoryPlanner:
         )
         try:
             spec = parse_trajectory_edit_spec(response.text)
+            spec = _apply_registered_primitive_policy(spec, instruction, payload)
         except Exception as initial_error:
             attempt_errors[-1] = str(initial_error)
             repair_messages = self._repair_messages(instruction, initial_error)
@@ -227,6 +232,7 @@ class TrajectoryPlanner:
                 )
             try:
                 spec = parse_trajectory_edit_spec(repair.text)
+                spec = _apply_registered_primitive_policy(spec, instruction, payload)
             except Exception as repair_error:
                 raise TrajectoryPlannerError(
                     f"motion specification remained invalid after one repair: "
@@ -263,7 +269,13 @@ class TrajectoryPlanner:
             )
         except asyncio.TimeoutError as error:
             session.finish_provider_request(result_staged=False)
-            raise TrajectoryPlannerError("motion planning request timed out") from error
+            metrics = _request_metrics(request)
+            metrics["timeout_seconds"] = self.limits.request_timeout_seconds
+            raise TrajectoryPlannerError(
+                "motion planning request timed out after "
+                f"{self.limits.request_timeout_seconds:g} seconds",
+                diagnostic_details=metrics,
+            ) from error
         except BaseException:
             session.finish_provider_request(result_staged=False)
             raise
@@ -305,6 +317,85 @@ class TrajectoryPlanner:
 def _raise_if_cancelled(token):
     if token is not None and token.cancellation_requested:
         raise ProviderCancelledError("motion planning was cancelled")
+
+
+def _request_metrics(request: ProviderRequest) -> dict[str, Any]:
+    frames = tuple(
+        frame
+        for message in request.messages
+        for frame in message.motion_frames
+    )
+    return {
+        "model": request.model,
+        "max_output_tokens": request.max_output_tokens,
+        "message_characters": sum(len(message.text) for message in request.messages),
+        "image_count": len(frames),
+        "image_bytes": sum(len(frame.data) for frame in frames),
+    }
+
+
+def _apply_registered_primitive_policy(spec, instruction, context):
+    """Replace free-form qpos for narrowly recognized registered primitives."""
+
+    robot = context.get("robot", {}) if isinstance(context, Mapping) else {}
+    available = (
+        set(robot.get("motion_primitives", ()))
+        if isinstance(robot, Mapping)
+        else set()
+    )
+    if "burpee" not in available or not _is_burpee_request(instruction):
+        return spec
+    if len(spec.operations) != 1 or spec.operations[0].operation_type not in {
+        TrajectoryOperationType.MOTION_PRIMITIVE,
+        TrajectoryOperationType.QPOS_KEYFRAMES,
+        TrajectoryOperationType.SPARSE_KEYFRAMES,
+    }:
+        return spec
+    duration = _requested_primitive_duration(instruction, spec, context)
+    return TrajectoryEditSpec(
+        TrajectoryEditMode.GENERATE,
+        spec.summary,
+        (TrajectoryOperation(
+            TrajectoryOperationType.MOTION_PRIMITIVE,
+            {"primitive": "burpee", "duration_seconds": duration},
+        ),),
+    )
+
+
+def _is_burpee_request(instruction):
+    normalized = " ".join(str(instruction).lower().split())
+    create = re.search(
+        r"\b(create|generate|make|perform|do)\b.{0,80}\bburpee\b",
+        normalized,
+    )
+    front_down_refinement = (
+        re.search(r"\b(current|this)\s+burpee\b", normalized)
+        and re.search(r"\b(front|face[- ]?down|prone)\b", normalized)
+    )
+    return bool(create or front_down_refinement)
+
+
+def _requested_primitive_duration(instruction, spec, context):
+    match = re.search(
+        r"\b(\d+(?:\.\d+)?)\s*(?:-|\s)?seconds?\b",
+        str(instruction).lower(),
+    )
+    if match is not None:
+        return float(match.group(1))
+    normalized = " ".join(str(instruction).lower().split())
+    motion = context.get("motion", {}) if isinstance(context, Mapping) else {}
+    if (
+        re.search(r"\b(current|this)\s+burpee\b", normalized)
+        and isinstance(motion, Mapping)
+        and motion.get("duration_seconds") is not None
+    ):
+        return float(motion["duration_seconds"])
+    operation_duration = spec.operations[0].arguments.get("duration_seconds")
+    if operation_duration is not None:
+        return float(operation_duration)
+    if isinstance(motion, Mapping) and motion.get("duration_seconds") is not None:
+        return float(motion["duration_seconds"])
+    return 5.0
 
 
 def _output_limit_attempt_error(request: ProviderRequest) -> str:

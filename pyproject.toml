@@ -63,6 +63,9 @@ exclude = [
 ]
 
 [tool.setuptools.data-files]
+"share/ghostgui/csv/qpos" = [
+    "csv/qpos/g1-pushup.csv",
+]
 "share/ghostgui/models" = [
     "models/*.urdf",
     "models/*.xml",

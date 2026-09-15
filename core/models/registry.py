@@ -83,6 +83,10 @@ class RobotModelInfo:
     body_labels: dict[str, str] = field(default_factory=dict)
     collision_blocking_penetration_m: float = 0.001
     allowed_contact_body_pairs: tuple[tuple[str, str, float], ...] = ()
+    motion_primitives: tuple[str, ...] = ()
+    motion_reference_poses: dict[str, Path] = field(default_factory=dict)
+    forward_axis: tuple[float, float, float] = (1.0, 0.0, 0.0)
+    up_axis: tuple[float, float, float] = (0.0, 0.0, 1.0)
 
 
 ROBOT_MODELS = {
@@ -103,6 +107,10 @@ ROBOT_MODELS = {
         },
         end_effector_frames=("left_hand", "right_hand", "left_foot", "right_foot"),
         joint_groups=_G1_JOINT_GROUPS,
+        motion_primitives=("burpee",),
+        motion_reference_poses={
+            "pushup_prone": PROJECT_ROOT / "csv" / "qpos" / "g1-pushup.csv",
+        },
     ),
     "go2": RobotModelInfo(
         key="go2",

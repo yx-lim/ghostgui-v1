@@ -34,7 +34,8 @@ The pinned optional AI baseline is:
 GhostGUI automatically supplies a bounded description of the active robot and
 motion. It includes named Joint Angles, root pose, End Effector forward
 kinematics, pelvis and torso state, current time, the selected interval, and
-8–20 representative numerical samples with complete ordered qpos states. It
+up to 8 representative numerical samples by default with complete ordered qpos
+states; consecutive duplicate poses are collapsed. It
 does not send the dense motion timeline by default. For vision-capable models, normal
 **Apply** and **Refine** also capture up to eight rendered views automatically.
 Each image carries an explicit motion time in both its metadata and a visible
@@ -61,7 +62,18 @@ machinery. Supported intent includes:
 - sparse semantic Keyframes for new motion, interpolated locally to a normal
   dense qpos trajectory;
 - sparse complete qpos Keyframes for coordinated or contact-rich whole-body
-  motion, interpolated locally without IK.
+  motion, interpolated locally without IK; and
+- model-owned whole-body primitives when the active robot advertises one.
+
+The Unitree G1 advertises a local `burpee` primitive. Claude selects the intent
+and duration, but does not invent the Joint Angles for this known motion.
+GhostGUI builds a no-jump burpee through standing, crouch, hands-plant
+transition, registered front-down prone push-up, return transition, crouch, and
+standing phases. It uses the bundled `g1-pushup.csv` pose as the authoritative
+prone reference and reports the no-jump limitation in the proposal. If a
+provider nevertheless returns free-form whole-body qpos for a recognized
+burpee request or front-down burpee refinement, a narrow local policy replaces
+it with this registered primitive before execution.
 
 For qpos-native generation, every provider anchor must match the active model's
 complete qpos width. **Replace** creates a new motion. **Patch** preserves the
@@ -119,13 +131,21 @@ remain visible for review; they do not claim dynamics, balance, actuator,
 contact-stability, or hardware feasibility. Any later candidate mutation
 invalidates validation until that exact revision passes again.
 
+Model-owned burpee generation adds stricter local gates before staging: exact
+standing endpoints, the registered front-down prone pose, hand/foot support
+proximity, bounded root and Joint Angle continuity, and no blocking collision
+at any generated sample. These checks are specific to the primitive and do not
+turn generic motion validation into a dynamics or hardware safety proof.
+
 ## Failures, Limits, And Diagnostics
 
 Missing credentials, authentication errors, provider rate limits, timeouts,
 network failures, malformed responses, and cancellation leave committed motion
 unchanged. Requests are bounded by instruction/context size, 8 images at a
 512-pixel maximum dimension, 8,192 motion-planning output tokens, 16 operations,
-16 sparse Keyframes, and a 90-second default timeout. An explicit provider
+16 sparse Keyframes, and a 180-second default timeout. A timeout diagnostic
+records the bounded model, output-token limit, text size, image count, and image
+bytes without recording secrets. An explicit provider
 `max_tokens` stop may retry once at the hard 16,384-token ceiling. Other AI
 features retain their 4,096-token default. Gemini uses one outbound SDK request
 by default and does not automatically retry quota errors. Generated motion is

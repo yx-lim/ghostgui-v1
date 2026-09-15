@@ -9,6 +9,7 @@ from application.ai.context import AIContext
 from application.ai.edit_session import AIEditSession, AIEditSessionState
 from application.ai.errors import ProviderCancelledError
 from application.ai.providers import MockProvider, RequestCountingProvider
+from application.ai.providers import MockStep
 from application.ai.schemas import (
     ImageVariant,
     MotionFrameImage,
@@ -53,6 +54,26 @@ def _frame():
         comparison_id="frame_1",
         label="frame_1",
     )
+
+
+def _qpos_burpee_response():
+    return ProviderResponse(text=json.dumps({
+        "mode": "generate",
+        "summary": "Create a five-second burpee.",
+        "operations": [{
+            "type": "qpos_keyframes",
+            "arguments": json.dumps({
+                "mode": "replace",
+                "duration_seconds": 5.0,
+                "start_time": 0.0,
+                "end_time": 5.0,
+                "keyframes": [
+                    {"time_seconds": 0.0, "qpos": [0.0, 1.0]},
+                    {"time_seconds": 5.0, "qpos": [1.0, 0.0]},
+                ],
+            }),
+        }],
+    }))
 
 
 class _Token:
@@ -239,7 +260,72 @@ class TrajectoryPlannerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.provider_requests, 1)
 
+    async def test_registered_burpee_replaces_provider_authored_qpos(self):
+        provider = MockProvider([_qpos_burpee_response()])
+
+        result = await TrajectoryPlanner(provider).plan(
+            "Create a 5-second burpee starting and ending standing.",
+            model="mock",
+            context={"robot": {"motion_primitives": ["burpee"]}},
+            session=AIEditSession(ProjectDocument("g1")),
+        )
+
+        operation = result.spec.operations[0]
+        self.assertEqual(operation.operation_type, TrajectoryOperationType.MOTION_PRIMITIVE)
+        self.assertEqual(operation.arguments, {
+            "primitive": "burpee",
+            "duration_seconds": 5.0,
+        })
+
+    async def test_front_down_burpee_refinement_keeps_current_duration(self):
+        provider = MockProvider([_qpos_burpee_response()])
+
+        result = await TrajectoryPlanner(provider).plan(
+            "Make the current burpee front face down, instead of back face down.",
+            model="mock",
+            context={
+                "robot": {"motion_primitives": ["burpee"]},
+                "motion": {"duration_seconds": 5.0},
+            },
+            session=AIEditSession(ProjectDocument("g1")),
+        )
+
+        self.assertEqual(
+            result.spec.operations[0].operation_type,
+            TrajectoryOperationType.MOTION_PRIMITIVE,
+        )
+        self.assertEqual(result.spec.operations[0].arguments["duration_seconds"], 5.0)
+
+    async def test_timeout_reports_bounded_request_metrics(self):
+        provider = MockProvider([
+            MockStep(response=_response(), delay_seconds=0.02),
+        ])
+
+        with self.assertRaisesRegex(
+            TrajectoryPlannerError,
+            "timed out after 0.001 seconds",
+        ) as raised:
+            await TrajectoryPlanner(
+                provider,
+                limits=TrajectoryPlannerLimits(request_timeout_seconds=0.001),
+            ).plan(
+                "Create a five-second burpee.",
+                model="mock-model",
+                context={"robot": {"motion_primitives": ["burpee"]}},
+                session=AIEditSession(ProjectDocument("g1")),
+                motion_frames=(_frame(),),
+            )
+
+        details = raised.exception.diagnostic_details
+        self.assertEqual(details["timeout_seconds"], 0.001)
+        self.assertEqual(details["model"], "mock-model")
+        self.assertEqual(details["max_output_tokens"], 8192)
+        self.assertEqual(details["image_count"], 1)
+        self.assertEqual(details["image_bytes"], len(_frame().data))
+        self.assertGreater(details["message_characters"], 0)
+
     def test_workflow_limits_are_locally_bounded(self):
+        self.assertEqual(TrajectoryPlannerLimits().request_timeout_seconds, 180.0)
         with self.assertRaisesRegex(ValueError, "timeout"):
             TrajectoryPlannerLimits(request_timeout_seconds=181.0)
         with self.assertRaisesRegex(ValueError, "image"):

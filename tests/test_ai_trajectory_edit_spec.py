@@ -126,6 +126,11 @@ class TrajectoryEditSpecTests(unittest.TestCase):
             ("generate", "sparse_keyframes", _sparse_keyframes()),
             ("generate", "qpos_keyframes", _qpos_keyframes("replace")),
             ("edit", "qpos_keyframes", _qpos_keyframes("patch")),
+            (
+                "generate",
+                "motion_primitive",
+                {"primitive": "burpee", "duration_seconds": 5.0},
+            ),
         )
 
         for mode, operation_type, arguments in cases:
@@ -188,6 +193,11 @@ class TrajectoryEditSpecTests(unittest.TestCase):
             ),
             _wire("edit", "qpos_keyframes", _qpos_keyframes("replace")),
             _wire("generate", "qpos_keyframes", _qpos_keyframes("patch")),
+            _wire(
+                "edit",
+                "motion_primitive",
+                {"primitive": "burpee", "duration_seconds": 5.0},
+            ),
             _wire(
                 "edit",
                 "qpos_keyframes",
