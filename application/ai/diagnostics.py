@@ -81,10 +81,10 @@ class MotionAssistantDiagnostics:
     ) -> None:
         if not self.enabled:
             return
-        if not 1 <= len(requests) <= 2 or not (
+        if not 1 <= len(requests) <= 3 or not (
             len(requests) == len(responses) == len(parser_errors)
         ):
-            raise ValueError("diagnostics require one or two aligned planning attempts")
+            raise ValueError("diagnostics require one to three aligned planning attempts")
         attempts = []
         for index, (request, response, parser_error) in enumerate(
             zip(requests, responses, parser_errors),
@@ -107,6 +107,25 @@ class MotionAssistantDiagnostics:
             }))
         self._payload["planning_attempts"] = attempts
         self._payload["planning"] = attempts[-1]
+
+    def record_failure(
+        self,
+        *,
+        provider_name: str,
+        error: Exception,
+        latency_seconds: float,
+    ) -> None:
+        """Record safe provider/planner failure metadata without raw SDK data."""
+
+        if not self.enabled:
+            return
+        self._payload["failure"] = _sanitize({
+            "provider": provider_name,
+            "error_type": type(error).__name__,
+            "message": str(error),
+            "details": getattr(error, "diagnostic_details", {}),
+            "latency_seconds": float(latency_seconds),
+        })
 
     def record_execution(self, execution_result) -> None:
         if not self.enabled:

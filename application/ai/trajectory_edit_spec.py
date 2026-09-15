@@ -158,7 +158,7 @@ def trajectory_operation_argument_contracts() -> dict[str, Any]:
         "hold_pose": {
             "source_time": "finite seconds >= 0",
             **time_scope,
-            "body_scope": "whole_body|joint|joint_group|end_effector",
+            "body_scope": "whole_body|joint|joint_group",
             "body_name": "empty only for whole_body",
         },
         "retime_interval": {**time_scope, "scale": "finite number > 0"},
@@ -308,7 +308,7 @@ def _validate_hold_pose(values):
     _exact_fields(values, ("source_time", "start_time", "end_time", "body_scope", "body_name"))
     _number(values["source_time"], "source_time", minimum=0.0)
     _time_scope(values)
-    scopes = {"whole_body", "joint", "joint_group", "end_effector"}
+    scopes = {"whole_body", "joint", "joint_group"}
     if values["body_scope"] not in scopes:
         raise ValueError("body_scope is invalid")
     name = _name(values["body_name"], "body_name", allow_empty=True)

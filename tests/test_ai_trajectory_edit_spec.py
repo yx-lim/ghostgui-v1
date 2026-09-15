@@ -83,6 +83,10 @@ class TrajectoryEditSpecTests(unittest.TestCase):
             set(trajectory_operation_argument_contracts()),
             {item.value for item in TrajectoryOperationType},
         )
+        self.assertNotIn(
+            "end_effector",
+            trajectory_operation_argument_contracts()["hold_pose"]["body_scope"],
+        )
 
     def test_acceptance_operations_parse_into_strict_local_values(self):
         cases = (
@@ -151,6 +155,17 @@ class TrajectoryEditSpecTests(unittest.TestCase):
                 {"start_time": 0.0, "end_time": 1.0, "translation_m": [0, 0, float("nan")]},
             ),
             _wire("edit", "sparse_keyframes", _sparse_keyframes()),
+            _wire(
+                "edit",
+                "hold_pose",
+                {
+                    "source_time": 0.5,
+                    "start_time": 0.5,
+                    "end_time": 2.0,
+                    "body_scope": "end_effector",
+                    "body_name": "right_foot",
+                },
+            ),
             _wire(
                 "edit",
                 "set_logical_frame_target",

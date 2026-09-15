@@ -14,6 +14,7 @@ from application.ai.schemas import (
     MotionFrameImage,
     ProviderCapabilities,
     ProviderResponse,
+    StopReason,
     Usage,
 )
 from application.ai.trajectory_edit_spec import TrajectoryOperationType
@@ -85,6 +86,8 @@ class TrajectoryPlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.messages[-1].motion_frames, (_frame(),))
         self.assertIn("operation_argument_contracts", request.messages[-1].text)
         self.assertNotIn("qpos_values", request.messages[-1].text)
+        self.assertEqual(request.max_output_tokens, 8192)
+        self.assertIn("right_foot", request.messages[0].text)
         self.assertEqual(session.state, AIEditSessionState.READY)
         delegate.assert_exhausted()
 
@@ -126,6 +129,80 @@ class TrajectoryPlannerTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(provider.counter.counts.total, 2)
+        delegate.assert_exhausted()
+
+    async def test_max_tokens_retries_once_with_doubled_bounded_budget(self):
+        delegate = MockProvider([
+            ProviderResponse(
+                stop_reason=StopReason.MAX_TOKENS,
+                usage=Usage(100, 8192),
+            ),
+            _response(),
+        ])
+        provider = RequestCountingProvider(delegate)
+
+        result = await TrajectoryPlanner(provider).plan(
+            "Create a five-second burpee.",
+            model="mock",
+            context={},
+            session=AIEditSession(ProjectDocument("g1")),
+        )
+
+        self.assertEqual(result.provider_requests, 2)
+        self.assertEqual(delegate.requests[0].max_output_tokens, 8192)
+        self.assertEqual(delegate.requests[1].max_output_tokens, 16384)
+        self.assertIn("bounded output limit", result.parser_errors[0])
+        self.assertIsNone(result.parser_errors[1])
+        self.assertEqual(result.usage, Usage(220, 8237))
+        delegate.assert_exhausted()
+
+    async def test_max_tokens_stops_after_one_retry(self):
+        delegate = MockProvider([
+            ProviderResponse(stop_reason=StopReason.MAX_TOKENS),
+            ProviderResponse(stop_reason=StopReason.MAX_TOKENS),
+        ])
+        provider = RequestCountingProvider(delegate)
+
+        with self.assertRaisesRegex(
+            TrajectoryPlannerError,
+            "bounded output limit",
+        ) as raised:
+            await TrajectoryPlanner(provider).plan(
+                "Create a five-second burpee.",
+                model="mock",
+                context={},
+                session=AIEditSession(ProjectDocument("g1")),
+            )
+
+        self.assertEqual(provider.counter.counts.total, 2)
+        self.assertEqual(
+            raised.exception.diagnostic_details["stop_reason"],
+            StopReason.MAX_TOKENS.value,
+        )
+        delegate.assert_exhausted()
+
+    async def test_truncation_then_structural_repair_stays_within_three_requests(self):
+        delegate = MockProvider([
+            ProviderResponse(stop_reason=StopReason.MAX_TOKENS),
+            ProviderResponse(text="not json"),
+            _response(),
+        ])
+
+        result = await TrajectoryPlanner(delegate).plan(
+            "Create a five-second burpee.",
+            model="mock",
+            context={},
+            session=AIEditSession(ProjectDocument("g1")),
+        )
+
+        self.assertEqual(result.provider_requests, 3)
+        self.assertEqual(
+            [request.max_output_tokens for request in delegate.requests],
+            [8192, 16384, 8192],
+        )
+        self.assertIn("bounded output limit", result.parser_errors[0])
+        self.assertIn("malformed", result.parser_errors[1])
+        self.assertIsNone(result.parser_errors[2])
         delegate.assert_exhausted()
 
     async def test_pre_cancelled_request_consumes_no_provider_call(self):

@@ -86,27 +86,54 @@ class CompactMotionWorkflow:
         cancellation_token=None,
     ) -> CompactMotionRunResult:
         started = monotonic()
-        planning = await TrajectoryPlanner(self.provider).plan(
-            instruction,
-            model=model,
-            context=context,
-            session=session,
-            motion_frames=motion_frames,
-            conversation_context=conversation_context,
-            cancellation_token=cancellation_token,
-        )
-        executor = TrajectorySpecExecutor(
-            build_trajectory_operation_handlers(
-                self.motion_service,
-                self.metadata_service,
-            ),
-            self.motion_service.validate_motion,
-        )
-        execution = executor.execute(
-            planning.spec,
-            context=TrajectoryExecutionContext(session, self.motion_service),
-            cancellation_token=cancellation_token,
-        )
+        try:
+            planning = await TrajectoryPlanner(self.provider).plan(
+                instruction,
+                model=model,
+                context=context,
+                session=session,
+                motion_frames=motion_frames,
+                conversation_context=conversation_context,
+                cancellation_token=cancellation_token,
+            )
+        except Exception as error:
+            self.diagnostics.record_failure(
+                provider_name=self.provider.provider_name,
+                error=error,
+                latency_seconds=monotonic() - started,
+            )
+            self.diagnostics.write()
+            raise
+        try:
+            executor = TrajectorySpecExecutor(
+                build_trajectory_operation_handlers(
+                    self.motion_service,
+                    self.metadata_service,
+                ),
+                self.motion_service.validate_motion,
+            )
+            execution = executor.execute(
+                planning.spec,
+                context=TrajectoryExecutionContext(session, self.motion_service),
+                cancellation_token=cancellation_token,
+            )
+        except Exception as error:
+            elapsed = monotonic() - started
+            self.diagnostics.record_planning_attempts(
+                provider_name=self.provider.provider_name,
+                requests=planning.requests,
+                responses=planning.responses,
+                parser_errors=planning.parser_errors,
+                parsed_spec=planning.spec,
+                latency_seconds=elapsed,
+            )
+            self.diagnostics.record_failure(
+                provider_name=self.provider.provider_name,
+                error=error,
+                latency_seconds=elapsed,
+            )
+            self.diagnostics.write()
+            raise
         elapsed = monotonic() - started
         self.diagnostics.record_planning_attempts(
             provider_name=self.provider.provider_name,

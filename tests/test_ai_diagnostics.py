@@ -6,8 +6,18 @@ import tempfile
 import unittest
 
 from application.ai.diagnostics import MotionAssistantDiagnostics
+from application.ai.edit_session import AIEditSession
+from application.ai.errors import ProviderResponseError
+from application.ai.metadata import (
+    InMemoryMotionMetadataStore,
+    MotionMetadataService,
+    TimestampMotionIdentityResolver,
+)
+from application.ai.providers import MockProvider, MockStep
 from application.ai.schemas import MessageRole, ProviderMessage, ProviderRequest, ProviderResponse, Usage
 from application.ai.trajectory_edit_spec import TrajectoryEditMode, TrajectoryEditSpec, TrajectoryOperation, TrajectoryOperationType
+from application.ai.trajectory_workflow import CompactMotionWorkflow
+from application.project_document import ProjectDocument
 
 
 def _spec():
@@ -97,6 +107,111 @@ class MotionAssistantDiagnosticsTests(unittest.TestCase):
         self.assertIsNone(attempts[0]["parsed_spec"])
         self.assertEqual(attempts[1]["parsed_spec"]["summary"], "Raise robot.")
         self.assertIsNone(attempts[1]["parser_error"])
+
+    def test_failure_records_safe_provider_stop_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = MotionAssistantDiagnostics(enabled=True, directory=directory)
+            error = ProviderResponseError(
+                "Anthropic declined the motion request",
+                diagnostic_details={
+                    "stop_reason": "refusal",
+                    "content_block_types": ("refusal",),
+                    "authorization": "Bearer private-token",
+                },
+            )
+            recorder.record_failure(
+                provider_name="anthropic",
+                error=error,
+                latency_seconds=0.2,
+            )
+            payload_text = recorder.write().read_text(encoding="utf-8")
+            payload = json.loads(payload_text)
+
+        self.assertNotIn("private-token", payload_text)
+        self.assertEqual(payload["failure"]["details"]["stop_reason"], "refusal")
+        self.assertEqual(payload["failure"]["details"]["authorization"], "[REDACTED]")
+
+
+class WorkflowFailureDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_provider_failure_is_written_before_planning_returns(self):
+        committed = ProjectDocument("g1")
+        store = InMemoryMotionMetadataStore()
+        metadata = MotionMetadataService(store, TimestampMotionIdentityResolver())
+        session = AIEditSession(committed, metadata_store=store)
+        provider = MockProvider([MockStep(error=ProviderResponseError(
+            "Anthropic declined the motion request",
+            diagnostic_details={
+                "stop_reason": "refusal",
+                "content_block_types": ("refusal",),
+                "usage": {"input_tokens": 50, "output_tokens": 1},
+            },
+        ))], provider_name="anthropic")
+
+        with tempfile.TemporaryDirectory() as directory:
+            diagnostics = MotionAssistantDiagnostics(
+                enabled=True,
+                directory=directory,
+            )
+            with self.assertRaisesRegex(ProviderResponseError, "declined"):
+                await CompactMotionWorkflow(
+                    provider,
+                    object(),
+                    metadata,
+                    diagnostics=diagnostics,
+                ).run(
+                    "Create a five-second burpee.",
+                    model="mock",
+                    context={},
+                    session=session,
+                )
+            path = next(Path(directory).glob("motion-assistant-*.json"))
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["failure"]["provider"], "anthropic")
+        self.assertEqual(payload["failure"]["details"]["stop_reason"], "refusal")
+        self.assertFalse(session.has_changes)
+
+    async def test_execution_failure_records_the_successful_plan(self):
+        committed = ProjectDocument("g1")
+        store = InMemoryMotionMetadataStore()
+        metadata = MotionMetadataService(store, TimestampMotionIdentityResolver())
+        session = AIEditSession(committed, metadata_store=store)
+        response = ProviderResponse(text=json.dumps({
+            "mode": "edit",
+            "summary": "Raise the robot.",
+            "operations": [{
+                "type": "root_offset",
+                "arguments": json.dumps({
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    "translation_m": [0.0, 0.0, 0.05],
+                }),
+            }],
+        }))
+
+        with tempfile.TemporaryDirectory() as directory:
+            diagnostics = MotionAssistantDiagnostics(
+                enabled=True,
+                directory=directory,
+            )
+            with self.assertRaises(AttributeError):
+                await CompactMotionWorkflow(
+                    MockProvider([response]),
+                    object(),
+                    metadata,
+                    diagnostics=diagnostics,
+                ).run(
+                    "Raise the robot.",
+                    model="mock",
+                    context={},
+                    session=session,
+                )
+            path = next(Path(directory).glob("motion-assistant-*.json"))
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["planning"]["parsed_spec"]["summary"], "Raise the robot.")
+        self.assertEqual(payload["failure"]["error_type"], "AttributeError")
+        self.assertFalse(session.has_changes)
 
 
 if __name__ == "__main__":

@@ -67,8 +67,9 @@ network connection, or provider credential.
   complete model states through the structured TrajectoryEditSpec.
 - Request time, instruction/context size, response size, output tokens,
   operation count, sparse Keyframes, numerical samples, and images are bounded.
-- Normal edits use one planning request. Only structural parsing failure may use
-  one repair request, after which autonomous execution stops.
+- Normal edits use one planning request. An explicit output-limit stop may use
+  one bounded retry, and structural parsing failure may use one repair request;
+  the combined workflow is capped at three planning attempts.
 - A rendered frame is limited to 8 MiB, and provider capability limits still
   constrain the total image count.
 - Normal Apply/Refine receives no executable tool declarations. It accepts a

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from typing import Any, Mapping
 
@@ -11,7 +11,7 @@ from application.ai.context import AIContext
 from application.ai.edit_session import AIEditSession
 from application.ai.errors import ProviderCapabilityError, ProviderCancelledError
 from application.ai.limits import (
-    DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MOTION_PLANNER_OUTPUT_TOKENS,
     MAX_AI_INSTRUCTION_CHARACTERS,
     MAX_AI_OUTPUT_TOKENS,
     MAX_AI_RESPONSE_CHARACTERS,
@@ -31,6 +31,7 @@ from application.ai.schemas import (
     ProviderMessage,
     ProviderRequest,
     ProviderResponse,
+    StopReason,
     Usage,
 )
 from application.ai.trajectory_edit_spec import (
@@ -45,11 +46,15 @@ MOTION_ASSISTANT_SYSTEM_PROMPT = """You are the motion-generation and editing as
 
 The user speaks naturally and does not know GhostGUI internals. You receive the current robot state, relevant motion samples, selected timeline context, timestamped rendered views when available, and compact motion operations GhostGUI can execute.
 
-Infer the intended motion edit and return one complete TrajectoryEditSpec. Encode each operation's arguments as compact JSON object text matching its supplied contract. Use semantic operations for simple, precise edits naturally expressed as Joint Angle or Cartesian targets. Use qpos_keyframes for a new whole-body motion, or for a contact-rich, highly coordinated, novel, or otherwise IK-fragile edit. Always attempt a useful best-effort motion rather than rejecting a request merely because semantic IK is unsuitable. A qpos Keyframe must contain the complete ordered vector described by the active model's qpos layout. Do not output CSV, dense sample-by-sample trajectories, Python, shell commands, direct hardware commands, or instructions for operating GhostGUI. Preserve motion outside the requested scope unless continuity requires otherwise. Respect protected content and explicit user constraints. Use only a small set of meaningful sparse Keyframes."""
+Infer the intended motion edit and return one complete TrajectoryEditSpec. Encode each operation's arguments as compact JSON object text matching its supplied contract. Use semantic operations for simple, precise edits naturally expressed as Joint Angle or Cartesian targets. Use lock_end_effector for spatial holds of a hand, foot, ankle, or similar contact point; map the user's anatomy wording to a registered End Effector name from the supplied model context (for example, a right-ankle spatial hold normally targets right_foot). hold_pose is only for whole-body, Joint Angle, or joint-group values. Use qpos_keyframes for a new whole-body motion, or for a contact-rich, highly coordinated, novel, or otherwise IK-fragile edit. Always attempt a useful best-effort motion rather than rejecting a request merely because semantic IK is unsuitable. A qpos Keyframe must contain the complete ordered vector described by the active model's qpos layout. Keep qpos plans compact: use 4-8 meaningful anchors whenever that is sufficient and round finite numeric values to no more than six decimal places. Do not output CSV, dense sample-by-sample trajectories, Python, shell commands, direct hardware commands, or instructions for operating GhostGUI. Preserve motion outside the requested scope unless continuity requires otherwise. Respect protected content and explicit user constraints. Use only a small set of meaningful sparse Keyframes."""
 
 
 class TrajectoryPlannerError(RuntimeError):
     """One-shot compact planning could not produce a usable specification."""
+
+    def __init__(self, message: str, *, diagnostic_details=None) -> None:
+        super().__init__(message)
+        self.diagnostic_details = dict(diagnostic_details or {})
 
 
 @dataclass(frozen=True)
@@ -57,7 +62,7 @@ class TrajectoryPlannerLimits:
     max_instruction_characters: int = MAX_AI_INSTRUCTION_CHARACTERS
     max_context_characters: int = MAX_MOTION_CONTEXT_CHARACTERS
     max_response_characters: int = MAX_AI_RESPONSE_CHARACTERS
-    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    max_output_tokens: int = DEFAULT_MOTION_PLANNER_OUTPUT_TOKENS
     max_images: int = MAX_MOTION_IMAGES
     request_timeout_seconds: float = DEFAULT_MOTION_REQUEST_TIMEOUT_SECONDS
 
@@ -153,7 +158,30 @@ class TrajectoryPlanner:
             temperature=self._temperature(model),
         )
 
-        response = await self._request(request, session, cancellation_token)
+        requests = [request]
+        responses = [
+            await self._request(request, session, cancellation_token)
+        ]
+        attempt_errors: list[str | None] = [None]
+        response = responses[-1]
+        if response.stop_reason is StopReason.MAX_TOKENS:
+            attempt_errors[-1] = _output_limit_attempt_error(request)
+            retry_tokens = min(
+                MAX_AI_OUTPUT_TOKENS,
+                int(request.max_output_tokens or self.limits.max_output_tokens) * 2,
+            )
+            if retry_tokens <= int(request.max_output_tokens or 0):
+                raise _output_limit_error(requests, responses)
+            retry_request = replace(request, max_output_tokens=retry_tokens)
+            requests.append(retry_request)
+            responses.append(
+                await self._request(retry_request, session, cancellation_token)
+            )
+            attempt_errors.append(None)
+            response = responses[-1]
+            if response.stop_reason is StopReason.MAX_TOKENS:
+                attempt_errors[-1] = _output_limit_attempt_error(retry_request)
+                raise _output_limit_error(requests, responses)
         _raise_if_cancelled(cancellation_token)
 
         if response.tool_calls:
@@ -168,6 +196,7 @@ class TrajectoryPlanner:
         try:
             spec = parse_trajectory_edit_spec(response.text)
         except Exception as initial_error:
+            attempt_errors[-1] = str(initial_error)
             repair_messages = self._repair_messages(instruction, initial_error)
             repair_request = ProviderRequest(
                 model=model,
@@ -176,12 +205,18 @@ class TrajectoryPlanner:
                 max_output_tokens=self.limits.max_output_tokens,
                 temperature=self._temperature(model),
             )
+            requests.append(repair_request)
             repair = await self._request(
                 repair_request,
                 session,
                 cancellation_token,
             )
+            responses.append(repair)
+            attempt_errors.append(None)
             _raise_if_cancelled(cancellation_token)
+            if repair.stop_reason is StopReason.MAX_TOKENS:
+                attempt_errors[-1] = _output_limit_attempt_error(repair_request)
+                raise _output_limit_error(requests, responses)
             if repair.tool_calls:
                 raise TrajectoryPlannerError(
                     "motion specification repair returned unexpected tool calls"
@@ -200,27 +235,23 @@ class TrajectoryPlanner:
             transcript += repair_messages + (
                 ProviderMessage(MessageRole.ASSISTANT, text=repair.text),
             )
-            usage = Usage(
-                response.usage.input_tokens + repair.usage.input_tokens,
-                response.usage.output_tokens + repair.usage.output_tokens,
-            )
             return TrajectoryPlanningResult(
                 spec,
-                usage,
+                _combined_usage(responses),
                 transcript,
-                2,
-                (request, repair_request),
-                (response, repair),
-                (str(initial_error), None),
+                len(requests),
+                tuple(requests),
+                tuple(responses),
+                tuple(attempt_errors),
             )
         return TrajectoryPlanningResult(
             spec,
-            response.usage,
+            _combined_usage(responses),
             transcript,
-            1,
-            (request,),
-            (response,),
-            (None,),
+            len(requests),
+            tuple(requests),
+            tuple(responses),
+            tuple(attempt_errors),
         )
 
     async def _request(self, request, session, cancellation_token):
@@ -274,3 +305,41 @@ class TrajectoryPlanner:
 def _raise_if_cancelled(token):
     if token is not None and token.cancellation_requested:
         raise ProviderCancelledError("motion planning was cancelled")
+
+
+def _output_limit_attempt_error(request: ProviderRequest) -> str:
+    return (
+        "provider stopped at the bounded output limit "
+        f"({request.max_output_tokens} tokens)"
+    )
+
+
+def _output_limit_error(
+    requests: list[ProviderRequest],
+    responses: list[ProviderResponse],
+) -> TrajectoryPlannerError:
+    final_limit = requests[-1].max_output_tokens
+    return TrajectoryPlannerError(
+        f"The motion response exceeded the {final_limit:,}-token bounded output "
+        "limit; try a shorter motion or fewer motion phases",
+        diagnostic_details={
+            "stop_reason": StopReason.MAX_TOKENS.value,
+            "attempts": [
+                {
+                    "max_output_tokens": request.max_output_tokens,
+                    "usage": {
+                        "input_tokens": response.usage.input_tokens,
+                        "output_tokens": response.usage.output_tokens,
+                    },
+                }
+                for request, response in zip(requests, responses)
+            ],
+        },
+    )
+
+
+def _combined_usage(responses: list[ProviderResponse]) -> Usage:
+    return Usage(
+        sum(response.usage.input_tokens for response in responses),
+        sum(response.usage.output_tokens for response in responses),
+    )

@@ -1,5 +1,9 @@
 """Typed failures shared by AI providers, agents, and motion tools."""
 
+from __future__ import annotations
+
+from typing import Any, Mapping
+
 
 class AIError(RuntimeError):
     """Base class for expected AI workflow failures."""
@@ -31,6 +35,15 @@ class ProviderRateLimitError(ProviderError):
 
 class ProviderResponseError(ProviderError):
     """A provider returned a response that cannot satisfy the common contract."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostic_details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.diagnostic_details = dict(diagnostic_details or {})
 
 
 class ToolRegistrationError(AIError, ValueError):

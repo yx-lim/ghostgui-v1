@@ -265,6 +265,15 @@ def _structured_output_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
 
 def _parse_anthropic_response(raw_response: Any) -> ProviderResponse:
     content = _field(raw_response, "content", ()) or ()
+    raw_stop_reason = str(_field(raw_response, "stop_reason", "") or "")
+    usage = _field(raw_response, "usage", None)
+    normalized_usage = Usage(
+        input_tokens=_nonnegative_int(_field(usage, "input_tokens", 0)),
+        output_tokens=_nonnegative_int(_field(usage, "output_tokens", 0)),
+    )
+    block_types = tuple(
+        str(_field(block, "type", "") or "unknown") for block in content
+    )
     texts: list[str] = []
     calls: list[ToolCall] = []
     for block in content:
@@ -281,25 +290,89 @@ def _parse_anthropic_response(raw_response: Any) -> ProviderResponse:
                 raise ProviderResponseError("Anthropic returned a malformed tool call")
             calls.append(ToolCall(identifier, name, dict(arguments)))
 
-    if not texts and not calls:
-        raise ProviderResponseError("Anthropic returned an empty response")
-    raw_stop_reason = str(_field(raw_response, "stop_reason", "") or "")
     if calls:
         stop_reason = StopReason.TOOL_CALLS
     elif raw_stop_reason == "max_tokens":
         stop_reason = StopReason.MAX_TOKENS
+    elif raw_stop_reason == "refusal":
+        raise _anthropic_stop_error(
+            "Anthropic declined the motion request",
+            raw_response,
+            raw_stop_reason,
+            normalized_usage,
+            block_types,
+        )
+    elif raw_stop_reason == "model_context_window_exceeded":
+        raise _anthropic_stop_error(
+            "Anthropic could not process the motion context because it exceeded "
+            "the model context window",
+            raw_response,
+            raw_stop_reason,
+            normalized_usage,
+            block_types,
+        )
+    elif raw_stop_reason == "pause_turn":
+        raise _anthropic_stop_error(
+            "Anthropic paused the motion response before producing a usable plan",
+            raw_response,
+            raw_stop_reason,
+            normalized_usage,
+            block_types,
+        )
     else:
         stop_reason = StopReason.COMPLETE
-    usage = _field(raw_response, "usage", None)
+
+    # A max-token response can legitimately contain no usable structured-output
+    # block. Preserve the stop reason so the motion planner can perform its one
+    # bounded retry instead of misreporting the response as empty.
+    if not texts and not calls and stop_reason is not StopReason.MAX_TOKENS:
+        raise _anthropic_stop_error(
+            "Anthropic returned an empty response",
+            raw_response,
+            raw_stop_reason or "unknown",
+            normalized_usage,
+            block_types,
+        )
     return ProviderResponse(
         text="".join(texts),
         tool_calls=tuple(calls),
         stop_reason=stop_reason,
-        usage=Usage(
-            input_tokens=_nonnegative_int(_field(usage, "input_tokens", 0)),
-            output_tokens=_nonnegative_int(_field(usage, "output_tokens", 0)),
-        ),
+        usage=normalized_usage,
     )
+
+
+def _anthropic_stop_error(
+    message: str,
+    raw_response: Any,
+    stop_reason: str,
+    usage: Usage,
+    block_types: tuple[str, ...],
+) -> ProviderResponseError:
+    return ProviderResponseError(
+        message,
+        diagnostic_details={
+            "stop_reason": stop_reason,
+            "stop_details": _safe_stop_details(
+                _field(raw_response, "stop_details", None)
+            ),
+            "content_block_types": block_types,
+            "usage": {
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+            },
+        },
+    )
+
+
+def _safe_stop_details(value: Any) -> dict[str, str]:
+    if value is None:
+        return {}
+    fields = ("type", "reason", "category", "explanation")
+    return {
+        name: str(detail)
+        for name in fields
+        if (detail := _field(value, name, None)) is not None
+    }
 
 
 def _field(value: Any, name: str, default: Any = None) -> Any:

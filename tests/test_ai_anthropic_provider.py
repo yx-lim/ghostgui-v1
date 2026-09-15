@@ -69,10 +69,17 @@ class _Token:
         self.cancellation_requested = cancelled
 
 
-def _response(*blocks, stop_reason="end_turn", input_tokens=12, output_tokens=4):
+def _response(
+    *blocks,
+    stop_reason="end_turn",
+    input_tokens=12,
+    output_tokens=4,
+    stop_details=None,
+):
     return SimpleNamespace(
         content=list(blocks),
         stop_reason=stop_reason,
+        stop_details=stop_details,
         usage=SimpleNamespace(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -235,6 +242,65 @@ class AnthropicProviderTests(unittest.IsolatedAsyncioTestCase):
                 )
                 with self.assertRaises(ProviderResponseError):
                     await provider.generate(_request())
+
+    async def test_preserves_empty_max_tokens_response_for_bounded_retry(self):
+        provider = AnthropicProvider(
+            client=_FakeClient(_response(
+                stop_reason="max_tokens",
+                input_tokens=400,
+                output_tokens=8192,
+            )),
+            cancellation_poll_seconds=0.001,
+        )
+
+        result = await provider.generate(_request(max_output_tokens=8192))
+
+        self.assertEqual(result.text, "")
+        self.assertEqual(result.stop_reason, StopReason.MAX_TOKENS)
+        self.assertEqual(result.usage.output_tokens, 8192)
+
+    async def test_reports_refusal_with_safe_stop_metadata(self):
+        provider = AnthropicProvider(
+            client=_FakeClient(_response(
+                SimpleNamespace(type="refusal", refusal="not available"),
+                stop_reason="refusal",
+                stop_details=SimpleNamespace(
+                    type="refusal",
+                    category="policy",
+                    explanation="Request could not be completed",
+                ),
+            )),
+            cancellation_poll_seconds=0.001,
+        )
+
+        with self.assertRaisesRegex(ProviderResponseError, "declined") as raised:
+            await provider.generate(_request())
+
+        self.assertEqual(raised.exception.diagnostic_details["stop_reason"], "refusal")
+        self.assertEqual(
+            raised.exception.diagnostic_details["content_block_types"],
+            ("refusal",),
+        )
+        self.assertEqual(
+            raised.exception.diagnostic_details["stop_details"]["category"],
+            "policy",
+        )
+
+    async def test_reports_context_window_stop_reason(self):
+        provider = AnthropicProvider(
+            client=_FakeClient(_response(
+                stop_reason="model_context_window_exceeded",
+            )),
+            cancellation_poll_seconds=0.001,
+        )
+
+        with self.assertRaisesRegex(ProviderResponseError, "context window") as raised:
+            await provider.generate(_request())
+
+        self.assertEqual(
+            raised.exception.diagnostic_details["stop_reason"],
+            "model_context_window_exceeded",
+        )
 
     async def test_cancellation_stops_active_sdk_request(self):
         gate = asyncio.Event()

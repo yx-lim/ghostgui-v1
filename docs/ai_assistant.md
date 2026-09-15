@@ -77,6 +77,11 @@ execution failure does not start an autonomous repair loop. No path accepts raw
 dense qpos generation, arbitrary code, shell commands, DSMS, RL, hardware, or
 robot-control operations.
 
+Spatial holds of a hand, foot, or ankle use `lock_end_effector`; anatomical
+ankle wording is resolved to the model's registered foot End Effector. The
+`hold_pose` operation is reserved for whole-body, Joint Angle, and joint-group
+values.
+
 The older semantic ToolRegistry/PlanExecutor workflow remains available in the
 codebase for compatibility and developer use, but it is not the normal Motion
 Assistant path.
@@ -119,16 +124,20 @@ invalidates validation until that exact revision passes again.
 Missing credentials, authentication errors, provider rate limits, timeouts,
 network failures, malformed responses, and cancellation leave committed motion
 unchanged. Requests are bounded by instruction/context size, 8 images at a
-512-pixel maximum dimension, 4,096 default output tokens, 16 operations, 16
-sparse Keyframes, and a 90-second default timeout. Gemini uses one outbound SDK
-request by default and does not automatically retry quota errors. Generated
-motion is capped at the editor's 120-second timeline limit.
+512-pixel maximum dimension, 8,192 motion-planning output tokens, 16 operations,
+16 sparse Keyframes, and a 90-second default timeout. An explicit provider
+`max_tokens` stop may retry once at the hard 16,384-token ceiling. Other AI
+features retain their 4,096-token default. Gemini uses one outbound SDK request
+by default and does not automatically retry quota errors. Generated motion is
+capped at the editor's 120-second timeline limit.
 
 Developer diagnostics are disabled by default. Setting `GHOSTGUI_AI_DEBUG=1`
 records bounded, secret-scrubbed JSON in `.ghostgui-ai-debug/`, which is
 gitignored. It records prompts, selected timestamps and frame hashes, normalized
 responses, parsed specifications, execution and validation results, usage, and
-latency—never API keys, authorization headers, keyring contents, or image bytes.
+latency. Workflow failures record the sanitized error type, provider stop reason,
+usage, and returned content-block types when available—never API keys,
+authorization headers, keyring contents, or image bytes.
 
 See [Motion Assistant Security And Data Boundaries](ai_security.md) for provider
 disclosure and safety boundaries. Normal automated tests use MockProvider and
