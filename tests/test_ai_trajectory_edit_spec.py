@@ -6,6 +6,7 @@ import json
 import unittest
 
 from application.ai.trajectory_edit_spec import (
+    MAX_REPEAT_COPIES,
     MAX_TRAJECTORY_OPERATIONS,
     TrajectoryEditMode,
     TrajectoryEditSpecError,
@@ -113,6 +114,16 @@ class TrajectoryEditSpecTests(unittest.TestCase):
             ),
             (
                 "edit",
+                "repeat_motion",
+                {
+                    "start_time": 0.0,
+                    "end_time": 5.0,
+                    "additional_copies": 1,
+                    "ping_pong": False,
+                },
+            ),
+            (
+                "edit",
                 "set_logical_frame_target",
                 {
                     "logical_frame": "torso",
@@ -160,6 +171,26 @@ class TrajectoryEditSpecTests(unittest.TestCase):
                 {"start_time": 0.0, "end_time": 1.0, "translation_m": [0, 0, float("nan")]},
             ),
             _wire("edit", "sparse_keyframes", _sparse_keyframes()),
+            _wire(
+                "edit",
+                "repeat_motion",
+                {
+                    "start_time": 0.0,
+                    "end_time": 5.0,
+                    "additional_copies": MAX_REPEAT_COPIES + 1,
+                    "ping_pong": False,
+                },
+            ),
+            _wire(
+                "edit",
+                "repeat_motion",
+                {
+                    "start_time": 0.0,
+                    "end_time": 5.0,
+                    "additional_copies": 1,
+                    "ping_pong": "false",
+                },
+            ),
             _wire(
                 "edit",
                 "hold_pose",

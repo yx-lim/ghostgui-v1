@@ -13,6 +13,7 @@ from application.ai.limits import MAX_GENERATED_MOTION_DURATION_SECONDS
 
 MAX_TRAJECTORY_OPERATIONS = 16
 MAX_SPARSE_KEYFRAMES = 16
+MAX_REPEAT_COPIES = 32
 MAX_SPEC_SUMMARY_CHARACTERS = 4_000
 
 
@@ -29,6 +30,7 @@ class TrajectoryOperationType(str, Enum):
     ROOT_OFFSET = "root_offset"
     HOLD_POSE = "hold_pose"
     RETIME_INTERVAL = "retime_interval"
+    REPEAT_MOTION = "repeat_motion"
     SET_JOINT_TARGET = "set_joint_target"
     SET_JOINT_GROUP_TARGET = "set_joint_group_target"
     SET_END_EFFECTOR_TARGET = "set_end_effector_target"
@@ -172,6 +174,11 @@ def trajectory_operation_argument_contracts() -> dict[str, Any]:
             "body_name": "empty only for whole_body",
         },
         "retime_interval": {**time_scope, "scale": "finite number > 0"},
+        "repeat_motion": {
+            **time_scope,
+            "additional_copies": f"integer from 1 through {MAX_REPEAT_COPIES}",
+            "ping_pong": "boolean; false repeats forward",
+        },
         "set_joint_target": {
             "joint": "named joint",
             "time_seconds": "finite seconds >= 0",
@@ -266,6 +273,7 @@ def _validate_arguments(operation_type: TrajectoryOperationType, values: dict[st
         TrajectoryOperationType.ROOT_OFFSET: _validate_root_offset,
         TrajectoryOperationType.HOLD_POSE: _validate_hold_pose,
         TrajectoryOperationType.RETIME_INTERVAL: _validate_retime,
+        TrajectoryOperationType.REPEAT_MOTION: _validate_repeat_motion,
         TrajectoryOperationType.SET_JOINT_TARGET: _validate_joint,
         TrajectoryOperationType.SET_JOINT_GROUP_TARGET: _validate_joint_group,
         TrajectoryOperationType.SET_END_EFFECTOR_TARGET: _validate_end_effector,
@@ -335,6 +343,30 @@ def _validate_retime(values):
     _exact_fields(values, ("start_time", "end_time", "scale"))
     _time_scope(values)
     _number(values["scale"], "scale", positive=True)
+
+
+def _validate_repeat_motion(values):
+    _exact_fields(values, (
+        "start_time",
+        "end_time",
+        "additional_copies",
+        "ping_pong",
+    ))
+    _time_scope(values)
+    if float(values["end_time"]) <= float(values["start_time"]):
+        raise ValueError("repeat_motion interval must have positive duration")
+    copies = values["additional_copies"]
+    if (
+        isinstance(copies, bool)
+        or not isinstance(copies, int)
+        or not 1 <= copies <= MAX_REPEAT_COPIES
+    ):
+        raise ValueError(
+            f"additional_copies must be an integer from 1 through "
+            f"{MAX_REPEAT_COPIES}"
+        )
+    if not isinstance(values["ping_pong"], bool):
+        raise ValueError("ping_pong must be boolean")
 
 
 def _validate_joint(values):

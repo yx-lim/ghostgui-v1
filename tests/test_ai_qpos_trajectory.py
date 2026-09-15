@@ -14,6 +14,7 @@ from application.ai.metadata import (
     TimestampMotionIdentityResolver,
 )
 from application.ai.motion_services import GhostGUIMotionService
+from application.ai.schemas import EditAuthor
 from application.ai.qpos_trajectory import validate_qpos_anchors
 from application.ai.trajectory_edit_spec import (
     TrajectoryEditMode,
@@ -44,7 +45,7 @@ def _setup(duration=2.0):
         timeline_duration=duration,
         qpos_timeline=timeline,
     )
-    for time in (0.0, 1.0, duration):
+    for time in sorted({0.0, 1.0, duration}):
         state = adapter.create_state()
         state.set_qpos(timeline.sample_state(time))
         for frame in capture_timeslice_from_committed_pose(
@@ -96,6 +97,71 @@ def _execute(executor, session, operation):
 
 
 class QposNativeTrajectoryTests(unittest.TestCase):
+    def test_g1_repeat_motion_copies_complete_local_qpos_without_provider_reauthoring(self):
+        adapter, committed, session, _motion, executor = _setup(duration=1.0)
+        self.assertEqual(adapter.mj_model.nq, 36)
+        source_times = tuple(committed.qpos_timeline.times())
+        source_states = {
+            time: committed.qpos_timeline.get_state(time)
+            for time in source_times
+        }
+        operation = TrajectoryOperation(
+            TrajectoryOperationType.REPEAT_MOTION,
+            {
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "additional_copies": 1,
+                "ping_pong": False,
+            },
+        )
+
+        result = executor.execute(
+            TrajectoryEditSpec(
+                TrajectoryEditMode.EDIT,
+                "Repeat the first second once.",
+                (operation,),
+            ),
+            context=TrajectoryExecutionContext(session, object()),
+        )
+
+        repeated = session.working_document
+        self.assertTrue(result.validation.valid, result.validation.issues)
+        self.assertTrue(session.can_accept)
+        self.assertEqual(repeated.timeline_duration, 2.0)
+        for time in repeated.qpos_timeline.times():
+            self.assertEqual(
+                repeated.qpos_timeline.get_state(time).shape,
+                (adapter.mj_model.nq,),
+            )
+        for source_time, expected in source_states.items():
+            np.testing.assert_array_equal(
+                repeated.qpos_timeline.get_state(source_time + 1.0),
+                expected,
+            )
+        self.assertEqual(committed.timeline_duration, 1.0)
+        self.assertEqual(tuple(committed.qpos_timeline.times()), source_times)
+
+        metadata = MotionMetadataService(
+            session.metadata,
+            TimestampMotionIdentityResolver(),
+        )
+        self.assertEqual(
+            session.metadata.get(
+                metadata.reference_for_qpos_keyframe(source_times[0])
+            ).author,
+            EditAuthor.USER,
+        )
+        self.assertEqual(
+            session.metadata.get(
+                metadata.reference_for_qpos_keyframe(1.5)
+            ).author,
+            EditAuthor.AI,
+        )
+        self.assertEqual(
+            result.operations[0].output["inserted_qpos_keyframes"],
+            len(source_times) - 1,
+        )
+
     def test_g1_replace_bypasses_ik_interpolates_and_rebuilds_fk(self):
         adapter, committed, session, motion, executor = _setup(duration=1.0)
         self.assertEqual(adapter.mj_model.nq, 36)

@@ -76,6 +76,22 @@ def _qpos_burpee_response():
     }))
 
 
+def _repeat_motion_response():
+    return ProviderResponse(text=json.dumps({
+        "mode": "edit",
+        "summary": "Append one exact copy of the first five seconds.",
+        "operations": [{
+            "type": "repeat_motion",
+            "arguments": json.dumps({
+                "start_time": 0.0,
+                "end_time": 5.0,
+                "additional_copies": 1,
+                "ping_pong": False,
+            }),
+        }],
+    }))
+
+
 class _Token:
     cancellation_requested = True
 
@@ -109,8 +125,31 @@ class TrajectoryPlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("qpos_values", request.messages[-1].text)
         self.assertEqual(request.max_output_tokens, 8192)
         self.assertIn("right_foot", request.messages[0].text)
+        self.assertIn("Use repeat_motion", request.messages[0].text)
         self.assertEqual(session.state, AIEditSessionState.READY)
         delegate.assert_exhausted()
+
+    async def test_repeat_request_preserves_local_repeat_operation(self):
+        provider = MockProvider([_repeat_motion_response()])
+
+        result = await TrajectoryPlanner(provider).plan(
+            "Modify this motion: repeat it by duplicating the first 5s.",
+            model="mock",
+            context={"motion": {"duration_seconds": 5.0}},
+            session=AIEditSession(ProjectDocument("g1")),
+        )
+
+        operation = result.spec.operations[0]
+        self.assertEqual(
+            operation.operation_type,
+            TrajectoryOperationType.REPEAT_MOTION,
+        )
+        self.assertEqual(operation.arguments, {
+            "start_time": 0.0,
+            "end_time": 5.0,
+            "additional_copies": 1,
+            "ping_pong": False,
+        })
 
     async def test_malformed_response_receives_exactly_one_successful_repair(self):
         delegate = MockProvider([

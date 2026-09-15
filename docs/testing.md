@@ -355,6 +355,10 @@ structure. It skips outside the explicitly configured visual environment.
 - Select Keyframe rows at 2.0 s and 3.0 s, apply “Make this section twice as
   slow,” and inspect a MockProvider request for
   `time_interval_seconds: [2.0, 3.0]`.
+- Load a five-second G1 motion and ask “Repeat the motion by duplicating the
+  first 5s.” Confirm the provider selects `repeat_motion`, the Orange preview
+  becomes ten seconds long, every appended qpos Keyframe has the active model's
+  complete width, and its values exactly match the corresponding source time.
 - Select the right hand in the 3D view, apply “Move this higher,” and confirm the
   MockProvider context identifies both the logical frame and End Effector as
   `right_hand`.

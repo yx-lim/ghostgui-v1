@@ -8,6 +8,7 @@ from dataclasses import replace
 import numpy as np
 
 from application.ai.metadata import MotionMetadataService
+from application.ai.limits import MAX_GENERATED_MOTION_DURATION_SECONDS
 from application.ai.motion_state import (
     ReplaceMotionState,
     capture_motion_state,
@@ -25,6 +26,8 @@ from application.ai.trajectory_edit_spec import (
 )
 from application.ai.trajectory_executor import TrajectoryExecutionContext
 from application.ai.semantic_tools import SemanticToolContext, retime_segment
+from application.motion_clipboard import capture_motion_clip, plan_repeat_motion
+from application.timeline_editing import ApplyTimelineEditPlan, TimelineEditError
 from core.trajectory import TargetFrame, Trajectory, quat_to_rpy
 
 
@@ -54,6 +57,13 @@ def build_trajectory_operation_handlers(motion_service, metadata_service):
         ),
         TrajectoryOperationType.RETIME_INTERVAL: (
             lambda operation, context: _retime_interval(
+                operation,
+                context,
+                metadata_service,
+            )
+        ),
+        TrajectoryOperationType.REPEAT_MOTION: (
+            lambda operation, context: _repeat_motion(
                 operation,
                 context,
                 metadata_service,
@@ -300,6 +310,69 @@ def _retime_interval(
     return {
         **output,
         "duration_scale": scale,
+    }
+
+
+def _repeat_motion(
+    operation: TrajectoryOperation,
+    context: TrajectoryExecutionContext,
+    metadata: MotionMetadataService,
+):
+    """Append exact local copies of a committed interval to the working copy."""
+
+    document = context.session.working_document
+    arguments = operation.arguments
+    start = float(arguments["start_time"])
+    end = float(arguments["end_time"])
+    copies = int(arguments["additional_copies"])
+    ping_pong = bool(arguments["ping_pong"])
+    if end > document.timeline_duration + 1e-9:
+        raise TrajectoryOperationError("repeat_motion exceeds the motion duration")
+
+    try:
+        clip = capture_motion_clip(document, start, end)
+        plan = plan_repeat_motion(
+            document,
+            clip,
+            document.timeline_duration,
+            copies,
+            ping_pong=ping_pong,
+            maximum_time=MAX_GENERATED_MOTION_DURATION_SECONDS,
+        )
+    except TimelineEditError as error:
+        raise TrajectoryOperationError(str(error)) from error
+
+    working_metadata = MotionMetadataService(
+        context.session.metadata,
+        metadata.resolver,
+    )
+    before = set(_motion_references(document, working_metadata))
+    after = tuple(dict.fromkeys((
+        *(
+            working_metadata.reference_for_keyframe(frame)
+            for frame in plan.frames
+        ),
+        *(
+            working_metadata.reference_for_qpos_keyframe(time)
+            for time, _qpos in plan.states
+        ),
+    )))
+    created = tuple(reference for reference in after if reference not in before)
+    result = context.session.apply_ai(
+        ApplyTimelineEditPlan(plan),
+        affected_entities=created,
+        created_entities=created,
+    )
+    if not result.changed:
+        raise TrajectoryOperationError("repeat_motion made no motion change")
+    return {
+        "start_time": start,
+        "end_time": end,
+        "additional_copies": copies,
+        "ping_pong": ping_pong,
+        "duration_seconds": plan.timeline_duration,
+        "inserted_logical_keyframes": plan.inserted_frame_count,
+        "inserted_qpos_keyframes": plan.inserted_state_count,
     }
 
 

@@ -326,8 +326,13 @@ cache invalidation, and viewer refresh happen only after the transaction; a
 presentation failure is reported as a warning and does not make a successfully
 accepted session appear staged or partially committed.
 
-The compact Motion Assistant supports three complementary motion representations.
+The compact Motion Assistant supports four complementary motion representations.
 Semantic operations use named Joint Angles and Cartesian IK for precise edits.
+The `repeat_motion` operation delegates exact interval capture and append
+planning to `application.motion_clipboard`; the provider chooses only the
+interval, copy count, and forward or ping-pong mode. Complete local logical and
+qpos Keyframes remain authoritative, and only newly appended Keyframes receive
+AI provenance.
 The exclusive `qpos_keyframes` operation carries bounded complete sparse states
 for whole-body generation or interval patching. The active model supplies qpos
 width and floating-root layout; local validation rejects malformed states and

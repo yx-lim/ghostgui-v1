@@ -57,6 +57,8 @@ machinery. Supported intent includes:
 - exact root offsets over a time range;
 - holding a sampled whole-body, Joint Angle, or joint-group pose;
 - retiming an interval;
+- exact local repetition of an existing interval, including optional
+  alternating forward/reversed copies;
 - explicit named Joint Angle and joint-group targets;
 - End Effector targets and locks through IK;
 - pelvis, torso, and other logical-frame targets through IK; and
@@ -75,6 +77,14 @@ prone reference and reports the no-jump limitation in the proposal. If a
 provider nevertheless returns free-form whole-body qpos for a recognized
 burpee request or front-down burpee refinement, a narrow local policy replaces
 it with this registered primitive before execution.
+
+For repeat, duplicate, loop, or append-copy requests, the provider selects the
+source interval and number of additional copies but does not reproduce any
+Joint Angle values. GhostGUI captures that interval from the staged local
+motion and appends exact complete copies through the same Motion Clip planner
+used by **Repeat Motion…**. This preserves all logical and qpos Keyframes,
+checks model compatibility and boundary seams, and enforces the 120-second
+timeline limit before changing the Orange preview.
 
 For qpos-native generation, every provider anchor must match the active model's
 complete qpos width. **Replace** creates a new motion. **Patch** preserves the
