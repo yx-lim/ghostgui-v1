@@ -34,7 +34,8 @@ The pinned optional AI baseline is:
 GhostGUI automatically supplies a bounded description of the active robot and
 motion. It includes named Joint Angles, root pose, End Effector forward
 kinematics, pelvis and torso state, current time, the selected interval, and
-8–20 representative numerical samples. For vision-capable models, normal
+8–20 representative numerical samples with complete ordered qpos states. It
+does not send the dense motion timeline by default. For vision-capable models, normal
 **Apply** and **Refine** also capture up to eight rendered views automatically.
 Each image carries an explicit motion time in both its metadata and a visible
 timestamp overlay. The user does not need to take screenshots or calculate
@@ -58,7 +59,16 @@ machinery. Supported intent includes:
 - End Effector targets and locks through IK;
 - pelvis, torso, and other logical-frame targets through IK; and
 - sparse semantic Keyframes for new motion, interpolated locally to a normal
-  dense qpos trajectory.
+  dense qpos trajectory;
+- sparse complete qpos Keyframes for coordinated or contact-rich whole-body
+  motion, interpolated locally without IK.
+
+For qpos-native generation, every provider anchor must match the active model's
+complete qpos width. **Replace** creates a new motion. **Patch** preserves the
+existing motion outside its interval and keeps the original qpos at both patch
+boundaries. GhostGUI uses MuJoCo position-manifold interpolation so floating-root
+quaternions are not linearly blended, then derives the editable logical
+Keyframes from final qpos through FK. Qpos is authoritative for this operation.
 
 The default workflow makes one provider planning request. If the returned
 structure is malformed, GhostGUI may make exactly one repair request containing
@@ -96,8 +106,9 @@ service so timestamp-based MVP identity can be migrated to stable Keyframe IDs.
 ## Validation And Warnings
 
 After local execution, GhostGUI validates the exact current candidate revision.
-Malformed trajectories, invalid time data or qpos width, NaN/Inf, out-of-range
-Joint Angles, inconsistent FK targets, impossible execution, and protection
+Malformed trajectories, invalid time data or qpos width, NaN/Inf, invalid
+floating-root quaternions, out-of-range Joint Angles, inconsistent FK targets,
+impossible execution, and protection
 violations prevent **Accept**. Collision observations are authoring warnings and
 remain visible for review; they do not claim dynamics, balance, actuator,
 contact-stability, or hardware feasibility. Any later candidate mutation

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from unittest import mock
 import unittest
 
 import numpy as np
@@ -555,6 +556,39 @@ class GhostGUIMotionServiceTests(unittest.TestCase):
 
         self.assertTrue(report.valid, report.issues)
         self.assertEqual(report.issues, ())
+
+    def test_position_only_target_makes_orientation_optional_and_records_fk(self):
+        state = self.adapter.create_state()
+        qpos = self.session.working_document.qpos_timeline.get_state(0.0)
+        state.set_qpos(qpos)
+        kind, object_name = self.adapter.logical_frame_bindings["right_hand"]
+        position, _quaternion = state.get_body_pose(object_name, kind)
+        target = tuple(float(value) for value in position + np.array([0.005, 0, 0]))
+
+        with mock.patch.object(
+            self.motion.collision_solver,
+            "solve_drag",
+            wraps=self.motion.collision_solver.solve_drag,
+        ) as solve_drag:
+            result = self.motion.solve_logical_frame_target(
+                self.session.working_document,
+                logical_frame="right_hand",
+                time_seconds=0.0,
+                position_m=target,
+                orientation_rpy_rad=None,
+                mode="absolute",
+                protected_logical_frames=(),
+            )
+
+        self.assertFalse(solve_drag.call_args.kwargs["tcp_orientation_required"])
+        achieved = self.adapter.create_state()
+        achieved.set_qpos(result.qpos)
+        achieved_position, _ = achieved.get_body_pose(object_name, kind)
+        np.testing.assert_allclose(
+            [result.frame.x, result.frame.y, result.frame.z],
+            achieved_position,
+            atol=1e-9,
+        )
 
     def test_g1_joint_groups_are_exposed_in_robot_capability_context(self):
         registry = build_semantic_tool_registry(self.motion)

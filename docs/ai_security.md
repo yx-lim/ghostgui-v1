@@ -13,17 +13,19 @@ A text edit can send:
 - the user's instruction;
 - a compact numerical summary containing the robot model, named Joint Angles,
   root pose, logical-frame and End Effector FK, pelvis/torso state, selection,
-  current time, representative samples, and protection context;
+  current time, bounded representative complete qpos samples, and protection
+  context;
 - up to eight automatically captured timestamped renders when vision is
   supported;
 - the strict compact operation contracts; and
 - after a structural parsing failure, at most one compact repair payload with
   the original instruction, exact error, and expected contract.
 
-The compact context intentionally excludes raw qpos values, project file paths,
-terminal logs, credentials, and unrestricted application state. A project or
-motion name can be present in the semantic context, so avoid sensitive names
-when using an external provider.
+The compact context excludes the dense qpos timeline, project file paths,
+terminal logs, credentials, and unrestricted application state. Representative
+qpos samples are included because coordinated qpos-native edits require actual
+source poses. A project or motion name can be present in the context, so avoid
+sensitive names when using an external provider.
 
 Selection and camera details are captured from existing GUI owners when the
 request begins; the Motion Assistant does not maintain a second document,
@@ -60,8 +62,9 @@ network connection, or provider credential.
 
 - The default TrajectoryEditSpec vocabulary is an explicit allowlist with closed
   argument schemas; the legacy ToolRegistry remains developer-only.
-- There is no shell, filesystem, arbitrary-code, raw-qpos-trajectory, RL,
-  hardware, or DSMS tool.
+- There is no shell, filesystem, arbitrary-code, dense-qpos-trajectory, RL,
+  hardware, or DSMS tool. The qpos operation accepts only bounded sparse,
+  complete model states through the structured TrajectoryEditSpec.
 - Request time, instruction/context size, response size, output tokens,
   operation count, sparse Keyframes, numerical samples, and images are bounded.
 - Normal edits use one planning request. Only structural parsing failure may use
@@ -78,6 +81,9 @@ network connection, or provider credential.
 - Joint Angle tools stage qpos plus FK-derived affected logical Keyframes in one
   atomic replacement. Provenance checks cover both representations before
   mutation, preventing a partial qpos-only edit.
+- Qpos-native replacement and interval patching run without IK, preserve patch
+  boundaries locally, use model-manifold interpolation, and rebuild logical
+  Keyframes from final qpos through FK before validation.
 - Local motion validation checks finite values, time and model contracts, qpos
   shape, Joint Angle limits, logical TargetFrame
   names, and same-time TargetFrame/qpos forward-kinematics consistency. Its

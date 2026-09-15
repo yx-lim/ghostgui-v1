@@ -40,8 +40,31 @@ def _sparse_keyframes():
     return {"duration_seconds": 5.0, "keyframes": values}
 
 
+def _qpos_keyframes(mode="replace"):
+    if mode == "replace":
+        return {
+            "mode": "replace",
+            "duration_seconds": 2.0,
+            "start_time": 0.0,
+            "end_time": 2.0,
+            "keyframes": [
+                {"time_seconds": 0.0, "qpos": [0.0, 1.0]},
+                {"time_seconds": 2.0, "qpos": [1.0, 0.0]},
+            ],
+        }
+    return {
+        "mode": "patch",
+        "duration_seconds": 2.0,
+        "start_time": 0.5,
+        "end_time": 1.5,
+        "keyframes": [
+            {"time_seconds": 1.0, "qpos": [0.5, 0.5]},
+        ],
+    }
+
+
 class TrajectoryEditSpecTests(unittest.TestCase):
-    def test_wire_schema_is_compact_bounded_and_contains_no_dense_qpos(self):
+    def test_wire_schema_is_compact_bounded_and_exposes_qpos_operation(self):
         schema = trajectory_edit_spec_response_schema()
         operation = schema["properties"]["operations"]
 
@@ -54,7 +77,8 @@ class TrajectoryEditSpecTests(unittest.TestCase):
             operation["items"]["properties"]["arguments"]["type"],
             "string",
         )
-        self.assertNotIn("qpos", json.dumps(schema).lower())
+        self.assertIn("qpos_keyframes", json.dumps(schema).lower())
+        self.assertNotIn("keyframes", operation["items"]["properties"])
         self.assertEqual(
             set(trajectory_operation_argument_contracts()),
             {item.value for item in TrajectoryOperationType},
@@ -96,6 +120,8 @@ class TrajectoryEditSpecTests(unittest.TestCase):
                 },
             ),
             ("generate", "sparse_keyframes", _sparse_keyframes()),
+            ("generate", "qpos_keyframes", _qpos_keyframes("replace")),
+            ("edit", "qpos_keyframes", _qpos_keyframes("patch")),
         )
 
         for mode, operation_type, arguments in cases:
@@ -145,6 +171,29 @@ class TrajectoryEditSpecTests(unittest.TestCase):
                     "duration_seconds": 121.0,
                 },
             ),
+            _wire("edit", "qpos_keyframes", _qpos_keyframes("replace")),
+            _wire("generate", "qpos_keyframes", _qpos_keyframes("patch")),
+            _wire(
+                "edit",
+                "qpos_keyframes",
+                {
+                    **_qpos_keyframes("patch"),
+                    "keyframes": [
+                        {"time_seconds": 0.5, "qpos": [0.0, 1.0]},
+                    ],
+                },
+            ),
+            _wire(
+                "generate",
+                "qpos_keyframes",
+                {
+                    **_qpos_keyframes("replace"),
+                    "keyframes": [
+                        {"time_seconds": 0.0, "qpos": [0.0, float("nan")]},
+                        {"time_seconds": 2.0, "qpos": [1.0, 0.0]},
+                    ],
+                },
+            ),
         )
 
         for text in invalid:
@@ -159,6 +208,24 @@ class TrajectoryEditSpecTests(unittest.TestCase):
             parse_trajectory_edit_spec(
                 _wire("generate", "sparse_keyframes", arguments)
             )
+
+    def test_qpos_operation_cannot_mix_with_semantic_operations(self):
+        payload = json.loads(_wire(
+            "generate",
+            "qpos_keyframes",
+            _qpos_keyframes("replace"),
+        ))
+        payload["operations"].append({
+            "type": "root_offset",
+            "arguments": json.dumps({
+                "start_time": 0.0,
+                "end_time": 2.0,
+                "translation_m": [0.0, 0.0, 0.1],
+            }),
+        })
+
+        with self.assertRaisesRegex(TrajectoryEditSpecError, "only operation"):
+            parse_trajectory_edit_spec(json.dumps(payload))
 
 
 if __name__ == "__main__":

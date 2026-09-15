@@ -35,6 +35,7 @@ class TrajectoryOperationType(str, Enum):
     SET_LOGICAL_FRAME_TARGET = "set_logical_frame_target"
     LOCK_END_EFFECTOR = "lock_end_effector"
     SPARSE_KEYFRAMES = "sparse_keyframes"
+    QPOS_KEYFRAMES = "qpos_keyframes"
 
 
 @dataclass(frozen=True)
@@ -77,7 +78,27 @@ class TrajectoryEditSpec:
             operation.operation_type is TrajectoryOperationType.SPARSE_KEYFRAMES
             for operation in self.operations
         )
-        if has_sparse_generation != (self.mode is TrajectoryEditMode.GENERATE):
+        qpos_operations = tuple(
+            operation
+            for operation in self.operations
+            if operation.operation_type is TrajectoryOperationType.QPOS_KEYFRAMES
+        )
+        if qpos_operations and len(self.operations) != 1:
+            raise ValueError(
+                "qpos_keyframes must be the only operation in a trajectory edit spec"
+            )
+        if qpos_operations:
+            qpos_mode = qpos_operations[0].arguments["mode"]
+            expected_mode = (
+                TrajectoryEditMode.GENERATE
+                if qpos_mode == "replace"
+                else TrajectoryEditMode.EDIT
+            )
+            if self.mode is not expected_mode:
+                raise ValueError(
+                    f"qpos_keyframes {qpos_mode} requires {expected_mode.value} mode"
+                )
+        elif has_sparse_generation != (self.mode is TrajectoryEditMode.GENERATE):
             raise ValueError(
                 "generate mode requires sparse_keyframes and edit mode forbids it"
             )
@@ -177,6 +198,21 @@ def trajectory_operation_argument_contracts() -> dict[str, Any]:
                 "and joint_targets; first=0 and last=duration"
             ),
         },
+        "qpos_keyframes": {
+            "mode": "replace|patch",
+            "duration_seconds": (
+                "new duration for replace; current motion duration for patch"
+            ),
+            "start_time": "0 for replace; patch interval start for patch",
+            "end_time": (
+                "duration_seconds for replace; patch interval end for patch"
+            ),
+            "keyframes": (
+                "complete ordered qpos anchors [{time_seconds,qpos}]; replace "
+                "anchors span the duration, patch anchors are strictly inside "
+                "the interval because GhostGUI preserves both boundaries"
+            ),
+        },
     }
 
 
@@ -222,6 +258,7 @@ def _validate_arguments(operation_type: TrajectoryOperationType, values: dict[st
         TrajectoryOperationType.SET_LOGICAL_FRAME_TARGET: _validate_logical_frame,
         TrajectoryOperationType.LOCK_END_EFFECTOR: _validate_lock,
         TrajectoryOperationType.SPARSE_KEYFRAMES: _validate_sparse_keyframes,
+        TrajectoryOperationType.QPOS_KEYFRAMES: _validate_qpos_keyframes,
     }
     validators[operation_type](values)
 
@@ -379,6 +416,67 @@ def _validate_sparse_keyframes(values):
         raise ValueError("sparse Keyframe times must be strictly increasing")
     if abs(times[0]) > 1e-9 or abs(times[-1] - duration) > 1e-9:
         raise ValueError("sparse Keyframes must span zero through duration_seconds")
+
+
+def _validate_qpos_keyframes(values):
+    _exact_fields(values, (
+        "mode",
+        "duration_seconds",
+        "start_time",
+        "end_time",
+        "keyframes",
+    ))
+    mode = values["mode"]
+    if mode not in {"replace", "patch"}:
+        raise ValueError("qpos_keyframes mode must be replace or patch")
+    duration = _number(values["duration_seconds"], "duration_seconds", positive=True)
+    if duration > MAX_GENERATED_MOTION_DURATION_SECONDS:
+        raise ValueError("qpos motion duration exceeds the local limit")
+    _time_scope(values)
+    start = float(values["start_time"])
+    end = float(values["end_time"])
+    if end <= start:
+        raise ValueError("qpos_keyframes interval must have positive duration")
+    if end > duration + 1e-9:
+        raise ValueError("qpos_keyframes interval exceeds duration_seconds")
+
+    keyframes = values["keyframes"]
+    minimum_count = 2 if mode == "replace" else 1
+    if (
+        not isinstance(keyframes, list)
+        or not minimum_count <= len(keyframes) <= MAX_SPARSE_KEYFRAMES
+    ):
+        raise ValueError(
+            f"qpos_keyframes {mode} requires {minimum_count}-"
+            f"{MAX_SPARSE_KEYFRAMES} Keyframes"
+        )
+    times = []
+    for keyframe in keyframes:
+        if not isinstance(keyframe, dict):
+            raise ValueError("qpos Keyframe must be an object")
+        _exact_fields(keyframe, ("time_seconds", "qpos"))
+        time = _number(keyframe["time_seconds"], "time_seconds", minimum=0.0)
+        qpos = keyframe["qpos"]
+        if not isinstance(qpos, list) or not qpos:
+            raise ValueError("qpos Keyframe qpos must be a non-empty list")
+        for value in qpos:
+            _number(value, "qpos value")
+        times.append(time)
+    if times != sorted(times) or len(set(times)) != len(times):
+        raise ValueError("qpos Keyframe times must be strictly increasing")
+    if mode == "replace":
+        if abs(start) > 1e-9 or abs(end - duration) > 1e-9:
+            raise ValueError(
+                "qpos replace must span zero through duration_seconds"
+            )
+        if abs(times[0]) > 1e-9 or abs(times[-1] - duration) > 1e-9:
+            raise ValueError(
+                "qpos replace Keyframes must span zero through duration_seconds"
+            )
+    elif any(time <= start + 1e-9 or time >= end - 1e-9 for time in times):
+        raise ValueError(
+            "qpos patch Keyframes must be strictly inside the patch interval"
+        )
 
 
 def _validate_end_effector_targets(values):

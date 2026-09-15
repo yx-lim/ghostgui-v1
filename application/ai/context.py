@@ -69,7 +69,7 @@ class RobotCapabilityContext:
 
 @dataclass(frozen=True)
 class AIContext:
-    """JSON-safe compact context; raw qpos values are intentionally absent."""
+    """JSON-safe compact editor context for bounded provider requests."""
 
     payload: dict
 
@@ -350,6 +350,7 @@ class MotionAssistantContextBuilder(ContextBuilder):
         return {
             "time_seconds": _rounded(time_seconds),
             "available": True,
+            "qpos": [_rounded(value) for value in qpos],
             "root": self._root_payload(qpos),
             "joint_angles": {
                 name: _rounded(state.get_joint_value(name))

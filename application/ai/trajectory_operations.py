@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import copy
 from dataclasses import replace
 
 import numpy as np
@@ -13,6 +14,10 @@ from application.ai.motion_state import (
     detached_document,
 )
 from application.ai.motion_services import JointAngleEditResult, LogicalFrameSolveResult
+from application.ai.qpos_trajectory import (
+    normalize_qpos_quaternions,
+    validate_qpos_anchors,
+)
 from application.ai.trajectory_edit_spec import (
     TrajectoryOperation,
     TrajectoryOperationType,
@@ -80,6 +85,11 @@ def build_trajectory_operation_handlers(motion_service, metadata_service):
         ),
         TrajectoryOperationType.SPARSE_KEYFRAMES: (
             lambda operation, context: _generate_sparse_keyframes(
+                operation, context, motion_service, metadata_service
+            )
+        ),
+        TrajectoryOperationType.QPOS_KEYFRAMES: (
+            lambda operation, context: _apply_qpos_keyframes(
                 operation, context, motion_service, metadata_service
             )
         ),
@@ -547,6 +557,16 @@ def _apply_logical_frame_targets(
                 created.append(frame_reference)
             warnings.extend(solved.collisions)
             solved_names.append(name)
+        synchronized = _synchronize_logical_frames(
+            candidate,
+            motion,
+            time,
+            candidate.qpos_timeline.get_state(time),
+        )
+        affected.extend(
+            working_metadata.reference_for_keyframe(frame)
+            for frame in synchronized
+        )
         qpos_reference = working_metadata.reference_for_qpos_keyframe(time)
         affected.append(qpos_reference)
         if not any(abs(time - value) <= 1e-9 for value in existing_qpos_times):
@@ -580,11 +600,185 @@ def _interval_keyframe_times(document, start, end):
         start,
         end,
         *(
-            float(time)
-            for time in document.qpos_timeline.times()
-            if start - 1e-9 <= float(time) <= end + 1e-9
+            float(frame.time)
+            for frame in document.trajectory.frames
+            if start - 1e-9 <= float(frame.time) <= end + 1e-9
         ),
     }))
+
+
+def _apply_qpos_keyframes(operation, context, motion, metadata):
+    arguments = operation.arguments
+    document = context.session.working_document
+    timeline = document.qpos_timeline
+    if timeline is None:
+        raise TrajectoryOperationError(
+            "qpos_keyframes requires an editable qpos timeline"
+        )
+    try:
+        anchors = validate_qpos_anchors(motion.adapter, arguments["keyframes"])
+    except (TypeError, ValueError) as error:
+        raise TrajectoryOperationError(str(error)) from error
+
+    mode = arguments["mode"]
+    duration = float(arguments["duration_seconds"])
+    start = float(arguments["start_time"])
+    end = float(arguments["end_time"])
+    candidate = detached_document(document)
+    if mode == "replace":
+        _replace_with_qpos_anchors(candidate, motion, anchors, duration)
+        operation_name = "qpos_keyframes_replace"
+        logical_times = tuple(anchor.time_seconds for anchor in anchors)
+        candidate.trajectory = Trajectory()
+        candidate.active_index = -1
+    elif mode == "patch":
+        if abs(duration - document.timeline_duration) > 1e-6:
+            raise TrajectoryOperationError(
+                "qpos patch duration_seconds must match the current motion duration"
+            )
+        if end > document.timeline_duration + 1e-9:
+            raise TrajectoryOperationError(
+                "qpos patch interval exceeds the current motion duration"
+            )
+        logical_times = _patch_with_qpos_anchors(
+            candidate,
+            document,
+            motion,
+            anchors,
+            start=start,
+            end=end,
+        )
+        operation_name = "qpos_keyframes_patch"
+        candidate.active_index = -1
+    else:  # The structured contract rejects this before execution.
+        raise TrajectoryOperationError(f"unsupported qpos mode: {mode}")
+
+    for time in logical_times:
+        _capture_generation_frames(
+            candidate,
+            motion,
+            time,
+            candidate.qpos_timeline.sample_state(time),
+            phase="ai_qpos",
+        )
+
+    working_metadata = MotionMetadataService(
+        context.session.metadata,
+        metadata.resolver,
+    )
+    if mode == "replace":
+        existing = set(_motion_references(document, working_metadata))
+        replacement = set(_motion_references(candidate, working_metadata))
+    else:
+        existing = set(_motion_references_in_interval(
+            document, working_metadata, start, end
+        ))
+        replacement = set(_motion_references_in_interval(
+            candidate, working_metadata, start, end
+        ))
+    result = context.session.apply_ai(
+        ReplaceMotionState(
+            capture_motion_state(candidate),
+            operation=operation_name,
+        ),
+        affected_entities=tuple(existing | replacement),
+        created_entities=tuple(replacement - existing),
+        allow_user_override=True,
+    )
+    if not result.changed:
+        raise TrajectoryOperationError(f"{operation_name} made no motion change")
+    return {
+        "mode": mode,
+        "duration_seconds": candidate.timeline_duration,
+        "start_time": start,
+        "end_time": end,
+        "qpos_width": int(motion.adapter.mj_model.nq),
+        "sparse_keyframes": len(anchors),
+        "dense_qpos_samples": len(candidate.qpos_timeline.times()),
+        "synchronized_logical_keyframes": (
+            len(logical_times)
+            * len(_trajectory_frame_names(motion.adapter))
+        ),
+    }
+
+
+def _replace_with_qpos_anchors(candidate, motion, anchors, duration):
+    sparse_timeline = _empty_timeline_like(candidate.qpos_timeline)
+    for anchor in anchors:
+        sparse_timeline.set_state(anchor.time_seconds, anchor.qpos)
+    dense_times = tuple(sorted({
+        *_uniform_times(duration, 0.01),
+        *(anchor.time_seconds for anchor in anchors),
+    }))
+    candidate.qpos_timeline.states = {}
+    for time in dense_times:
+        candidate.qpos_timeline.set_state(
+            time,
+            normalize_qpos_quaternions(
+                motion.adapter,
+                sparse_timeline.sample_state(time),
+                context=f"interpolated qpos at {time:.3f} s",
+            ),
+        )
+    candidate.set_timeline_duration(duration)
+    candidate.current_time = min(candidate.current_time, duration)
+
+
+def _patch_with_qpos_anchors(
+    candidate,
+    source_document,
+    motion,
+    anchors,
+    *,
+    start,
+    end,
+):
+    source_timeline = source_document.qpos_timeline
+    sparse_timeline = _empty_timeline_like(source_timeline)
+    sparse_timeline.set_state(start, source_timeline.sample_state(start))
+    for anchor in anchors:
+        sparse_timeline.set_state(anchor.time_seconds, anchor.qpos)
+    sparse_timeline.set_state(end, source_timeline.sample_state(end))
+
+    retained_states = tuple(
+        (float(time), source_timeline.get_state(time))
+        for time in source_timeline.times()
+        if float(time) < start - 1e-9 or float(time) > end + 1e-9
+    )
+    patch_times = tuple(sorted({
+        *_uniform_interval_times(start, end, 0.01),
+        *(anchor.time_seconds for anchor in anchors),
+    }))
+    candidate.qpos_timeline.states = {}
+    for time, qpos in retained_states:
+        candidate.qpos_timeline.set_state(time, qpos)
+    for time in patch_times:
+        candidate.qpos_timeline.set_state(
+            time,
+            normalize_qpos_quaternions(
+                motion.adapter,
+                sparse_timeline.sample_state(time),
+                context=f"interpolated qpos at {time:.3f} s",
+            ),
+        )
+
+    for track in candidate.trajectory.tracks.values():
+        track[:] = [
+            frame
+            for frame in track
+            if float(frame.time) < start - 1e-9 or float(frame.time) > end + 1e-9
+        ]
+    return tuple(sorted({
+        start,
+        end,
+        *(anchor.time_seconds for anchor in anchors),
+    }))
+
+
+def _empty_timeline_like(timeline):
+    clone = copy(timeline)
+    clone.states = {}
+    return clone
 
 
 def _generate_sparse_keyframes(operation, context, motion, metadata):
@@ -747,19 +941,23 @@ def _solve_sparse_logical_target(
     warnings.extend(solved.collisions)
 
 
-def _capture_generation_frames(document, motion, time, qpos):
+def _capture_generation_frames(
+    document,
+    motion,
+    time,
+    qpos,
+    *,
+    phase="ai_generate",
+):
     state = motion.adapter.create_state()
     state.set_qpos(qpos)
-    names = tuple(getattr(motion.adapter, "trajectory_frames", ()))
-    if not names:
-        names = tuple(motion.adapter.logical_frame_bindings)
-    for name in names:
+    for name in _trajectory_frame_names(motion.adapter):
         kind, object_name = motion.adapter.logical_frame_bindings[name]
         position, quaternion = state.get_body_pose(object_name, kind)
         roll, pitch, yaw = quat_to_rpy(quaternion)
         document.trajectory.upsert_frame(TargetFrame(
             time=time,
-            phase="ai_generate",
+            phase=phase,
             frame_name=name,
             x=float(position[0]),
             y=float(position[1]),
@@ -780,6 +978,19 @@ def _uniform_times(duration, dt):
     return tuple(times)
 
 
+def _uniform_interval_times(start, end, dt):
+    duration = float(end) - float(start)
+    return tuple(
+        round(float(start) + offset, 9)
+        for offset in _uniform_times(duration, dt)
+    )
+
+
+def _trajectory_frame_names(adapter):
+    names = tuple(getattr(adapter, "trajectory_frames", ()))
+    return names or tuple(adapter.logical_frame_bindings)
+
+
 def _motion_references(document, metadata):
     references = [
         metadata.reference_for_keyframe(frame)
@@ -789,6 +1000,21 @@ def _motion_references(document, metadata):
         references.extend(
             metadata.reference_for_qpos_keyframe(time)
             for time in document.qpos_timeline.times()
+        )
+    return tuple(dict.fromkeys(references))
+
+
+def _motion_references_in_interval(document, metadata, start, end):
+    references = [
+        metadata.reference_for_keyframe(frame)
+        for frame in document.trajectory.frames
+        if start - 1e-9 <= float(frame.time) <= end + 1e-9
+    ]
+    if document.qpos_timeline is not None:
+        references.extend(
+            metadata.reference_for_qpos_keyframe(time)
+            for time in document.qpos_timeline.times()
+            if start - 1e-9 <= float(time) <= end + 1e-9
         )
     return tuple(dict.fromkeys(references))
 

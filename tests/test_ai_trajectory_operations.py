@@ -481,6 +481,55 @@ class EndEffectorOperationTests(unittest.TestCase):
             self.assertEqual(call["position_m"], (0.0, 0.0, 0.0))
             self.assertEqual(call["orientation_rpy_rad"], (0.0, 0.1, 0.0))
 
+    def test_interval_ik_uses_logical_keyframes_not_every_dense_qpos_sample(self):
+        committed = ProjectDocument("g1", timeline_duration=1.0, qpos_timeline=Timeline())
+        for index in range(1, 100):
+            time = index / 100.0
+            committed.qpos_timeline.set_state(
+                time,
+                committed.qpos_timeline.sample_state(time),
+            )
+        committed.trajectory.add_frame(TargetFrame(
+            time=0.5,
+            frame_name="right_hand",
+            x=1.5,
+            y=0.1,
+            z=0.85,
+        ))
+        store = InMemoryMotionMetadataStore()
+        metadata = MotionMetadataService(store, TimestampMotionIdentityResolver())
+        metadata.seed_document_as_user_owned(committed)
+        session = AIEditSession(committed, metadata_store=store)
+        motion = _EndEffectorMotion()
+        executor = TrajectorySpecExecutor(
+            build_trajectory_operation_handlers(motion, metadata),
+            motion.validate_motion,
+        )
+        operation = TrajectoryOperation(
+            TrajectoryOperationType.SET_END_EFFECTOR_TARGET,
+            {
+                "end_effector": "right_hand",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "mode": "relative",
+                "position_m": [0.0, 0.0, 0.01],
+            },
+        )
+
+        executor.execute(
+            TrajectoryEditSpec(
+                TrajectoryEditMode.EDIT,
+                "Move a sparse interval.",
+                (operation,),
+            ),
+            context=TrajectoryExecutionContext(session, object()),
+        )
+
+        self.assertEqual(
+            [call["time_seconds"] for call in motion.calls],
+            [0.0, 0.5, 1.0],
+        )
+
 
 class _GenerationMotion(_EndEffectorMotion):
     logical_frames = ("torso", "right_hand", "left_hand")

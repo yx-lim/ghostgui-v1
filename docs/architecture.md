@@ -317,6 +317,18 @@ cache invalidation, and viewer refresh happen only after the transaction; a
 presentation failure is reported as a warning and does not make a successfully
 accepted session appear staged or partially committed.
 
+The compact Motion Assistant supports two complementary motion representations.
+Semantic operations use named Joint Angles and Cartesian IK for precise edits.
+The exclusive `qpos_keyframes` operation carries bounded complete sparse states
+for whole-body generation or interval patching. The active model supplies qpos
+width and floating-root layout; local validation rejects malformed states and
+normalizes valid root quaternions. `RobotStateTimeline` performs the dense
+MuJoCo-manifold interpolation. Replace mode rebuilds the motion, while patch mode
+keeps qpos outside the interval and injects the original boundary states. After
+either mode, only FK-derived logical Keyframes are stored at the sparse anchor
+times, making qpos the authoritative representation without weakening FK
+consistency checks.
+
 `GhostGUIMotionService.validate_motion` owns local working-copy validation. It
 checks duration and time domains, document/timeline model identity, qpos width
 and finiteness, Joint Angle limits, configured blocking collisions, logical

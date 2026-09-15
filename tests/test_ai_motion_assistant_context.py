@@ -130,6 +130,11 @@ class MotionAssistantContextBuilderTests(unittest.TestCase):
             payload["robot"]["qpos_layout"]["quaternion_convention"],
             "wxyz",
         )
+        self.assertEqual(
+            current["qpos"],
+            [0.0, 0.0, 0.9, 1.0, 0.0, 0.0, 0.0, 0.5, 0.4],
+        )
+        self.assertEqual(len(payload["motion"]["numerical_samples"][0]["qpos"]), 9)
 
     def test_between_keyframes_uses_timeline_sampler_without_insertion(self):
         document = _document()

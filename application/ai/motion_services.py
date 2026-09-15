@@ -208,17 +208,24 @@ class GhostGUIMotionService:
             kind=kind,
             joint_weights=self.adapter.default_ik_joint_weights(),
             secondary_tasks=secondary_tasks,
+            tcp_orientation_required=orientation_rpy_rad is not None,
         )
         if not result.success:
             raise SemanticMotionError(result.status)
-        achieved_rpy = quat_to_rpy(result.quaternion)
+        achieved_state = self.adapter.create_state()
+        achieved_state.set_qpos(result.qpos)
+        achieved_position, achieved_quaternion = achieved_state.get_body_pose(
+            object_name,
+            kind,
+        )
+        achieved_rpy = quat_to_rpy(achieved_quaternion)
         frame = TargetFrame(
             time=time_seconds,
             phase="ai_edit",
             frame_name=logical_frame,
-            x=float(result.position[0]),
-            y=float(result.position[1]),
-            z=float(result.position[2]),
+            x=float(achieved_position[0]),
+            y=float(achieved_position[1]),
+            z=float(achieved_position[2]),
             roll=float(achieved_rpy[0]),
             pitch=float(achieved_rpy[1]),
             yaw=float(achieved_rpy[2]),
