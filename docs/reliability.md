@@ -103,7 +103,7 @@ migration details live in [Architecture](architecture.md).
 
 The optional Motion Assistant has a credential-free regression suite covering
 the provider contract, detached working copy, strict semantic tools, human-edit
-priority, atomic Accept/Reject, Gemini and Anthropic conversion, timestamped
+priority, atomic Accept/Discard, Gemini and Anthropic conversion, timestamped
 vision input, bounded refinement, provider comparison, quota-aware connection
 caching, sanitized development replay, conservative provenance defaults,
 project metadata round-trips, read-only whole-motion candidate playback,

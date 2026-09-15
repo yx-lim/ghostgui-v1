@@ -198,9 +198,9 @@ The right sidebar contains a compact **Status** summary, the optional **Motion
 Assistant**, and **IK / Constraints** controls. Expand **Details** to inspect
 solver and operation diagnostics. Motion Assistant automatically supplies
 robot-state samples and timestamped rendered views, then stages natural-language
-edits on a detached working copy. Use **Preview candidate** to inspect the
-Orange preview, or enter another instruction and choose **Refine** before
-**Accept** or **Reject**.
+edits on a detached working copy. Send messages with Enter, inspect the
+automatic Orange preview, and keep chatting to refine the staged candidate
+before choosing **Accept** or **Discard** on its result card.
 See
 [Motion Assistant](ai_assistant.md) for secure API-key
 setup and failure behavior.

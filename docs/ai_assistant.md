@@ -25,11 +25,12 @@ The pinned optional AI baseline is:
 1. Optionally select a Keyframe, End Effector, Joint Angle, or time range.
 2. Describe the result naturally, such as “Move the entire robot 5 cm higher,”
    “keep both hands planted,” or “create a 5-second burpee.”
-3. Choose **Apply**.
-4. Review the proposed changes and **Orange preview**. Use **Preview candidate**
-   to scrub or play the whole staged result.
-5. Choose **Accept**, **Reject**, or enter another direction and choose
-   **Refine**.
+3. Press Enter or use the send button. Use Shift+Enter for a new line.
+4. Follow the activity in the conversation while GhostGUI plans and validates
+   the update. The valid staged result appears automatically as an **Orange
+   preview** that can be scrubbed or played.
+5. Send another message to refine the same staged result, or choose **Accept**
+   or **Discard** on its result card.
 
 GhostGUI automatically supplies a bounded description of the active robot and
 motion. It includes named Joint Angles, root pose, End Effector forward
@@ -37,7 +38,7 @@ kinematics, pelvis and torso state, current time, the selected interval, and
 up to 8 representative numerical samples by default with complete ordered qpos
 states; consecutive duplicate poses are collapsed. It
 does not send the dense motion timeline by default. For vision-capable models, normal
-**Apply** and **Refine** also capture up to eight rendered views automatically.
+Each generation or refinement also captures up to eight rendered views automatically.
 Each image carries an explicit motion time in both its metadata and a visible
 timestamp overlay. The user does not need to take screenshots or calculate
 coordinates.
@@ -102,10 +103,17 @@ Assistant path.
 
 AI work happens in a detached document-level working copy. Orange is only its
 presentation. **Accept** atomically replaces the committed motion and creates
-one history entry, so Undo restores the exact previous motion. **Reject** drops
-the complete candidate. **Refine** samples and renders the current staged
-candidate rather than restarting from committed motion, and retains only the
-original goal plus a bounded number of recent refinements.
+one history entry, so Undo restores the exact previous motion. **Discard** drops
+the complete candidate. When a candidate is staged, the next chat message
+automatically samples and renders that candidate and refines it rather than
+restarting from committed motion. The visible conversation remains available
+through all refinements, while provider context retains only the original goal
+and a bounded number of recent refinements.
+
+After Accept or Discard, the completed conversation remains visible until the
+next user message. Opening, creating, or restoring a different motion starts a
+fresh transcript so messages cannot be mistaken for context belonging to the
+new document.
 
 Motion-mutating controls are currently disabled while the UI owns an unresolved
 AI session. The session and motion-service boundaries already support manual
@@ -127,7 +135,7 @@ Malformed trajectories, invalid time data or qpos width, NaN/Inf, invalid
 floating-root quaternions, out-of-range Joint Angles, inconsistent FK targets,
 impossible execution, and protection
 violations prevent **Accept**. Collision observations are authoring warnings and
-remain visible for review; they do not claim dynamics, balance, actuator,
+remain available under **Warnings and details** on the result card; they do not claim dynamics, balance, actuator,
 contact-stability, or hardware feasibility. Any later candidate mutation
 invalidates validation until that exact revision passes again.
 
@@ -141,7 +149,8 @@ turn generic motion validation into a dynamics or hardware safety proof.
 
 Missing credentials, authentication errors, provider rate limits, timeouts,
 network failures, malformed responses, and cancellation leave committed motion
-unchanged. Requests are bounded by instruction/context size, 8 images at a
+unchanged. These events appear inline without erasing earlier messages, with
+long technical diagnostics collapsed behind **Details**. Requests are bounded by instruction/context size, 8 images at a
 512-pixel maximum dimension, 8,192 motion-planning output tokens, 16 operations,
 16 sparse Keyframes, and a 180-second default timeout. A timeout diagnostic
 records the bounded model, output-token limit, text size, image count, and image

@@ -284,6 +284,15 @@ delete actions, so inspection cannot mutate committed qpos, current time, or
 Keyframes. Refine temporarily detaches the sampler while the worker may mutate
 the working copy, then restores it when the session is staged again.
 
+The Motion Assistant panel keeps an ephemeral visible transcript separate from
+`TrajectoryConversation`. User messages, readable progress, results, warnings,
+errors, and resolution events accumulate in the UI for the current motion. The
+provider still receives only the bounded original-goal and recent-refinement
+context. Sending while a working copy is staged maps to the existing refinement
+path; a successful request automatically enters the read-only Orange preview.
+Accept and Discard resolve the result card, while changing documents resets the
+visible transcript and the bounded provider conversation together.
+
 Gemini defaults to one SDK outbound attempt. A caller must explicitly raise its
 small transient-server retry budget, and HTTP 429 is never retryable. The
 settings controller checks an application-layer cache before **Test Connection**;

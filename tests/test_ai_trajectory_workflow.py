@@ -12,6 +12,7 @@ from application.ai.metadata import InMemoryMotionMetadataStore, MotionMetadataS
 from application.ai.motion_services import MotionValidationReport
 from application.ai.motion_state import ReplaceMotionState, capture_motion_state
 from application.ai.providers import MockProvider, RequestCountingProvider
+from application.ai.progress import AIProgressStage
 from application.ai.schemas import ImageVariant, ProviderCapabilities, ProviderResponse
 from application.ai.trajectory_workflow import CompactMotionWorkflow
 from application.project_document import ProjectDocument
@@ -157,11 +158,13 @@ class CompactMotionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         motion.adapter.free_joints_by_body = {0: type("Joint", (), {"qpos_address": 0})()}
         motion.validate_motion = lambda _document: MotionValidationReport(True)
 
+        progress = []
         result = await CompactMotionWorkflow(provider, motion, metadata).run(
             "Move the entire robot 5 cm higher.",
             model="mock",
             context={"motion": {"working_copy": True}},
             session=session,
+            progress_callback=progress.append,
         )
 
         self.assertEqual(provider.counter.counts.total, 1)
@@ -170,6 +173,17 @@ class CompactMotionWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(session.working_document.qpos_timeline.get_state(0.0)[2], 0.85)
         self.assertAlmostEqual(committed.qpos_timeline.get_state(0.0)[2], 0.8)
         self.assertTrue(session.can_accept)
+        self.assertEqual(
+            tuple(event.stage for event in progress),
+            (
+                AIProgressStage.PLANNING_STARTED,
+                AIProgressStage.STRUCTURED_PLAN_COMPLETED,
+                AIProgressStage.LOCAL_OPERATION,
+                AIProgressStage.VALIDATION,
+                AIProgressStage.DONE,
+            ),
+        )
+        self.assertEqual(progress[1].operation_count, 1)
 
     async def test_accept_is_one_history_entry_and_undo_restores_exact_motion(self):
         committed = ProjectDocument("g1", timeline_duration=1.0, qpos_timeline=Timeline())

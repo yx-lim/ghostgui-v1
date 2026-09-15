@@ -9,6 +9,12 @@ from application.ai.edit_session import AIEditSession
 from application.ai.errors import ProviderCancelledError
 from application.ai.motion_services import MotionValidationReport
 from application.ai.providers.base import CancellationSignal
+from application.ai.progress import (
+    AIProgressCallback,
+    AIProgressEvent,
+    AIProgressStage,
+    report_progress,
+)
 from application.ai.trajectory_edit_spec import (
     TrajectoryEditSpec,
     TrajectoryOperation,
@@ -65,12 +71,22 @@ class TrajectorySpecExecutor:
         *,
         context: TrajectoryExecutionContext,
         cancellation_token: CancellationSignal | None = None,
+        progress_callback: AIProgressCallback | None = None,
     ) -> TrajectoryExecutionResult:
         checkpoint = context.session.checkpoint()
         results = []
         try:
-            for operation in spec.operations:
+            operation_count = len(spec.operations)
+            for operation_index, operation in enumerate(spec.operations, start=1):
                 _raise_if_cancelled(cancellation_token)
+                report_progress(
+                    progress_callback,
+                    AIProgressEvent(
+                        AIProgressStage.LOCAL_OPERATION,
+                        operation_index=operation_index,
+                        operation_count=operation_count,
+                    ),
+                )
                 handler = self.handlers.get(operation.operation_type)
                 if handler is None:
                     raise TrajectoryExecutionError(
@@ -94,6 +110,10 @@ class TrajectorySpecExecutor:
         if not context.session.has_changes:
             raise TrajectoryExecutionError("trajectory specification made no motion change")
         context.session.invalidate_validation()
+        report_progress(
+            progress_callback,
+            AIProgressEvent(AIProgressStage.VALIDATION),
+        )
         validation = self.validator(context.session.working_document)
         if not isinstance(validation, MotionValidationReport):
             raise TrajectoryExecutionError("motion validator returned an invalid result")
@@ -103,6 +123,10 @@ class TrajectorySpecExecutor:
                 f"staged motion structural/kinematic validation failed: {detail}"
             )
         context.session.mark_current_revision_validated()
+        report_progress(
+            progress_callback,
+            AIProgressEvent(AIProgressStage.DONE),
+        )
         return TrajectoryExecutionResult(spec, tuple(results), validation)
 
 

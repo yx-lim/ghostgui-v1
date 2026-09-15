@@ -32,7 +32,7 @@ request begins; the Motion Assistant does not maintain a second document,
 timeline, or camera selection model. A time interval is disclosed only when at
 least two distinct Keyframe times are selected.
 
-Every image has explicit time metadata and a visible timestamp overlay. Refine
+Every image has explicit time metadata and a visible timestamp overlay. A refinement
 renders the staged candidate, not the committed original. Before/after pairs,
 when used by a developer-only legacy path, use identical timestamps. Treat
 anything visible in those renders as data disclosed to the selected provider.
@@ -79,7 +79,7 @@ network connection, or provider credential.
   the combined workflow is capped at three planning attempts.
 - A rendered frame is limited to 8 MiB, and provider capability limits still
   constrain the total image count.
-- Normal Apply/Refine receives no executable tool declarations. It accepts a
+- Normal generation/refinement receives no executable tool declarations. It accepts a
   compact structured plan and executes deterministic local handlers only.
 - Gemini makes one outbound attempt by default. Explicit transient-server retry
   settings never make quota-exhaustion or HTTP 429 responses retryable.

@@ -231,6 +231,7 @@ def application_stylesheet(widget: QWidget | None = None) -> str:
             border-color: {theme.border};
         }}
         QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QTextBrowser,
+        QPlainTextEdit,
         QListWidget {{
             color: {theme.text};
             background: {theme.panel_bg};
@@ -238,6 +239,53 @@ def application_stylesheet(widget: QWidget | None = None) -> str:
             border-radius: 4px;
             selection-color: {theme.accent_text};
             selection-background-color: {theme.accent};
+        }}
+        QWidget#aiAssistantPanel {{
+            background: {theme.panel_bg};
+        }}
+        QLabel#aiChatTitle {{
+            color: {theme.text};
+        }}
+        QLabel#aiProviderLabel, QLabel#aiContextIndicators {{
+            color: {theme.muted_text};
+        }}
+        QScrollArea#aiChatTranscript, QWidget#aiChatTranscriptBody {{
+            background: {theme.panel_bg};
+            border: none;
+        }}
+        QFrame#aiChatMessage {{
+            background: {theme.elevated_bg};
+            border: 1px solid {theme.border};
+            border-radius: 7px;
+        }}
+        QFrame#aiChatMessage[chatRole="user"] {{
+            background: {theme.section_header_active_bg};
+            border-color: {theme.focus_border};
+        }}
+        QFrame#aiChatMessage[chatRole="activity"] {{
+            background: transparent;
+            border: none;
+        }}
+        QFrame#aiChatMessage[chatRole="error"] {{
+            border-color: {status_error};
+        }}
+        QLabel#aiChatTechnicalDetails, QLabel#aiMotionResultDetails,
+        QLabel#aiMotionResultValidation {{
+            color: {theme.muted_text};
+        }}
+        QFrame#aiMotionResultCard {{
+            background: {theme.elevated_bg};
+            border: 1px solid {theme.accent};
+            border-radius: 8px;
+        }}
+        QPushButton#aiSubmitButton, QPushButton#aiResultAcceptButton {{
+            color: {theme.accent_text};
+            background: {theme.accent};
+            border-color: {theme.accent};
+        }}
+        QPlainTextEdit#aiPromptInput {{
+            min-height: 48px;
+            padding: 5px;
         }}
         QComboBox {{
             min-height: 18px;

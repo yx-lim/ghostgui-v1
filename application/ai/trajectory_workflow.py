@@ -7,6 +7,12 @@ from time import monotonic
 
 from application.ai.diagnostics import MotionAssistantDiagnostics
 from application.ai.metadata import MotionMetadataService
+from application.ai.progress import (
+    AIProgressCallback,
+    AIProgressEvent,
+    AIProgressStage,
+    report_progress,
+)
 from application.ai.schemas import MotionFrameImage, Usage
 from application.ai.trajectory_executor import (
     TrajectoryExecutionContext,
@@ -89,9 +95,14 @@ class CompactMotionWorkflow:
         conversation_context=None,
         context_warnings: tuple[str, ...] = (),
         cancellation_token=None,
+        progress_callback: AIProgressCallback | None = None,
     ) -> CompactMotionRunResult:
         started = monotonic()
         try:
+            report_progress(
+                progress_callback,
+                AIProgressEvent(AIProgressStage.PLANNING_STARTED),
+            )
             planning = await TrajectoryPlanner(self.provider).plan(
                 instruction,
                 model=model,
@@ -100,6 +111,13 @@ class CompactMotionWorkflow:
                 motion_frames=motion_frames,
                 conversation_context=conversation_context,
                 cancellation_token=cancellation_token,
+            )
+            report_progress(
+                progress_callback,
+                AIProgressEvent(
+                    AIProgressStage.STRUCTURED_PLAN_COMPLETED,
+                    operation_count=len(planning.spec.operations),
+                ),
             )
         except Exception as error:
             self.diagnostics.record_failure(
@@ -121,6 +139,7 @@ class CompactMotionWorkflow:
                 planning.spec,
                 context=TrajectoryExecutionContext(session, self.motion_service),
                 cancellation_token=cancellation_token,
+                progress_callback=progress_callback,
             )
         except Exception as error:
             elapsed = monotonic() - started

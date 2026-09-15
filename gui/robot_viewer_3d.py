@@ -836,7 +836,7 @@ class RobotViewer3D(QWidget):
     def delete_timeslice(self):
         if self.candidate_preview_active:
             self.status_label.setText(
-                "The AI candidate is read-only; Reject or Accept it from "
+                "The AI candidate is read-only; Discard or Accept it from "
                 "Motion Assistant."
             )
             return

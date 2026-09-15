@@ -8,6 +8,8 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QLineEdit
 except ImportError:
     QApplication = None
@@ -65,7 +67,16 @@ class AIAssistantPanelTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(
             self.panel.response_label.text(),
-            "Executing operation 2/5…",
+            "Applying motion changes",
+        )
+        activity_text = tuple(
+            entry.text
+            for entry in self.panel.transcript.entries
+            if entry.kind.value == "activity"
+        )
+        self.assertEqual(
+            activity_text,
+            ("Reading the current motion", "Applying motion changes"),
         )
 
         self.panel.show_proposal("Done", ("Modified motion",))
@@ -93,12 +104,126 @@ class AIAssistantPanelTests(unittest.TestCase):
         self.panel.submit_button.click()
         self.assertEqual(refined, ["make it subtler"])
 
+    def test_enter_sends_and_shift_enter_inserts_a_newline(self):
+        submitted = []
+        self.panel.submit_requested.connect(submitted.append)
+        self.panel.prompt_input.setPlainText("walk forward")
+
+        QTest.keyClick(self.panel.prompt_input, Qt.Key.Key_Return)
+
+        self.assertEqual(submitted, ["walk forward"])
+        self.assertEqual(self.panel.transcript.entries[-1].text, "walk forward")
+        self.assertEqual(self.panel.transcript.entries[-1].kind.value, "user")
+
+        self.panel.prompt_input.clear()
+        QTest.keyClicks(self.panel.prompt_input, "line one")
+        QTest.keyClick(
+            self.panel.prompt_input,
+            Qt.Key.Key_Return,
+            Qt.KeyboardModifier.ShiftModifier,
+        )
+        QTest.keyClicks(self.panel.prompt_input, "line two")
+        self.assertEqual(
+            self.panel.prompt_input.toPlainText(),
+            "line one\nline two",
+        )
+
+    def test_staged_send_refines_without_a_visible_refine_button(self):
+        refined = []
+        self.panel.refine_requested.connect(refined.append)
+        self.panel.show_proposal("Done", ("Moved pelvis",))
+        self.assertTrue(self.panel.refine_button.isHidden())
+
+        self.panel.prompt_input.setPlainText("keep both feet planted")
+        self.panel.submit_button.click()
+
+        self.assertEqual(refined, ["keep both feet planted"])
+        self.assertEqual(
+            self.panel.transcript.entries[-1].text,
+            "keep both feet planted",
+        )
+
+    def test_result_card_owns_accept_and_discard_actions(self):
+        accepted = []
+        discarded = []
+        self.panel.accept_requested.connect(lambda: accepted.append(True))
+        self.panel.reject_requested.connect(lambda: discarded.append(True))
+
+        self.panel.show_proposal(
+            "I created the motion.",
+            ("generate motion", "Warning: minor contact concession"),
+            accept_permitted=True,
+            result_summary="5.0 s · 8 Keyframes · 1 warning",
+        )
+        card = self.panel._active_result_card
+        self.assertIsNotNone(card)
+        self.assertEqual(card.summary_label.text(), "5.0 s · 8 Keyframes · 1 warning")
+        card.accept_button.click()
+        card.discard_button.click()
+        self.assertEqual(accepted, [True])
+        self.assertEqual(discarded, [True])
+
+    def test_completed_conversation_is_retained_until_next_user_turn(self):
+        self.panel.add_user_message("make a squat")
+        self.panel.show_proposal("Done", ("generate motion",))
+        self.panel.complete_session("Motion accepted.", accepted=True)
+        self.assertGreater(len(self.panel.transcript.entries), 2)
+
+        self.panel.add_user_message("make a wave")
+
+        self.assertEqual(len(self.panel.transcript.entries), 1)
+        self.assertEqual(self.panel.transcript.entries[0].text, "make a wave")
+
+    def test_error_summary_keeps_technical_details_expandable(self):
+        self.panel.show_error(
+            "motion planning request timed out; provider deadline 60 s; request id 7"
+        )
+        widget = self.panel.message_widgets[-1]
+        self.assertIn("timed out", widget.body_label.text())
+        self.assertTrue(widget.details_button.isVisible() or not self.panel.isVisible())
+        self.assertIn("request id 7", widget.details_label.text())
+
     def test_error_does_not_enable_accept_without_a_staged_session(self):
         from gui.panels.ai_assistant_panel import AIAssistantPanelState
 
         self.panel.show_error("No API key")
         self.assertEqual(self.panel.state, AIAssistantPanelState.ERROR)
         self.assertFalse(self.panel.accept_button.isEnabled())
+
+    def test_network_error_and_cancellation_preserve_previous_messages(self):
+        self.panel.add_user_message("create a short walk")
+        before = tuple(self.panel.transcript.entries)
+
+        self.panel.show_error("network unavailable; connection refused")
+        self.assertEqual(self.panel.transcript.entries[:len(before)], before)
+        self.assertIn("network unavailable", self.panel.transcript.entries[-1].text)
+
+        self.panel.begin_request()
+        self.panel.show_cancelled()
+        texts = tuple(entry.text for entry in self.panel.transcript.entries)
+        self.assertIn("Request cancelled. The committed motion is unchanged.", texts)
+        self.assertTrue(self.panel.prompt_input.isEnabled())
+
+    def test_multiple_refinement_turns_remain_visible(self):
+        self.panel.add_user_message("make a knee push-up")
+        self.panel.show_proposal("Created it.", ("generate motion",))
+        self.panel.add_user_message("move the knees forward")
+        self.panel.begin_request(refinement=True)
+        self.panel.show_proposal("Moved the knees.", ("patch motion",))
+        self.panel.add_user_message("reduce the arm swing")
+        self.panel.begin_request(refinement=True)
+        self.panel.show_proposal("Reduced it.", ("patch motion",))
+
+        visible_text = tuple(entry.text for entry in self.panel.transcript.entries)
+        for expected in (
+            "make a knee push-up",
+            "move the knees forward",
+            "reduce the arm swing",
+            "Created it.",
+            "Moved the knees.",
+            "Reduced it.",
+        ):
+            self.assertIn(expected, visible_text)
 
     def test_critique_uses_default_prompt_and_does_not_enable_accept(self):
         critiques = []

@@ -48,9 +48,9 @@ python3 -m unittest tests.test_ai_v3_integration -v
 
 It drives real context building, strict ToolRegistry validation, semantic
 tools, the detached AIEditSession, working-copy Orange preview sampling, and
-atomic Accept/Reject through scripted MockProvider responses. Scenarios cover
+atomic Accept/Discard through scripted MockProvider responses. Scenarios cover
 contextual retiming, End Effector IK, protected user constraints, editable
-multi-Keyframe plans, manual-edit-then-Refine, cancellation, offline failure,
+multi-Keyframe plans, manual edit followed by refinement, cancellation, offline failure,
 and rejection of arbitrary-code tool requests.
 
 The v3.1 frame-selection boundary can be checked without Qt, OpenGL, or a
@@ -217,8 +217,8 @@ Phase 9 enriches the existing compact context without adding provider calls:
 
 | Phase 9 action | Normalized provider requests |
 | --- | ---: |
-| Apply or Refine with live editor selection | 1 |
-| Apply with a local-operation repair | 2 maximum |
+| Generate or refine with live editor selection | 1 |
+| Generate with a local-operation repair | 2 maximum |
 | Critique, Visual refine, or Verify visually | 1 per explicit action |
 
 The first request contains the request-time UI snapshot. Local selection
@@ -244,7 +244,7 @@ and the existing playback clock against a staged qpos sampler, verify that the
 committed/reference and Orange candidate poses use the same time, and assert
 that committed qpos, document revision, editable current time, and Keyframes do
 not change. Controller coverage verifies that the sampler reads the detached
-`AIEditSession.working_document.qpos_timeline` and is removed on Reject.
+`AIEditSession.working_document.qpos_timeline` and is removed on Discard.
 
 Phase 13 adds no provider request. Model tests assert that every G1 semantic
 group member is an actual compiled Joint Angle and that the combined `arms`,
@@ -344,9 +344,10 @@ structure. It skips outside the explicitly configured visual environment.
 - Launch without an API key and confirm all standard editing remains usable.
 - Open Motion Assistant settings, verify the API key is password-masked, and
   test both session-only and system-keyring storage.
-- Apply a focused edit and confirm the committed motion stays unchanged while
-  the Orange preview shows the staged working copy.
-- Choose **Preview candidate**, scrub across the complete candidate duration,
+- Send a focused edit and confirm the user message and progress remain visible,
+  the committed motion stays unchanged, and the Orange preview automatically
+  shows the staged working copy.
+- Scrub across the complete candidate duration,
   and press **Play**. Confirm Orange follows the staged motion while the
   reference robot follows committed motion at identical times. Confirm
   scrubbing, pausing, and the disabled per-Keyframe actions do not change the
@@ -375,9 +376,10 @@ structure. It skips outside the explicitly configured visual environment.
   mismatch; confirm each is rejected locally.
 - Scrub the viewer timeline and move the camera while the provider request is
   running; confirm document-mutating controls remain unavailable.
-- Use **Refine** twice and confirm each turn builds on the same staged result.
+- Send two more messages and confirm each turn remains visible and builds on the
+  same staged result without a dedicated Refine action.
 - Use **Accept** and confirm the entire session is one Undo/Redo entry. Repeat
-  with **Reject** and confirm committed motion does not change.
+  with **Discard** and confirm committed motion does not change.
 - Cancel a request, remove network access, use an invalid key, and exercise a
   rate-limited response; confirm the error stays inside Motion Assistant.
 - Run the same focused request with MockProvider and opt-in Gemini and Claude

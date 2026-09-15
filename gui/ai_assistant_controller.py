@@ -154,6 +154,7 @@ class AIAssistantController:
             self._committed_document_changed,
         )
         self._metadata_service().seed_document_as_user_owned(host.document)
+        self._update_context_indicators()
 
     @property
     def session_staged(self) -> bool:
@@ -601,6 +602,7 @@ class AIAssistantController:
                 self.identity_resolver,
             )
             selection = self._editor_selection_context(motion)
+            self._update_context_indicators(selection)
             context = MotionAssistantContextBuilder(
                 self.host.robot_model_3d,
             ).build_for_session(
@@ -711,6 +713,7 @@ class AIAssistantController:
                 conversation_context=conversation_context,
                 context_warnings=context_warnings,
                 cancellation_token=token,
+                progress_callback=self._emit_progress,
             )
         finally:
             await provider.aclose()
@@ -754,6 +757,7 @@ class AIAssistantController:
                 result.text,
                 changes,
                 accept_permitted=self.session.can_accept,
+                result_summary=self._motion_result_summary(result),
             )
             self.preview()
         else:
@@ -870,7 +874,7 @@ class AIAssistantController:
         message = "AI motion edit accepted as one history entry."
         if refresh_error is not None:
             message += f" Viewer refresh warning: {refresh_error}"
-        self.panel.reset_session(message)
+        self.panel.complete_session(message, accepted=True)
         self.session = None
         self._session_goal = ""
         self._trajectory_conversation = None
@@ -892,8 +896,12 @@ class AIAssistantController:
         )
         self._metadata_service().seed_document_as_user_owned(document)
         self.session = None
+        self._session_goal = ""
         self._trajectory_conversation = None
         self._pending_refinement = ""
+        self._clear_visual_refinement()
+        self.panel.reset_session("Opened a different motion. Start a new request.")
+        self._update_context_indicators()
 
     def reset_motion_metadata(self, document) -> None:
         """Start conservative metadata for a new empty project workspace."""
@@ -903,8 +911,12 @@ class AIAssistantController:
         self._metadata_stores[document.document_id] = self.metadata_store
         self._metadata_service().seed_document_as_user_owned(document)
         self.session = None
+        self._session_goal = ""
         self._trajectory_conversation = None
         self._pending_refinement = ""
+        self._clear_visual_refinement()
+        self.panel.reset_session("Started a new motion. What would you like to create?")
+        self._update_context_indicators()
 
     def restore_motion_metadata(self, payload, document) -> None:
         """Restore a saved workspace or conservatively seed a legacy one."""
@@ -916,8 +928,12 @@ class AIAssistantController:
         self.metadata_store = store
         self._metadata_stores[document.document_id] = store
         self.session = None
+        self._session_goal = ""
         self._trajectory_conversation = None
         self._pending_refinement = ""
+        self._clear_visual_refinement()
+        self.panel.reset_session("Restored the project motion. Start a new request.")
+        self._update_context_indicators()
 
     def project_motion_metadata(self, document):
         """Return the versioned metadata section stored in project workspace."""
@@ -946,7 +962,10 @@ class AIAssistantController:
                 self.preview()
             return
         self.host.viewer_3d.cancel_preview()
-        self.panel.reset_session("AI working copy rejected; committed motion is unchanged.")
+        self.panel.complete_session(
+            "Motion discarded; the committed motion is unchanged.",
+            accepted=False,
+        )
         self.session = None
         self._session_goal = ""
         self._trajectory_conversation = None
@@ -1108,6 +1127,61 @@ class AIAssistantController:
 
     def _provider_capabilities(self, provider_name):
         return self.provider_registry.get(provider_name).capabilities
+
+    def _update_context_indicators(self, selection=None) -> None:
+        adapter = getattr(self.host, "robot_model_3d", None)
+        info = getattr(adapter, "info", None)
+        robot_name = str(
+            getattr(info, "display_name", "")
+            or getattr(getattr(self.host, "document", None), "model_key", "Robot")
+        )
+        project = getattr(self.host, "current_project", None)
+        motion_name = (
+            str(project.project_name)
+            if project is not None
+            else "Current motion"
+        )
+        values = [robot_name, motion_name]
+        if selection is not None:
+            if selection.time_interval is not None:
+                start, end = selection.time_interval
+                values.append(f"Selected {start:.2f}–{end:.2f} s")
+            target = (
+                selection.end_effector
+                or selection.joint
+                or selection.joint_group
+                or selection.logical_frame
+            )
+            if target:
+                values.append(str(target).replace("_", " "))
+        self.panel.set_context_indicators(values)
+
+    @staticmethod
+    def _motion_result_summary(result: CompactMotionRunResult) -> str:
+        outputs = tuple(item.output for item in result.execution.operations)
+        durations = tuple(
+            float(output["duration_seconds"])
+            for output in outputs
+            if output.get("duration_seconds") is not None
+        )
+        sparse_keyframes = sum(
+            int(output.get("sparse_keyframes", 0) or 0)
+            for output in outputs
+        )
+        warnings = sum(
+            line.lower().startswith("warning:")
+            for line in result.proposal_lines
+        )
+        parts = []
+        if durations:
+            parts.append(f"{durations[-1]:.1f} s")
+        if sparse_keyframes:
+            noun = "Keyframe" if sparse_keyframes == 1 else "Keyframes"
+            parts.append(f"{sparse_keyframes} {noun}")
+        if warnings:
+            noun = "warning" if warnings == 1 else "warnings"
+            parts.append(f"{warnings} {noun}")
+        return " · ".join(parts) or "Candidate ready"
 
     def shutdown(self) -> None:
         self.cancel_request()
