@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable
+from typing import Callable, Mapping
 
 from application.ai.metadata import (
     InMemoryMotionMetadataStore,
@@ -23,8 +23,26 @@ from application.editor_controller import EditorController
 from application.project_document import ProjectDocument
 
 
+@dataclass(frozen=True)
+class BlockedMotionEntity:
+    """One provenance decision that prevented an AI motion mutation."""
+
+    reference: MotionEntityRef
+    reason: str
+    label: str
+
+
 class AIEditSessionError(RuntimeError):
     """Base class for invalid AI editing session operations."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        blocked_entities: tuple[BlockedMotionEntity, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.blocked_entities = tuple(blocked_entities)
 
 
 class AIEditSessionState(str, Enum):
@@ -187,28 +205,45 @@ class AIEditSession:
         affected_entities: tuple[MotionEntityRef, ...] = (),
         created_entities: tuple[MotionEntityRef, ...] = (),
         allow_user_override: bool = False,
+        entity_labels: Mapping[MotionEntityRef, str] | None = None,
     ) -> CommandResult:
         self._require_state(AIEditSessionState.READY, AIEditSessionState.STAGED)
         created = frozenset(created_entities)
         if not created.issubset(affected_entities):
             raise ValueError("created AI entities must also be affected entities")
-        blocked = tuple(
-            reference
-            for reference in affected_entities
-            if reference in self._manual_priority_entities or (
-                self.metadata.get(reference) is not None
-                and not self.metadata.permits_ai_edit(
-                    reference,
-                    allow_user_override=allow_user_override,
-                )
-            ) or (
-                self.metadata.get(reference) is None
-                and reference not in created
-            )
-        )
+        labels = dict(entity_labels or {})
+        blocked = []
+        for reference in affected_entities:
+            metadata = self.metadata.get(reference)
+            if reference in self._manual_priority_entities:
+                reason = "in-session user-authored correction"
+            elif metadata is None and reference not in created:
+                reason = "unknown or untracked user-authored content"
+            elif metadata is not None and metadata.protected:
+                reason = "protected content"
+            elif (
+                metadata is not None
+                and metadata.author is EditAuthor.USER
+                and not allow_user_override
+            ):
+                reason = "user-authored content outside the requested scope"
+            else:
+                continue
+            blocked.append(BlockedMotionEntity(
+                reference=reference,
+                reason=reason,
+                label=labels.get(reference, reference.identifier),
+            ))
         if blocked:
+            details = "; ".join(
+                f"{item.reason}: {item.label}"
+                for item in blocked[:4]
+            )
+            if len(blocked) > 4:
+                details += f"; and {len(blocked) - 4} more"
             raise AIEditSessionError(
-                "AI edit targets user-authored or protected motion content"
+                f"AI edit targets blocked motion content: {details}",
+                blocked_entities=tuple(blocked),
             )
         return self._apply(command, EditAuthor.AI, affected_entities)
 

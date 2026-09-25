@@ -219,7 +219,9 @@ class RobotViewer3D(QWidget):
         self._resume_playback_after_scrub = False
         self._pending_scrub_preview_time = None
         self._candidate_preview_sampler = None
+        self._candidate_preview_reference_sampler = None
         self._candidate_preview_reference_duration = None
+        self._candidate_preview_comparison_duration = None
         self.canvas = RobotCanvas3D()
         self.canvas.geometry_progress.connect(self._on_geometry_progress)
         self.canvas.rendering_failed.connect(self._on_rendering_failed)
@@ -1622,11 +1624,20 @@ class RobotViewer3D(QWidget):
 
         return self._candidate_preview_sampler is not None
 
-    def begin_candidate_preview(self, sampler, duration):
+    def begin_candidate_preview(
+        self,
+        sampler,
+        duration,
+        *,
+        reference_sampler=None,
+        reference_duration=None,
+    ):
         """Present a read-only candidate over the committed timeline state."""
 
         if not callable(sampler):
             raise TypeError("candidate preview sampler must be callable")
+        if reference_sampler is not None and not callable(reference_sampler):
+            raise TypeError("candidate preview reference sampler must be callable")
         duration = float(duration)
         if not np.isfinite(duration) or duration <= 0.0:
             raise ValueError(
@@ -1634,11 +1645,19 @@ class RobotViewer3D(QWidget):
             )
         if not self.robot_state:
             raise ValueError("candidate preview requires a loaded robot model")
+        if reference_duration is not None:
+            reference_duration = float(reference_duration)
+            if not np.isfinite(reference_duration) or reference_duration <= 0.0:
+                raise ValueError(
+                    "candidate preview reference duration must be positive and finite"
+                )
 
         self.pause_playback(commit_time=False)
         if not self.candidate_preview_active:
             self._candidate_preview_reference_duration = self.timeline_duration
         self._candidate_preview_sampler = sampler
+        self._candidate_preview_reference_sampler = reference_sampler
+        self._candidate_preview_comparison_duration = reference_duration
         committed_time = self.current_time
         self.set_timeline_duration(duration, emit_signal=False)
         self.current_time = committed_time
@@ -1658,25 +1677,47 @@ class RobotViewer3D(QWidget):
 
         if not self.candidate_preview_active:
             return
-        self.pause_playback(commit_time=False)
         reference_duration = self._candidate_preview_reference_duration
+        # Clear the candidate identity first. Even if a renderer refresh fails,
+        # no later scrub or request may keep sampling the accepted/discarded copy.
         self._candidate_preview_sampler = None
+        self._candidate_preview_reference_sampler = None
         self._candidate_preview_reference_duration = None
-        if reference_duration is not None:
-            self.set_timeline_duration(reference_duration, emit_signal=False)
-        self.delete_timeslice_button.setEnabled(self.robot_state is not None)
-        self.display_time = min(self.current_time, self.timeline_duration)
-        self._set_timeslice_widgets(self.display_time)
-        self.preview_state.set_qpos(self.committed_state.get_qpos())
+        self._candidate_preview_comparison_duration = None
         self.preview_active = False
-        self.canvas.set_preview_collisions([])
-        self._use_editor_canvas_states()
         self.canvas.set_preview_visible(False)
-        self._sync_joint_controls()
-        self._set_target_to_selected_pose()
-        self.canvas.update()
-        self._update_frame_readout(self.display_time)
-        self._update_timeline_label()
+        errors = []
+
+        def attempt(callback):
+            try:
+                callback()
+            except Exception as error:
+                errors.append(error)
+
+        attempt(lambda: self.pause_playback(commit_time=False))
+        if reference_duration is not None:
+            attempt(lambda: self.set_timeline_duration(
+                reference_duration,
+                emit_signal=False,
+            ))
+        attempt(lambda: self.delete_timeslice_button.setEnabled(
+            self.robot_state is not None
+        ))
+        self.display_time = min(self.current_time, self.timeline_duration)
+        attempt(lambda: self._set_timeslice_widgets(self.display_time))
+        attempt(lambda: self.preview_state.set_qpos(
+            self.committed_state.get_qpos()
+        ))
+        attempt(lambda: self.canvas.set_preview_collisions([]))
+        attempt(self._use_editor_canvas_states)
+        attempt(lambda: self.canvas.set_preview_visible(False))
+        attempt(self._sync_joint_controls)
+        attempt(self._set_target_to_selected_pose)
+        attempt(self.canvas.update)
+        attempt(lambda: self._update_frame_readout(self.display_time))
+        attempt(self._update_timeline_label)
+        if errors:
+            raise errors[0]
 
     def preview_trajectory_time(self, time, emit_time_signal=False):
         """Display a timeline pose without creating an editable qpos state."""
@@ -1687,10 +1728,21 @@ class RobotViewer3D(QWidget):
         self._set_timeslice_widgets(time)
 
         if self.candidate_preview_active:
-            reference_qpos = self.state_timeline.sample_state(
-                time,
-                fallback_qpos=self.committed_state.get_qpos(),
-            )
+            if self._candidate_preview_reference_sampler is None:
+                reference_qpos = self.state_timeline.sample_state(
+                    time,
+                    fallback_qpos=self.committed_state.get_qpos(),
+                )
+            else:
+                comparison_time = time
+                if self._candidate_preview_comparison_duration is not None:
+                    comparison_time = min(
+                        comparison_time,
+                        self._candidate_preview_comparison_duration,
+                    )
+                reference_qpos = self._candidate_preview_reference_sampler(
+                    comparison_time
+                )
             candidate_qpos = self._candidate_preview_sampler(time)
             self.playback_state.set_qpos(reference_qpos)
             self.preview_state.set_qpos(candidate_qpos)

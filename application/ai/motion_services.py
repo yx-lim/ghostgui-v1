@@ -192,7 +192,7 @@ class GhostGUIMotionService:
                 weight=2.0,
                 priority=1,
                 required=True,
-                tolerance=0.005,
+                tolerance=TARGET_FK_POSITION_TOLERANCE_M,
                 object_name=protected_object,
                 kind=protected_kind,
                 target_position=position,

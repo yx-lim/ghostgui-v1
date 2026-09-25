@@ -110,7 +110,7 @@ class TrajectorySpecExecutorTests(unittest.TestCase):
         self.assertFalse(session.has_changes)
         self.assertEqual(committed.trajectory.frames[0].z, 0.8)
 
-    def test_failed_validation_keeps_candidate_visible_but_unacceptable(self):
+    def test_failed_validation_restores_the_pre_request_checkpoint(self):
         committed, session, reference = _session()
 
         def edit(_operation, context):
@@ -126,10 +126,35 @@ class TrajectorySpecExecutorTests(unittest.TestCase):
                 lambda _document: MotionValidationReport(False, ("unstable",)),
             ).execute(_spec(), context=TrajectoryExecutionContext(session, object()))
 
-        self.assertEqual(session.working_document.trajectory.frames[0].z, 0.85)
+        self.assertEqual(session.working_document.trajectory.frames[0].z, 0.8)
+        self.assertFalse(session.has_changes)
         self.assertFalse(session.can_accept)
         with self.assertRaises(AIEditSessionError):
             session.accept(EditorController(committed))
+
+    def test_failed_refinement_restores_the_last_valid_candidate(self):
+        _committed, session, reference = _session()
+        session.apply_ai(
+            UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.82)),
+            affected_entities=(reference,),
+        )
+        session.mark_current_revision_validated()
+
+        def refine(_operation, context):
+            context.session.apply_ai(
+                UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.9)),
+                affected_entities=(reference,),
+            )
+            return {"changed": True}
+
+        with self.assertRaisesRegex(TrajectoryExecutionError, "unstable"):
+            TrajectorySpecExecutor(
+                {TrajectoryOperationType.ROOT_OFFSET: refine},
+                lambda _document: MotionValidationReport(False, ("unstable",)),
+            ).execute(_spec(), context=TrajectoryExecutionContext(session, object()))
+
+        self.assertEqual(session.working_document.trajectory.frames[0].z, 0.82)
+        self.assertTrue(session.can_accept)
 
 
 if __name__ == "__main__":

@@ -84,7 +84,7 @@ Use the single Time slider to scrub the robot live or follow time-based playback
 ## Right Sidebar
 
 - **Status** shows the latest important event or problem. Expand **Details** for the latest operation's frame, IK result, and solver diagnostics.
-- **Motion Assistant** automatically supplies bounded robot-state and timestamped visual context for natural-language motion creation or editing. Send a message with Enter (Shift+Enter adds a line), review the automatic Orange preview, and keep chatting to refine it. Choose **Accept** or **Discard** on the result card. GhostGUI performs IK, interpolation, retiming, and dense qpos work locally on a detached working copy. API keys can be kept in the system credential store and are never saved in a project.
+- **Motion Assistant** automatically supplies bounded robot-state and timestamped visual context for natural-language motion creation or editing. Send a message with Enter (Shift+Enter adds a line) and review the automatic Orange preview. A normal new message replaces an unaccepted preview; choose **Refine preview** first when the next message should build on it. Choose **Accept** or **Discard** on the result card. Generate is not required for AI review. GhostGUI performs IK, interpolation, retiming, and dense qpos work locally on a detached working copy. API keys can be kept in the system credential store and are never saved in a project.
 - **IK / Constraints** exposes IK weights, solver settings, collision checks, and preview controls.
 """.strip(),
     ),

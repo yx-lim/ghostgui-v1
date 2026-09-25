@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import copy
 from dataclasses import replace
+import math
 
 import numpy as np
 
@@ -14,7 +15,12 @@ from application.ai.motion_state import (
     capture_motion_state,
     detached_document,
 )
-from application.ai.motion_services import JointAngleEditResult, LogicalFrameSolveResult
+from application.ai.motion_services import (
+    JointAngleEditResult,
+    LogicalFrameSolveResult,
+    TARGET_FK_ORIENTATION_TOLERANCE_RAD,
+    TARGET_FK_POSITION_TOLERANCE_M,
+)
 from application.ai.motion_primitives import build_motion_primitive
 from application.ai.qpos_trajectory import (
     normalize_qpos_quaternions,
@@ -28,6 +34,7 @@ from application.ai.trajectory_executor import TrajectoryExecutionContext
 from application.ai.semantic_tools import SemanticToolContext, retime_segment
 from application.motion_clipboard import capture_motion_clip, plan_repeat_motion
 from application.timeline_editing import ApplyTimelineEditPlan, TimelineEditError
+from core.math3d import quaternion_angle, rpy_to_quaternion
 from core.trajectory import TargetFrame, Trajectory, quat_to_rpy
 
 
@@ -131,7 +138,7 @@ def _root_offset(
     if end > document.timeline_duration + 1e-9:
         raise TrajectoryOperationError("root_offset scope exceeds the motion duration")
     translation = np.asarray(arguments["translation_m"], dtype=float)
-    state_times = tuple(
+    existing_state_times = tuple(
         float(time)
         for time in timeline.times()
         if start - 1e-9 <= float(time) <= end + 1e-9
@@ -141,19 +148,19 @@ def _root_offset(
         for frame in document.trajectory.frames
         if start - 1e-9 <= float(frame.time) <= end + 1e-9
     )
-    if not state_times and not frames:
-        raise TrajectoryOperationError("root_offset scope contains no Keyframes")
-
     working_metadata = MotionMetadataService(
         context.session.metadata,
         metadata.resolver,
     )
-    affected = tuple(
-        working_metadata.reference_for_keyframe(frame) for frame in frames
-    ) + tuple(
-        working_metadata.reference_for_qpos_keyframe(time) for time in state_times
-    )
     candidate = detached_document(document)
+    # A valid timeline interval may contain no authored qpos Keyframe. Sample
+    # deterministic boundary anchors so interval edits do not depend on users
+    # first running Generate or manually inserting frames.
+    boundary_times = tuple(dict.fromkeys((start, end)))
+    for time in boundary_times:
+        if not any(abs(time - value) <= 1e-9 for value in timeline.times()):
+            candidate.qpos_timeline.set_state(time, timeline.sample_state(time))
+    state_times = tuple(sorted(set(existing_state_times).union(boundary_times)))
     address = int(free_joints[0].qpos_address)
     for time in state_times:
         qpos = np.asarray(candidate.qpos_timeline.get_state(time), dtype=float).copy()
@@ -161,20 +168,43 @@ def _root_offset(
             raise TrajectoryOperationError("floating-root qpos layout is invalid")
         qpos[address:address + 3] += translation
         candidate.qpos_timeline.set_state(time, qpos)
-    for frame in frames:
-        candidate.trajectory.upsert_frame(replace(
-            frame,
-            x=float(frame.x) + float(translation[0]),
-            y=float(frame.y) + float(translation[1]),
-            z=float(frame.z) + float(translation[2]),
-        ))
+    adapter = motion.adapter
+    can_synchronize_fk = (
+        callable(getattr(adapter, "create_state", None))
+        and hasattr(adapter, "logical_frame_bindings")
+    )
+    if can_synchronize_fk:
+        for time in sorted({float(frame.time) for frame in frames}):
+            _synchronize_logical_frames(
+                candidate,
+                motion,
+                time,
+                candidate.qpos_timeline.sample_state(time),
+            )
+    else:
+        # Lightweight application-service doubles do not expose FK. Preserve
+        # the equivalent rigid-translation behavior for those callers.
+        for frame in frames:
+            candidate.trajectory.upsert_frame(replace(
+                frame,
+                x=float(frame.x) + float(translation[0]),
+                y=float(frame.y) + float(translation[1]),
+                z=float(frame.z) + float(translation[2]),
+            ))
+    affected, created, labels = _motion_entity_changes(
+        document,
+        candidate,
+        working_metadata,
+    )
     result = context.session.apply_ai(
         ReplaceMotionState(
             capture_motion_state(candidate),
             operation="root_offset",
         ),
         affected_entities=affected,
+        created_entities=created,
         allow_user_override=True,
+        entity_labels=labels,
     )
     if not result.changed:
         raise TrajectoryOperationError("root_offset made no motion change")
@@ -234,15 +264,7 @@ def _hold_pose(
         context.session.metadata,
         metadata.resolver,
     )
-    protected_frames = _protected_logical_frames(document, working_metadata)
-    affected = []
-    created = []
     for time in target_times:
-        existed = any(abs(time - value) <= 1e-9 for value in existing_times)
-        qpos_reference = working_metadata.reference_for_qpos_keyframe(time)
-        affected.append(qpos_reference)
-        if not existed:
-            created.append(qpos_reference)
         if scope == "whole_body":
             qpos = np.asarray(source_qpos, dtype=float).copy()
             changed_frames = _synchronize_logical_frames(candidate, motion, time, qpos)
@@ -251,7 +273,11 @@ def _hold_pose(
                 candidate,
                 time_seconds=time,
                 values=values,
-                protected_logical_frames=protected_frames,
+                protected_logical_frames=_protected_logical_frames(
+                    document,
+                    working_metadata,
+                    time=time,
+                ),
             )
             if not isinstance(solved, JointAngleEditResult):
                 raise TrajectoryOperationError(
@@ -262,18 +288,28 @@ def _hold_pose(
             for frame in changed_frames:
                 candidate.trajectory.upsert_frame(frame)
         candidate.qpos_timeline.set_state(time, qpos)
-        affected.extend(
-            working_metadata.reference_for_keyframe(frame)
-            for frame in changed_frames
-        )
+    _restore_and_verify_protected_logical_frames(
+        document,
+        candidate,
+        motion,
+        working_metadata,
+        start_time=start,
+        end_time=end,
+    )
+    affected, created, labels = _motion_entity_changes(
+        document,
+        candidate,
+        working_metadata,
+    )
     result = context.session.apply_ai(
         ReplaceMotionState(
             capture_motion_state(candidate),
             operation="hold_pose",
         ),
-        affected_entities=tuple(dict.fromkeys(affected)),
-        created_entities=tuple(dict.fromkeys(created)),
+        affected_entities=affected,
+        created_entities=created,
         allow_user_override=True,
+        entity_labels=labels,
     )
     if not result.changed:
         raise TrajectoryOperationError("hold_pose made no motion change")
@@ -420,8 +456,6 @@ def _apply_joint_values(context, motion, metadata, time, values, operation_name)
     timeline = document.qpos_timeline
     if timeline is None:
         raise TrajectoryOperationError("Joint Angle target requires a qpos timeline")
-    existing_times = tuple(float(value) for value in timeline.times())
-    existed = any(abs(time - value) <= 1e-9 for value in existing_times)
     working_metadata = MotionMetadataService(
         context.session.metadata,
         metadata.resolver,
@@ -433,6 +467,7 @@ def _apply_joint_values(context, motion, metadata, time, values, operation_name)
         protected_logical_frames=_protected_logical_frames(
             document,
             working_metadata,
+            time=time,
         ),
     )
     if not isinstance(solved, JointAngleEditResult):
@@ -443,19 +478,28 @@ def _apply_joint_values(context, motion, metadata, time, values, operation_name)
     for frame in solved.logical_frames:
         candidate.trajectory.upsert_frame(frame)
     candidate.qpos_timeline.set_state(time, solved.qpos)
-    qpos_reference = working_metadata.reference_for_qpos_keyframe(time)
-    affected = tuple(
-        working_metadata.reference_for_keyframe(frame)
-        for frame in solved.logical_frames
-    ) + (qpos_reference,)
+    _restore_and_verify_protected_logical_frames(
+        document,
+        candidate,
+        motion,
+        working_metadata,
+        start_time=time,
+        end_time=time,
+    )
+    affected, created, labels = _motion_entity_changes(
+        document,
+        candidate,
+        working_metadata,
+    )
     context.session.apply_ai(
         ReplaceMotionState(
             capture_motion_state(candidate),
             operation=operation_name,
         ),
         affected_entities=affected,
-        created_entities=() if existed else (qpos_reference,),
+        created_entities=created,
         allow_user_override=True,
+        entity_labels=labels,
     )
     return {
         "time_seconds": time,
@@ -520,6 +564,7 @@ def _set_logical_frame_target(operation, context, motion, metadata):
         times=times,
         mode=mode,
         operation_name="set_logical_frame_target",
+        locked_end_effectors=tuple(arguments.get("locked_end_effectors", ())),
     )
 
 
@@ -579,6 +624,7 @@ def _apply_logical_frame_targets(
     mode,
     operation_name,
     orientations=None,
+    locked_end_effectors=(),
 ):
     document = context.session.working_document
     if document.qpos_timeline is None:
@@ -590,16 +636,39 @@ def _apply_logical_frame_targets(
         context.session.metadata,
         metadata.resolver,
     )
-    protected = _protected_logical_frames(document, working_metadata)
-    existing_qpos_times = tuple(float(value) for value in document.qpos_timeline.times())
-    existing_logical = {
-        (frame.frame_name, float(frame.time))
-        for frame in document.trajectory.frames
-    }
-    affected = []
-    created = []
+    locked_end_effectors = tuple(dict.fromkeys(locked_end_effectors))
+    unknown_locks = set(locked_end_effectors) - set(motion.end_effectors)
+    if unknown_locks:
+        raise TrajectoryOperationError(
+            f"unknown locked End Effector: {sorted(unknown_locks)[0]}"
+        )
+    if set(locked_end_effectors).intersection(targets):
+        raise TrajectoryOperationError(
+            "a logical target cannot also be a locked End Effector"
+        )
     warnings = []
     for time in times:
+        protected = _protected_logical_frames(
+            document,
+            working_metadata,
+            time=time,
+        )
+        protected_targets = set(protected).intersection(targets)
+        if protected_targets:
+            raise TrajectoryOperationError(
+                f"protected {sorted(protected_targets)[0]} at "
+                f"t={float(time):.2f} s cannot be targeted by this edit"
+            )
+        held_names = tuple(dict.fromkeys((
+            *protected,
+            *locked_end_effectors,
+        )))
+        held_poses = _logical_frame_poses(
+            candidate,
+            motion,
+            time,
+            held_names,
+        )
         solved_names = []
         for name, position in targets.items():
             if position is None:
@@ -620,9 +689,7 @@ def _apply_logical_frame_targets(
                     None if orientations is None else orientations.get(name)
                 ),
                 mode=mode,
-                protected_logical_frames=tuple(dict.fromkeys(
-                    (*protected, *solved_names)
-                )),
+                protected_logical_frames=tuple(solved_names),
             )
             if not isinstance(solved, LogicalFrameSolveResult):
                 raise TrajectoryOperationError(
@@ -630,34 +697,67 @@ def _apply_logical_frame_targets(
                 )
             candidate.trajectory.upsert_frame(solved.frame)
             candidate.qpos_timeline.set_state(time, solved.qpos)
-            frame_reference = working_metadata.reference_for_keyframe(solved.frame)
-            affected.append(frame_reference)
-            if (name, time) not in existing_logical:
-                created.append(frame_reference)
             warnings.extend(solved.collisions)
             solved_names.append(name)
-        synchronized = _synchronize_logical_frames(
+        held_solved = []
+        for name, (position, quaternion) in held_poses.items():
+            solved = motion.solve_logical_frame_target(
+                candidate,
+                logical_frame=name,
+                time_seconds=time,
+                position_m=tuple(float(value) for value in position),
+                orientation_rpy_rad=tuple(
+                    float(value) for value in quat_to_rpy(quaternion)
+                ),
+                mode="absolute",
+                protected_logical_frames=tuple(dict.fromkeys((
+                    *solved_names,
+                    *held_solved,
+                ))),
+            )
+            if not isinstance(solved, LogicalFrameSolveResult):
+                raise TrajectoryOperationError(
+                    "IK service returned an invalid locked End Effector result"
+                )
+            candidate.qpos_timeline.set_state(time, solved.qpos)
+            warnings.extend(solved.collisions)
+            held_solved.append(name)
+        _verify_held_logical_frame_poses(
+            candidate,
+            motion,
+            time,
+            held_poses,
+            protected_names=frozenset(protected),
+        )
+        _synchronize_logical_frames(
             candidate,
             motion,
             time,
             candidate.qpos_timeline.get_state(time),
+            preserved_names=held_names,
         )
-        affected.extend(
-            working_metadata.reference_for_keyframe(frame)
-            for frame in synchronized
-        )
-        qpos_reference = working_metadata.reference_for_qpos_keyframe(time)
-        affected.append(qpos_reference)
-        if not any(abs(time - value) <= 1e-9 for value in existing_qpos_times):
-            created.append(qpos_reference)
+    _restore_and_verify_protected_logical_frames(
+        document,
+        candidate,
+        motion,
+        working_metadata,
+        start_time=times[0],
+        end_time=times[-1],
+    )
+    affected, created, labels = _motion_entity_changes(
+        document,
+        candidate,
+        working_metadata,
+    )
     result = context.session.apply_ai(
         ReplaceMotionState(
             capture_motion_state(candidate),
             operation=operation_name,
         ),
-        affected_entities=tuple(dict.fromkeys(affected)),
-        created_entities=tuple(dict.fromkeys(created)),
+        affected_entities=affected,
+        created_entities=created,
         allow_user_override=True,
+        entity_labels=labels,
     )
     if not result.changed:
         raise TrajectoryOperationError(f"{operation_name} made no motion change")
@@ -666,6 +766,7 @@ def _apply_logical_frame_targets(
         "start_time": times[0],
         "end_time": times[-1],
         "solved_keyframes": len(times) * len(targets),
+        "locked_end_effectors": list(locked_end_effectors),
         "collision_warnings": list(dict.fromkeys(warnings)),
     }
 
@@ -745,24 +846,29 @@ def _apply_qpos_keyframes(operation, context, motion, metadata):
         context.session.metadata,
         metadata.resolver,
     )
-    if mode == "replace":
-        existing = set(_motion_references(document, working_metadata))
-        replacement = set(_motion_references(candidate, working_metadata))
-    else:
-        existing = set(_motion_references_in_interval(
-            document, working_metadata, start, end
-        ))
-        replacement = set(_motion_references_in_interval(
-            candidate, working_metadata, start, end
-        ))
+    if mode == "patch":
+        _restore_and_verify_protected_logical_frames(
+            document,
+            candidate,
+            motion,
+            working_metadata,
+            start_time=start,
+            end_time=end,
+        )
+    affected, created, labels = _motion_entity_changes(
+        document,
+        candidate,
+        working_metadata,
+    )
     result = context.session.apply_ai(
         ReplaceMotionState(
             capture_motion_state(candidate),
             operation=operation_name,
         ),
-        affected_entities=tuple(existing | replacement),
-        created_entities=tuple(replacement - existing),
+        affected_entities=affected,
+        created_entities=created,
         allow_user_override=True,
+        entity_labels=labels,
     )
     if not result.changed:
         raise TrajectoryOperationError(f"{operation_name} made no motion change")
@@ -819,16 +925,20 @@ def _apply_motion_primitive(operation, context, motion, metadata):
         context.session.metadata,
         metadata.resolver,
     )
-    existing = set(_motion_references(document, working_metadata))
-    replacement = set(_motion_references(candidate, working_metadata))
+    affected, created, labels = _motion_entity_changes(
+        document,
+        candidate,
+        working_metadata,
+    )
     result = context.session.apply_ai(
         ReplaceMotionState(
             capture_motion_state(candidate),
             operation=f"motion_primitive_{plan.name}_{plan.variant}",
         ),
-        affected_entities=tuple(existing | replacement),
-        created_entities=tuple(replacement - existing),
+        affected_entities=affected,
+        created_entities=created,
         allow_user_override=True,
+        entity_labels=labels,
     )
     if not result.changed:
         raise TrajectoryOperationError("motion_primitive made no motion change")
@@ -1074,10 +1184,11 @@ def _generate_sparse_keyframes(operation, context, motion, metadata):
         context.session.metadata,
         metadata.resolver,
     )
-    existing = set(_motion_references(document, working_metadata))
-    replacement = set(_motion_references(candidate, working_metadata))
-    affected = tuple(existing | replacement)
-    created = tuple(replacement - existing)
+    affected, created, labels = _motion_entity_changes(
+        document,
+        candidate,
+        working_metadata,
+    )
     result = context.session.apply_ai(
         ReplaceMotionState(
             capture_motion_state(candidate),
@@ -1086,6 +1197,7 @@ def _generate_sparse_keyframes(operation, context, motion, metadata):
         affected_entities=affected,
         created_entities=created,
         allow_user_override=True,
+        entity_labels=labels,
     )
     if not result.changed:
         raise TrajectoryOperationError("sparse_keyframes made no motion change")
@@ -1210,21 +1322,6 @@ def _motion_references(document, metadata):
     return tuple(dict.fromkeys(references))
 
 
-def _motion_references_in_interval(document, metadata, start, end):
-    references = [
-        metadata.reference_for_keyframe(frame)
-        for frame in document.trajectory.frames
-        if start - 1e-9 <= float(frame.time) <= end + 1e-9
-    ]
-    if document.qpos_timeline is not None:
-        references.extend(
-            metadata.reference_for_qpos_keyframe(time)
-            for time in document.qpos_timeline.times()
-            if start - 1e-9 <= float(time) <= end + 1e-9
-        )
-    return tuple(dict.fromkeys(references))
-
-
 def _held_joint_names(scope, body_name, motion):
     if scope == "whole_body":
         return tuple(motion.joint_names)
@@ -1247,22 +1344,34 @@ def _held_joint_names(scope, body_name, motion):
     raise TrajectoryOperationError(f"unsupported hold_pose scope: {scope}")
 
 
-def _protected_logical_frames(document, metadata):
+def _protected_logical_frames(document, metadata, *, time=None):
     return tuple(sorted({
         frame.frame_name
         for frame in document.trajectory.frames
         if (
+            (time is None or abs(float(frame.time) - float(time)) <= 1e-9)
+            and
             metadata.metadata_for_keyframe(frame) is not None
             and metadata.metadata_for_keyframe(frame).protected
         )
     }))
 
 
-def _synchronize_logical_frames(document, motion, time, qpos):
+def _synchronize_logical_frames(
+    document,
+    motion,
+    time,
+    qpos,
+    *,
+    preserved_names=(),
+):
     state = motion.adapter.create_state()
     state.set_qpos(qpos)
     changed = []
+    preserved = frozenset(preserved_names)
     for frame in document.frames_at_time(time):
+        if frame.frame_name in preserved:
+            continue
         kind, object_name = motion.adapter.logical_frame_bindings[frame.frame_name]
         position, quaternion = state.get_body_pose(object_name, kind)
         roll, pitch, yaw = quat_to_rpy(quaternion)
@@ -1278,3 +1387,179 @@ def _synchronize_logical_frames(document, motion, time, qpos):
         document.trajectory.upsert_frame(updated)
         changed.append(updated)
     return tuple(changed)
+
+
+def _logical_frame_poses(document, motion, time, names):
+    """Sample named logical poses once so an edit can hold them concurrently."""
+
+    if not names:
+        return {}
+    qpos = document.qpos_timeline.sample_state(time)
+    state = motion.adapter.create_state()
+    state.set_qpos(qpos)
+    poses = {}
+    for name in names:
+        try:
+            kind, object_name = motion.adapter.logical_frame_bindings[name]
+        except KeyError as error:
+            raise TrajectoryOperationError(
+                f"unknown locked logical frame: {name}"
+            ) from error
+        position, quaternion = state.get_body_pose(object_name, kind)
+        poses[name] = (
+            np.asarray(position, dtype=float).copy(),
+            np.asarray(quaternion, dtype=float).copy(),
+        )
+    return poses
+
+
+def _verify_held_logical_frame_poses(
+    document,
+    motion,
+    time,
+    expected,
+    *,
+    protected_names=frozenset(),
+):
+    if not expected:
+        return
+    actual = _logical_frame_poses(document, motion, time, expected)
+    for name, (expected_position, expected_quaternion) in expected.items():
+        actual_position, actual_quaternion = actual[name]
+        position_error = float(np.linalg.norm(
+            actual_position - expected_position
+        ))
+        orientation_error = float(quaternion_angle(
+            actual_quaternion,
+            expected_quaternion,
+        ))
+        if (
+            position_error > TARGET_FK_POSITION_TOLERANCE_M
+            or orientation_error > TARGET_FK_ORIENTATION_TOLERANCE_RAD
+        ):
+            qualifier = (
+                "protected"
+                if name in protected_names
+                else "locked"
+            )
+            raise TrajectoryOperationError(
+                f"{qualifier} {name} at t={float(time):.2f} s would move "
+                f"by {position_error * 1000.0:.1f} mm and rotate by "
+                f"{math.degrees(orientation_error):.2f} degrees"
+            )
+
+
+def _restore_and_verify_protected_logical_frames(
+    source,
+    candidate,
+    motion,
+    metadata,
+    *,
+    start_time=0.0,
+    end_time=None,
+):
+    """Keep protected target objects exact after verifying candidate FK."""
+
+    if end_time is None:
+        end_time = float(candidate.timeline_duration)
+    for frame in source.trajectory.frames:
+        if not start_time - 1e-9 <= float(frame.time) <= end_time + 1e-9:
+            continue
+        edit_metadata = metadata.metadata_for_keyframe(frame)
+        if edit_metadata is None or not edit_metadata.protected:
+            continue
+        if (
+            candidate.qpos_timeline is None
+            or float(frame.time) > candidate.timeline_duration + 1e-9
+        ):
+            continue
+        state = motion.adapter.create_state()
+        state.set_qpos(candidate.qpos_timeline.sample_state(frame.time))
+        kind, object_name = motion.adapter.logical_frame_bindings[frame.frame_name]
+        actual_position, actual_quaternion = state.get_body_pose(object_name, kind)
+        expected_position = np.asarray((frame.x, frame.y, frame.z), dtype=float)
+        expected_quaternion = rpy_to_quaternion(
+            frame.roll,
+            frame.pitch,
+            frame.yaw,
+        )
+        position_error = float(np.linalg.norm(
+            np.asarray(actual_position, dtype=float) - expected_position
+        ))
+        orientation_error = float(quaternion_angle(
+            actual_quaternion,
+            expected_quaternion,
+        ))
+        if (
+            position_error > TARGET_FK_POSITION_TOLERANCE_M
+            or orientation_error > TARGET_FK_ORIENTATION_TOLERANCE_RAD
+        ):
+            raise TrajectoryOperationError(
+                f"protected {frame.frame_name} at t={frame.time:.2f} s "
+                f"would move by {position_error * 1000.0:.1f} mm and rotate "
+                f"by {math.degrees(orientation_error):.2f} degrees"
+            )
+        candidate.trajectory.upsert_frame(replace(frame))
+
+
+def _motion_entity_changes(before, after, metadata):
+    """Return only entities whose stored motion value actually changed."""
+
+    before_values, before_labels = _motion_entity_values(before, metadata)
+    after_values, after_labels = _motion_entity_values(after, metadata)
+    before_refs = set(before_values)
+    after_refs = set(after_values)
+    affected = set(before_refs ^ after_refs)
+    for reference in before_refs & after_refs:
+        if not _motion_entity_values_equal(
+            before_values[reference],
+            after_values[reference],
+        ):
+            affected.add(reference)
+    created = after_refs - before_refs
+    labels = dict(before_labels)
+    labels.update(after_labels)
+    ordered_affected = tuple(sorted(
+        affected,
+        key=lambda item: item.identifier,
+    ))
+    return (
+        ordered_affected,
+        tuple(
+            reference
+            for reference in ordered_affected
+            if reference in created
+        ),
+        labels,
+    )
+
+
+def _motion_entity_values(document, metadata):
+    values = {}
+    labels = {}
+    for frame in document.trajectory.frames:
+        reference = metadata.reference_for_keyframe(frame)
+        values[reference] = ("logical", frame.to_dict())
+        labels[reference] = (
+            f"{frame.frame_name} Keyframe at t={frame.time:.2f} s"
+        )
+    if document.qpos_timeline is not None:
+        for time in document.qpos_timeline.times():
+            reference = metadata.reference_for_qpos_keyframe(time)
+            values[reference] = (
+                "qpos",
+                np.asarray(
+                    document.qpos_timeline.get_state(time),
+                    dtype=float,
+                ).copy(),
+            )
+            labels[reference] = f"robot pose Keyframe at t={float(time):.2f} s"
+    return values, labels
+
+
+def _motion_entity_values_equal(left, right):
+    if left[0] != right[0]:
+        return False
+    if left[0] == "logical":
+        return left[1] == right[1]
+    return np.array_equal(left[1], right[1])

@@ -116,9 +116,11 @@ class TrajectorySpecExecutor:
         )
         validation = self.validator(context.session.working_document)
         if not isinstance(validation, MotionValidationReport):
+            context.session.restore_checkpoint(checkpoint)
             raise TrajectoryExecutionError("motion validator returned an invalid result")
         if not validation.valid:
             detail = "; ".join(validation.issues) or "unknown issue"
+            context.session.restore_checkpoint(checkpoint)
             raise TrajectoryExecutionError(
                 f"staged motion structural/kinematic validation failed: {detail}"
             )

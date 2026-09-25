@@ -201,6 +201,10 @@ def trajectory_operation_argument_contracts() -> dict[str, Any]:
             "mode": "absolute|relative",
             "position_m": "nullable [x, y, z]",
             "orientation_rpy_rad": "nullable [roll, pitch, yaw]",
+            "locked_end_effectors": (
+                "optional unique End Effector names held at their current "
+                "poses during the same IK solve"
+            ),
         },
         "lock_end_effector": {
             "end_effectors": "non-empty unique names",
@@ -396,14 +400,17 @@ def _validate_end_effector(values):
 
 
 def _validate_logical_frame(values):
-    _exact_fields(values, (
+    required = {
         "logical_frame",
         "start_time",
         "end_time",
         "mode",
         "position_m",
         "orientation_rpy_rad",
-    ))
+    }
+    allowed = required | {"locked_end_effectors"}
+    if not required.issubset(values) or set(values) - allowed:
+        raise ValueError("operation arguments have invalid fields")
     _name(values["logical_frame"], "logical_frame")
     _time_scope(values)
     if values["mode"] not in {"absolute", "relative"}:
@@ -414,6 +421,14 @@ def _validate_logical_frame(values):
         _vector(values["orientation_rpy_rad"], "orientation_rpy_rad")
     if values["position_m"] is None and values["orientation_rpy_rad"] is None:
         raise ValueError("logical frame target requires position or orientation")
+    locked = values.get("locked_end_effectors", [])
+    if not isinstance(locked, list):
+        raise ValueError("locked_end_effectors must be a list")
+    normalized = [_name(value, "locked_end_effector") for value in locked]
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("locked_end_effectors must not contain duplicates")
+    if values["logical_frame"] in normalized:
+        raise ValueError("logical frame target cannot also be locked")
 
 
 def _validate_lock(values):

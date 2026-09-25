@@ -287,6 +287,7 @@ class RobotGuiMainWindow(QMainWindow):
         }
         self.model_loaders = {}
         self._shutting_down = False
+        self._ai_motion_controls_enabled = True
         self.current_project = None
         self._pending_project_restore = None
         self._pending_project_restore_autosave = False
@@ -1194,6 +1195,7 @@ class RobotGuiMainWindow(QMainWindow):
         available = (
             viewer.robot_state is not None
             and self.viewer_tabs.currentWidget() is self.viewer_3d_stack
+            and getattr(self, "_ai_motion_controls_enabled", True)
         )
         visible = available and self.gizmo_visibility_action.isChecked()
         viewer.canvas.set_transform_gizmo_visible(visible)
@@ -1207,15 +1209,21 @@ class RobotGuiMainWindow(QMainWindow):
             return
         viewer = self.viewer_3d
         has_robot = viewer.robot_state is not None
+        mutation_enabled = has_robot and getattr(
+            self,
+            "_ai_motion_controls_enabled",
+            True,
+        )
         for action in (
             self.preview_action,
             self.slice_action,
             self.generate_action,
-            self.playback_action,
             self.reset_action,
             self.clear_action,
         ):
-            action.setEnabled(has_robot)
+            action.setEnabled(mutation_enabled)
+        # Candidate playback is read-only and remains available for inspection.
+        self.playback_action.setEnabled(has_robot)
         self.sync_transform_gizmo_state()
         mode = viewer.canvas.gizmo.mode
         self.move_action.setChecked(mode == "translate")
@@ -1321,6 +1329,7 @@ class RobotGuiMainWindow(QMainWindow):
         """
 
         enabled = bool(enabled)
+        self._ai_motion_controls_enabled = enabled
         self.controls.setEnabled(enabled)
         for section in self.left_sidebar_content.sections:
             section.content.setEnabled(enabled)

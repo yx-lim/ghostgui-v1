@@ -25,11 +25,26 @@ def sample_working_preview_qpos(
 
     if session.state is not AIEditSessionState.STAGED:
         raise AIEditSessionError("Orange preview requires a staged AI session")
-    timeline = session.working_document.qpos_timeline
+    return sample_document_preview_qpos(
+        session.working_document,
+        time_seconds,
+        missing_message="AI working copy has no sampleable qpos timeline",
+    )
+
+
+def sample_document_preview_qpos(
+    document,
+    time_seconds: float,
+    *,
+    missing_message: str = "Motion has no sampleable qpos timeline",
+) -> Any:
+    """Sample a detached document used as an immutable preview reference."""
+
+    timeline = document.qpos_timeline
     if timeline is None or not hasattr(timeline, "sample_state"):
-        raise AIEditSessionError("AI working copy has no sampleable qpos timeline")
+        raise AIEditSessionError(missing_message)
     value = timeline.sample_state(float(time_seconds))
     if value is None:
-        raise AIEditSessionError("AI working copy could not sample an Orange preview")
+        raise AIEditSessionError("Motion could not sample an Orange preview")
     copier = getattr(value, "copy", None)
     return copier() if callable(copier) else copy(value)

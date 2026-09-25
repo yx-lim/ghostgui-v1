@@ -266,6 +266,33 @@ def application_stylesheet(widget: QWidget | None = None) -> str:
             background: transparent;
             border: none;
         }}
+        QFrame#aiMotionActivity {{
+            background: transparent;
+            border: none;
+        }}
+        QLabel#aiActivityText {{
+            color: {theme.muted_text};
+        }}
+        QToolButton#aiActivityStatus {{
+            min-width: 14px;
+            max-width: 14px;
+            min-height: 14px;
+            max-height: 14px;
+            padding: 0px;
+            margin: 0px;
+            border: 1px solid {theme.border};
+            border-radius: 7px;
+            color: {theme.muted_text};
+            background: transparent;
+        }}
+        QToolButton#aiActivityStatus[activityState="done"] {{
+            color: {status_success};
+            border-color: {status_success};
+        }}
+        QToolButton#aiActivityStatus[activityState="failed"] {{
+            color: {status_error};
+            border-color: {status_error};
+        }}
         QFrame#aiChatMessage[chatRole="error"] {{
             border-color: {status_error};
         }}

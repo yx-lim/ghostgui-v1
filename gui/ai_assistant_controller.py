@@ -38,9 +38,11 @@ from application.ai import (
     capture_comparison_frames,
     capture_automatic_motion_frames,
     capture_motion_frames,
+    sample_document_preview_qpos,
     sample_working_preview_qpos,
     connection_test_identity,
 )
+from application.ai.motion_state import detached_document
 from application.ai.credentials import (
     CredentialStorageError,
     SystemKeyringCredentialStore,
@@ -122,6 +124,9 @@ class AIAssistantController:
         self._trajectory_conversation = None
         self._pending_refinement = ""
         self._visual_refinement_goal = ""
+        self._request_checkpoint = None
+        self._preview_reference_document = None
+        self._request_preview_reference_document = None
 
         configured_provider = str(
             settings.value("ai/provider", provider_registry.default_name)
@@ -166,22 +171,32 @@ class AIAssistantController:
     def start_edit(self, instruction: str) -> None:
         if self.active_handle is not None:
             return
-        new_session = self.session is None or self.session.state in {
-            AIEditSessionState.ACCEPTED,
-            AIEditSessionState.REJECTED,
-        } or (
-            self.session.state is AIEditSessionState.READY
-            and not self.session.committed_revision_current
+        replacing_candidate = self.session_staged
+        if self.session is not None and self.session.state in {
+            AIEditSessionState.READY,
+            AIEditSessionState.STAGED,
+        }:
+            try:
+                self._end_candidate_preview()
+            except Exception:
+                # Viewer teardown clears candidate identity before refreshing;
+                # a presentation warning must not retain the old edit session.
+                pass
+            self.session.reject()
+        if replacing_candidate:
+            self.panel.mark_active_candidate_superseded()
+        self.host._refresh_history_baseline()
+        self.session = AIEditSession(
+            self.host.document,
+            metadata_store=self.metadata_store,
         )
-        if new_session:
-            self.host._refresh_history_baseline()
-            self.session = AIEditSession(
-                self.host.document,
-                metadata_store=self.metadata_store,
-            )
-        if not self.session_staged:
-            self._session_goal = instruction.strip()
-            self._trajectory_conversation = TrajectoryConversation(instruction)
+        self._session_goal = instruction.strip()
+        self._trajectory_conversation = TrajectoryConversation(instruction)
+        self._pending_refinement = ""
+        self._preview_reference_document = None
+        self._request_preview_reference_document = detached_document(
+            self.host.document
+        )
         self._start_request(instruction, refinement=False)
 
     def refine(self, instruction: str) -> None:
@@ -201,6 +216,10 @@ class AIAssistantController:
             return
         self._visual_refinement_goal = self._combined_goal(instruction)
         try:
+            self._request_checkpoint = self.session.checkpoint()
+            self._request_preview_reference_document = detached_document(
+                self.session.working_document
+            )
             plan = FrameSampler().plan(
                 self.session.working_document,
                 FrameSamplingRequest(
@@ -216,6 +235,8 @@ class AIAssistantController:
             motion_context = self._critique_context(self.session.working_document)
             tools, semantic_context = self._semantic_edit_context()
         except Exception as error:
+            self._request_checkpoint = None
+            self._request_preview_reference_document = None
             self._clear_visual_refinement()
             self.panel.show_error(str(error), session_staged=True)
             return
@@ -241,6 +262,8 @@ class AIAssistantController:
             self._request_cancelled,
         )
         if self.active_handle is None:
+            self._restore_request_checkpoint()
+            self._request_preview_reference_document = None
             self._clear_visual_refinement()
             self.panel.show_error(
                 "The background worker is shutting down.",
@@ -272,6 +295,8 @@ class AIAssistantController:
 
     def _visual_refinement_succeeded(self, result: VisualMotionRunResult) -> None:
         self.active_handle = None
+        self._request_checkpoint = None
+        self._promote_request_preview_reference()
         lines = result.proposal_lines + tuple(
             self._format_observation(observation)
             for observation in result.observations
@@ -331,6 +356,8 @@ class AIAssistantController:
             self._request_cancelled,
         )
         if self.active_handle is None:
+            self._restore_request_checkpoint()
+            self._request_preview_reference_document = None
             self.panel.show_error(
                 "The background worker is shutting down.",
                 session_staged=True,
@@ -596,6 +623,21 @@ class AIAssistantController:
             self.panel.show_error("No robot model is available for motion editing.")
             return
         try:
+            self._request_checkpoint = self.session.checkpoint()
+            if refinement:
+                self._request_preview_reference_document = detached_document(
+                    self.session.working_document
+                )
+            elif self._request_preview_reference_document is None:
+                self._request_preview_reference_document = detached_document(
+                    self.host.document
+                )
+        except Exception as error:
+            self._request_checkpoint = None
+            self._request_preview_reference_document = None
+            self.panel.show_error(str(error), session_staged=self.session_staged)
+            return
+        try:
             motion = GhostGUIMotionService(self.host.robot_model_3d)
             metadata = MotionMetadataService(
                 self.metadata_store,
@@ -640,6 +682,8 @@ class AIAssistantController:
                 else self._trajectory_conversation.to_context()
             )
         except Exception as error:
+            self._request_checkpoint = None
+            self._request_preview_reference_document = None
             self.panel.show_error(str(error), session_staged=self.session_staged)
             return
 
@@ -746,6 +790,8 @@ class AIAssistantController:
 
     def _request_succeeded(self, result: CompactMotionRunResult) -> None:
         self.active_handle = None
+        self._request_checkpoint = None
+        self._promote_request_preview_reference()
         changes = self._proposal_lines(result)
         if self.session_staged:
             if self._pending_refinement and self._trajectory_conversation is not None:
@@ -768,6 +814,7 @@ class AIAssistantController:
             self._session_goal = ""
             self._trajectory_conversation = None
             self._pending_refinement = ""
+            self._preview_reference_document = None
             self.host.set_ai_motion_controls_enabled(True)
 
     def _request_failed(self, error: Exception) -> None:
@@ -776,6 +823,10 @@ class AIAssistantController:
         if isinstance(error, ProviderCancelledError):
             self._request_cancelled()
             return
+        restore_error = self._restore_request_checkpoint()
+        self._request_preview_reference_document = None
+        if restore_error is not None:
+            error = RuntimeError(f"{error}; rollback failed: {restore_error}")
         self.panel.show_error(str(error), session_staged=self.session_staged)
         self._clear_visual_refinement()
         if self.session_staged:
@@ -786,6 +837,14 @@ class AIAssistantController:
     def _request_cancelled(self) -> None:
         self.active_handle = None
         self._pending_refinement = ""
+        restore_error = self._restore_request_checkpoint()
+        self._request_preview_reference_document = None
+        if restore_error is not None:
+            self.panel.show_error(
+                f"Request cancelled, but rollback failed: {restore_error}",
+                session_staged=self.session_staged,
+            )
+            return
         self.panel.show_cancelled(session_staged=self.session_staged)
         self._clear_visual_refinement()
         if self.session_staged:
@@ -796,6 +855,34 @@ class AIAssistantController:
     def cancel_request(self) -> None:
         if self.active_handle is not None:
             self.active_handle.cancel()
+
+    def _restore_request_checkpoint(self):
+        checkpoint = self._request_checkpoint
+        self._request_checkpoint = None
+        if checkpoint is None or self.session is None:
+            return None
+        try:
+            self.session.restore_checkpoint(checkpoint)
+        except Exception as error:
+            return error
+        return None
+
+    def _promote_request_preview_reference(self) -> None:
+        request_reference = getattr(
+            self,
+            "_request_preview_reference_document",
+            None,
+        )
+        self._preview_reference_document = (
+            request_reference
+            if request_reference is not None
+            else (
+                detached_document(self.host.document)
+                if hasattr(self, "host")
+                else None
+            )
+        )
+        self._request_preview_reference_document = None
 
     def preview(self) -> None:
         if not self.session_staged:
@@ -810,10 +897,19 @@ class AIAssistantController:
             return
         try:
             session = self.session
+            reference = (
+                self._preview_reference_document
+                or detached_document(self.host.document)
+            )
             duration = float(session.working_document.timeline_duration)
             viewer.begin_candidate_preview(
                 lambda time: sample_working_preview_qpos(session, time),
                 duration,
+                reference_sampler=(
+                    lambda time, document=reference:
+                    sample_document_preview_qpos(document, time)
+                ),
+                reference_duration=float(reference.timeline_duration),
             )
             self.host.set_sidebar_timeline_duration(duration)
         except Exception as error:
@@ -850,35 +946,41 @@ class AIAssistantController:
         finally:
             self._accepting_session = False
 
-        refresh_error = None
-        try:
-            self._end_candidate_preview()
-            self.host.viewer_3d.cancel_preview()
-            self.host.viewer_3d.clear_robot_trajectory()
-            self.host.viewer_3d_mujoco.clear_trajectory()
-            self.host.backend_interface.clear_last_solution()
-            self.host.set_editor_timeline_duration(
-                self.host.document.timeline_duration
-            )
-            self.host.viewer_3d.set_current_time(
-                self.host.document.current_time
-            )
-            self.host.refresh_display()
-        except Exception as error:
-            refresh_error = error
-        try:
-            self.host.announce_history_action(description)
-        except Exception as error:
-            refresh_error = refresh_error or error
+        refresh_errors = []
+
+        def refresh_step(callback):
+            try:
+                callback()
+            except Exception as error:
+                refresh_errors.append(error)
+
+        # These are deliberately independent: a cache or renderer failure must
+        # never leave the accepted candidate sampler or Orange overlay alive.
+        refresh_step(self._end_candidate_preview)
+        refresh_step(self.host.viewer_3d.cancel_preview)
+        refresh_step(self.host.viewer_3d.clear_robot_trajectory)
+        refresh_step(self.host.viewer_3d_mujoco.clear_trajectory)
+        refresh_step(self.host.backend_interface.clear_last_solution)
+        refresh_step(lambda: self.host.set_editor_timeline_duration(
+            self.host.document.timeline_duration
+        ))
+        refresh_step(lambda: self.host.viewer_3d.set_current_time(
+            self.host.document.current_time
+        ))
+        refresh_step(self.host.refresh_display)
+        refresh_step(lambda: self.host.announce_history_action(description))
 
         message = "AI motion edit accepted as one history entry."
-        if refresh_error is not None:
-            message += f" Viewer refresh warning: {refresh_error}"
+        if refresh_errors:
+            message += f" Viewer refresh warning: {refresh_errors[0]}"
         self.panel.complete_session(message, accepted=True)
         self.session = None
         self._session_goal = ""
         self._trajectory_conversation = None
         self._pending_refinement = ""
+        self._request_checkpoint = None
+        self._preview_reference_document = None
+        self._request_preview_reference_document = None
         self._clear_visual_refinement()
         self.host.set_ai_motion_controls_enabled(True)
 
@@ -899,6 +1001,9 @@ class AIAssistantController:
         self._session_goal = ""
         self._trajectory_conversation = None
         self._pending_refinement = ""
+        self._request_checkpoint = None
+        self._preview_reference_document = None
+        self._request_preview_reference_document = None
         self._clear_visual_refinement()
         self.panel.reset_session("Opened a different motion. Start a new request.")
         self._update_context_indicators()
@@ -914,6 +1019,9 @@ class AIAssistantController:
         self._session_goal = ""
         self._trajectory_conversation = None
         self._pending_refinement = ""
+        self._request_checkpoint = None
+        self._preview_reference_document = None
+        self._request_preview_reference_document = None
         self._clear_visual_refinement()
         self.panel.reset_session("Started a new motion. What would you like to create?")
         self._update_context_indicators()
@@ -931,6 +1039,9 @@ class AIAssistantController:
         self._session_goal = ""
         self._trajectory_conversation = None
         self._pending_refinement = ""
+        self._request_checkpoint = None
+        self._preview_reference_document = None
+        self._request_preview_reference_document = None
         self._clear_visual_refinement()
         self.panel.reset_session("Restored the project motion. Start a new request.")
         self._update_context_indicators()
@@ -953,23 +1064,36 @@ class AIAssistantController:
     def reject(self) -> None:
         if self.session is None or self.active_handle is not None:
             return
+        cleanup_errors = []
         try:
             self._end_candidate_preview()
+        except Exception as error:
+            cleanup_errors.append(error)
+        try:
             self.session.reject()
         except Exception as error:
             self.panel.show_error(str(error), session_staged=self.session_staged)
             if self.session_staged:
                 self.preview()
             return
-        self.host.viewer_3d.cancel_preview()
+        try:
+            self.host.viewer_3d.cancel_preview()
+        except Exception as error:
+            cleanup_errors.append(error)
+        message = "Motion discarded; the committed motion is unchanged."
+        if cleanup_errors:
+            message += f" Viewer refresh warning: {cleanup_errors[0]}"
         self.panel.complete_session(
-            "Motion discarded; the committed motion is unchanged.",
+            message,
             accepted=False,
         )
         self.session = None
         self._session_goal = ""
         self._trajectory_conversation = None
         self._pending_refinement = ""
+        self._request_checkpoint = None
+        self._preview_reference_document = None
+        self._request_preview_reference_document = None
         self._clear_visual_refinement()
         self.host.set_ai_motion_controls_enabled(True)
 

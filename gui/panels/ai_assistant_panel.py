@@ -21,6 +21,7 @@ from gui.widgets.ai_chat import (
     ChatComposer,
     ChatMessageWidget,
     ChatTranscriptView,
+    MotionActivityWidget,
     MotionResultCard,
 )
 
@@ -55,6 +56,8 @@ class AIAssistantPanel(QWidget):
         self._accept_permitted = False
         self._conversation_complete = False
         self._active_result_card: MotionResultCard | None = None
+        self._active_activity: MotionActivityWidget | None = None
+        self._compose_refinement = False
         self._assistant_display_name = "Assistant"
         self._message_widgets: list[QWidget] = []
         self.transcript = MotionChatTranscript()
@@ -180,9 +183,7 @@ class AIAssistantPanel(QWidget):
         self.provider_label.setToolTip(
             provider + (f" · {model}" if model else "")
         )
-        self.prompt_input.setPlaceholderText(
-            f"Ask {self._assistant_display_name} to create or modify this motion…"
-        )
+        self._update_composer_prompt()
 
     def set_context_indicators(self, values) -> None:
         indicators = tuple(
@@ -209,6 +210,7 @@ class AIAssistantPanel(QWidget):
             self._active_result_card.set_actions_enabled(
                 staged and self._accept_permitted,
                 staged,
+                staged,
             )
 
     def set_accept_permitted(self, permitted: bool) -> None:
@@ -230,8 +232,10 @@ class AIAssistantPanel(QWidget):
         visual_verification: bool = False,
     ) -> None:
         self.set_state(AIAssistantPanelState.RUNNING)
+        self._compose_refinement = False
+        self._update_composer_prompt()
         if self._active_result_card is not None:
-            self._active_result_card.set_actions_enabled(False, False)
+            self._active_result_card.set_actions_enabled(False, False, False)
         if visual_verification:
             message = "Comparing the original and staged motion"
         elif visual_refinement:
@@ -243,7 +247,7 @@ class AIAssistantPanel(QWidget):
         else:
             message = "Reading the current motion"
         self.response_label.setText(message)
-        self._append_entry(ChatEntryKind.ACTIVITY, message)
+        self._begin_activity(message)
 
     def show_progress(self, event: object) -> None:
         if self._state is not AIAssistantPanelState.RUNNING:
@@ -255,7 +259,7 @@ class AIAssistantPanel(QWidget):
             AIProgressStage.STRUCTURED_PLAN_COMPLETED: "Preparing the motion update",
             AIProgressStage.LOCAL_OPERATION: "Applying motion changes",
             AIProgressStage.VALIDATION: "Validating the candidate",
-            AIProgressStage.DONE: "✓ Candidate ready",
+            AIProgressStage.DONE: "Candidate ready",
         }
         message = messages.get(event.stage, event.message)
         if (
@@ -265,7 +269,7 @@ class AIAssistantPanel(QWidget):
         ):
             return
         self.response_label.setText(message)
-        self._append_entry(ChatEntryKind.ACTIVITY, message)
+        self._append_activity(message)
 
     def show_proposal(
         self,
@@ -275,6 +279,7 @@ class AIAssistantPanel(QWidget):
         accept_permitted: bool = False,
         result_summary: str | None = None,
     ) -> None:
+        self._finish_activity(success=True)
         if self._active_result_card is not None:
             self._active_result_card.set_resolution("Superseded motion")
         response = response.strip() or "I updated the motion for review."
@@ -301,6 +306,7 @@ class AIAssistantPanel(QWidget):
         )
         card.accept_requested.connect(self.accept_requested.emit)
         card.discard_requested.connect(self.reject_requested.emit)
+        card.refine_requested.connect(self._select_refinement_mode)
         self._active_result_card = card
         self._append_widget(card)
 
@@ -309,6 +315,8 @@ class AIAssistantPanel(QWidget):
         self.proposal_list.addItems(list(detail_values))
         self.prompt_input.clear()
         self._accept_permitted = bool(accept_permitted)
+        self._compose_refinement = False
+        self._update_composer_prompt()
         self.set_state(AIAssistantPanelState.STAGED)
 
     def show_critique(
@@ -318,6 +326,7 @@ class AIAssistantPanel(QWidget):
         *,
         session_staged: bool = False,
     ) -> None:
+        self._finish_activity(success=True)
         summary = summary.strip() or "I finished inspecting the motion."
         self.response_label.setText(summary)
         self._append_entry(ChatEntryKind.ASSISTANT, summary, details=observations)
@@ -332,6 +341,7 @@ class AIAssistantPanel(QWidget):
         )
 
     def show_verification(self, summary: str, observations: tuple[str, ...]) -> None:
+        self._finish_activity(success=True)
         summary = summary.strip() or "I finished verifying the staged motion."
         self.response_label.setText(summary)
         self._append_entry(ChatEntryKind.ASSISTANT, summary, details=observations)
@@ -341,6 +351,7 @@ class AIAssistantPanel(QWidget):
         self.set_state(AIAssistantPanelState.STAGED)
 
     def show_error(self, message: str, *, session_staged: bool = False) -> None:
+        self._finish_activity(success=False)
         summary, details = _compact_error(message)
         self.response_label.setText(f"AI error: {message}")
         self._append_entry(ChatEntryKind.ERROR, summary, details=details)
@@ -351,6 +362,7 @@ class AIAssistantPanel(QWidget):
         )
 
     def show_cancelled(self, *, session_staged: bool = False) -> None:
+        self._finish_activity(success=False)
         message = "Request cancelled. The committed motion is unchanged."
         self.response_label.setText(message)
         self._append_entry(ChatEntryKind.SYSTEM, message)
@@ -369,6 +381,8 @@ class AIAssistantPanel(QWidget):
         self.response_label.setText(message)
         self._conversation_complete = True
         self._active_result_card = None
+        self._compose_refinement = False
+        self._update_composer_prompt()
         self._accept_permitted = False
         self.prompt_input.clear()
         self.set_state(AIAssistantPanelState.READY)
@@ -385,8 +399,18 @@ class AIAssistantPanel(QWidget):
         self.transcript_view.clear_entries()
         self._message_widgets.clear()
         self._active_result_card = None
+        self._active_activity = None
         self._conversation_complete = False
         self._accept_permitted = False
+        self._compose_refinement = False
+        self._update_composer_prompt()
+
+    def mark_active_candidate_superseded(self) -> None:
+        if self._active_result_card is not None:
+            self._active_result_card.set_resolution("Superseded motion")
+            self._active_result_card = None
+        self._compose_refinement = False
+        self._update_composer_prompt()
 
     def _append_entry(self, kind, text, *, details=()) -> None:
         entry = self.transcript.append(kind, text, details=details)
@@ -407,6 +431,44 @@ class AIAssistantPanel(QWidget):
         self._message_widgets.append(widget)
         self.transcript_view.append_widget(widget)
 
+    def _begin_activity(self, message: str) -> None:
+        self.transcript.append(ChatEntryKind.ACTIVITY, message)
+        activity = MotionActivityWidget(message)
+        self._active_activity = activity
+        self._append_widget(activity)
+
+    def _append_activity(self, message: str) -> None:
+        if self._active_activity is None:
+            self._begin_activity(message)
+            return
+        self.transcript.append(ChatEntryKind.ACTIVITY, message)
+        self._active_activity.add_step(message)
+        self.transcript_view.scroll_to_bottom()
+
+    def _finish_activity(self, *, success: bool) -> None:
+        if self._active_activity is not None:
+            self._active_activity.finish(success=success)
+            self._active_activity = None
+
+    def _select_refinement_mode(self) -> None:
+        if self._state is not AIAssistantPanelState.STAGED:
+            return
+        self._compose_refinement = True
+        self._update_composer_prompt()
+        self.prompt_input.setFocus()
+
+    def _update_composer_prompt(self) -> None:
+        if self._compose_refinement:
+            self.prompt_input.setPlaceholderText(
+                "Describe how to refine the current Orange preview…"
+            )
+            self.submit_button.setToolTip("Refine preview (Enter)")
+            return
+        self.prompt_input.setPlaceholderText(
+            f"Ask {self._assistant_display_name} to create or modify this motion…"
+        )
+        self.submit_button.setToolTip("Send new request (Enter)")
+
     def _instruction(self) -> str:
         return self.prompt_input.toPlainText().strip()
 
@@ -421,10 +483,14 @@ class AIAssistantPanel(QWidget):
             self.prompt_input.setFocus()
             return
         self.add_user_message(instruction)
-        if self._state is AIAssistantPanelState.STAGED:
+        if (
+            self._state is AIAssistantPanelState.STAGED
+            and self._compose_refinement
+        ):
             self.refine_requested.emit(instruction)
         else:
             self.submit_requested.emit(instruction)
+        self._compose_refinement = False
 
     def _emit_refine(self) -> None:
         instruction = self._instruction()

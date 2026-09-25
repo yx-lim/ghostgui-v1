@@ -259,7 +259,9 @@ and the panel ignores events once the request is no longer running. Current
 adapters still return one complete structured response, so planning and
 operation progress is deterministic and local. The event contract reserves a
 text-delta stage for future SDK streaming, but enabling it must not add provider
-turns or bypass structured-plan validation.
+turns or bypass structured-plan validation. The panel renders one compact
+activity widget per request and updates its status rows rather than creating a
+full chat card per event; the transcript remains pinned to the latest row.
 
 The visual path shares that same local execution boundary:
 
@@ -277,21 +279,33 @@ Whole-motion candidate preview reuses `RobotViewer3D`'s existing playback timer,
 reference state, Orange preview state, canvas, and renderer. The controller
 supplies a read-only sampler backed by
 `AIEditSession.working_document.qpos_timeline`; it does not replace the viewer's
-committed `state_timeline`. Each scrub or playback tick samples committed motion
-into the reference state and staged motion into the Orange state at the same
-time. Candidate mode suppresses editable-time signals and per-pose commit or
-delete actions, so inspection cannot mutate committed qpos, current time, or
-Keyframes. Refine temporarily detaches the sampler while the worker may mutate
-the working copy, then restores it when the session is staged again.
+committed `state_timeline`. The controller also supplies an immutable reference
+sampler: committed motion for a new/replacement request and the previous staged
+candidate for an explicit refinement. Each scrub or playback tick samples that
+reference into the white state and the newest candidate into the Orange state
+at the same time. Candidate mode suppresses editable-time signals and per-pose
+commit or delete actions, so inspection cannot mutate committed qpos, current
+time, or Keyframes. Refine temporarily detaches the sampler while the worker may
+mutate the working copy, then restores it when the session is staged again.
 
 The Motion Assistant panel keeps an ephemeral visible transcript separate from
 `TrajectoryConversation`. User messages, readable progress, results, warnings,
 errors, and resolution events accumulate in the UI for the current motion. The
 provider still receives only the bounded original-goal and recent-refinement
-context. Sending while a working copy is staged maps to the existing refinement
-path; a successful request automatically enters the read-only Orange preview.
-Accept and Discard resolve the result card, while changing documents resets the
-visible transcript and the bounded provider conversation together.
+context. A normal send while a working copy is staged rejects that detached
+session and starts a replacement from committed motion; **Refine preview** is
+the explicit path that retains the staged working copy and conversation. A
+successful request automatically enters the read-only Orange preview. Accept
+and Discard resolve the result card, while changing documents resets the visible
+transcript and the bounded provider conversation together.
+
+Every compact request captures an `AIEditSessionCheckpoint`. Local-operation
+exceptions, failed final validation, cancellation, and controller-level request
+failures restore that checkpoint before another request can read the session.
+This prevents an invalid attempt from becoming the base of a later edit.
+`root_offset` also samples qpos anchors at empty interval boundaries and derives
+affected logical Keyframes from final qpos through FK, so generated playback is
+never a prerequisite for interval editing.
 
 Gemini defaults to one SDK outbound attempt. A caller must explicitly raise its
 small transient-server retry budget, and HTTP 429 is never retryable. The
@@ -322,12 +336,18 @@ history checkpointing fails, the committed motion, revision, dirty state, and
 metadata are compensated back to their pre-AI values and the session remains
 staged. GUI history snapshots include provenance, so Undo and Redo restore the
 complete pre-AI and accepted states. Orange preview teardown, generated-motion
-cache invalidation, and viewer refresh happen only after the transaction; a
-presentation failure is reported as a warning and does not make a successfully
-accepted session appear staged or partially committed.
+cache invalidation, and viewer refresh happen only after the transaction.
+Candidate sampler identity is cleared before renderer work, and cleanup steps
+are isolated so one presentation failure cannot leave Orange active or make a
+successfully accepted session appear staged or partially committed.
 
 The compact Motion Assistant supports four complementary motion representations.
 Semantic operations use named Joint Angles and Cartesian IK for precise edits.
+`set_logical_frame_target` may carry `locked_end_effectors` when one body target
+and planted hands or feet must be resolved as a single atomic operation. The
+handler records the current locked poses, applies the requested target, restores
+the held End Effectors through IK, and verifies the final FK errors against the
+normal structural/kinematic tolerances before staging the candidate.
 The `repeat_motion` operation delegates exact interval capture and append
 planning to `application.motion_clipboard`; the provider chooses only the
 interval, copy count, and forward or ping-pong mode. Complete local logical and
@@ -370,6 +390,14 @@ valid qpos Keyframe share a time. The provider-facing result labels this scope
 feasibility. Balance, contact stability, torque/actuator limits, continuous-path
 collision analysis, DSMS, and hardware validation remain outside v3 and are
 future v3.2 work.
+
+Before `AIEditSession.apply_ai` enforces provenance, replacement-style handlers
+diff the source and candidate motion by logical Keyframe identity/value and qpos
+Keyframe identity/value. Only created, deleted, or genuinely changed entities
+are declared affected. Protected logical poses are independently checked through
+FK and restored exactly in the candidate representation when unchanged. A true
+violation remains fail-closed and carries a structured reason plus a readable
+Keyframe label; in-session manual-priority edits remain non-overridable.
 
 `RobotViewer3D` similarly retains its public API while delegating the advanced
 IK inspector builders to `gui/viewers/ik_panels.py` and playback math to the

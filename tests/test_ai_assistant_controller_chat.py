@@ -29,6 +29,9 @@ class AIAssistantControllerChatTests(unittest.TestCase):
         )
         controller._pending_refinement = ""
         controller._trajectory_conversation = None
+        controller._request_checkpoint = object()
+        controller._request_preview_reference_document = None
+        controller._preview_reference_document = None
         controller.preview = Mock()
         result = SimpleNamespace(
             text="I created a short walk.",

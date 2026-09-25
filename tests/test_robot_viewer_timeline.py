@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -1150,6 +1150,63 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.assertFalse(self.viewer.candidate_preview_active)
         self.assertFalse(self.viewer.preview_active)
 
+    def test_candidate_preview_uses_explicit_comparison_baseline(self):
+        self.configure_two_keyframe_motion()
+        committed = self.viewer.state_timeline.sample_state(1.0)
+        reference = committed.copy()
+        reference[-1] += 0.03
+        candidate = committed.copy()
+        candidate[-1] += 0.09
+
+        self.viewer.begin_candidate_preview(
+            lambda _time: candidate,
+            2.0,
+            reference_sampler=lambda _time: reference,
+            reference_duration=2.0,
+        )
+        self.viewer.preview_trajectory_time(1.0)
+
+        self.assertAlmostEqual(
+            self.viewer.playback_state.get_qpos()[-1],
+            reference[-1],
+        )
+        self.assertAlmostEqual(
+            self.viewer.preview_state.get_qpos()[-1],
+            candidate[-1],
+        )
+        self.viewer.end_candidate_preview()
+        self.assertFalse(self.viewer.candidate_preview_active)
+        self.assertFalse(self.viewer.canvas.preview_visible)
+
+    def test_new_request_supersedes_unaccepted_candidate(self):
+        self.configure_two_keyframe_motion()
+        controller = self.window.ai_assistant_controller
+        session = AIEditSession(
+            self.window.document,
+            metadata_store=controller.metadata_store,
+        )
+        candidate = session.working_document.qpos_timeline.get_state(1.0)
+        candidate[-1] += 0.08
+        session.working_document.qpos_timeline.set_state(1.0, candidate)
+        frame = session.working_document.trajectory.frames[0]
+        session.apply_ai(UpdateKeyframe(0, replace(frame, z=frame.z + 0.01)))
+        old_session = session
+        controller.session = session
+        controller._start_request = Mock()
+
+        controller.start_edit("create a different motion")
+
+        self.assertEqual(old_session.state.value, "rejected")
+        self.assertIsNot(controller.session, old_session)
+        np.testing.assert_allclose(
+            controller.session.working_document.qpos_timeline.get_state(1.0),
+            self.window.document.qpos_timeline.get_state(1.0),
+        )
+        controller._start_request.assert_called_once_with(
+            "create a different motion",
+            refinement=False,
+        )
+
     def test_ai_accept_undo_redo_restores_motion_and_provenance(self):
         self.configure_two_keyframe_motion()
         controller = self.window.ai_assistant_controller
@@ -1170,8 +1227,13 @@ class RobotViewerTimelineTests(unittest.TestCase):
         )
         session.mark_current_revision_validated()
         controller.session = session
+        controller.preview()
+        self.assertTrue(self.viewer.candidate_preview_active)
         controller.accept()
 
+        self.assertFalse(self.viewer.candidate_preview_active)
+        self.assertFalse(self.viewer.preview_active)
+        self.assertFalse(self.viewer.canvas.preview_visible)
         self.assertEqual(len(self.window.undo_stack), undo_count + 1)
         self.assertAlmostEqual(self.window.trajectory.frames[0].z, frame.z + 0.08)
         self.assertEqual(
@@ -1207,6 +1269,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
         session.mark_current_revision_validated()
         controller.session = session
         undo_count = len(self.window.undo_stack)
+        controller.preview()
+        self.assertTrue(self.viewer.candidate_preview_active)
 
         with patch.object(
             self.window.viewer_3d,
@@ -1216,6 +1280,8 @@ class RobotViewerTimelineTests(unittest.TestCase):
             controller.accept()
 
         self.assertIsNone(controller.session)
+        self.assertFalse(self.viewer.candidate_preview_active)
+        self.assertFalse(self.viewer.canvas.preview_visible)
         self.assertEqual(len(self.window.undo_stack), undo_count + 1)
         self.assertAlmostEqual(self.window.trajectory.frames[0].z, frame.z + 0.04)
         self.assertIn(
@@ -1731,6 +1797,26 @@ class RobotViewerTimelineTests(unittest.TestCase):
         np.testing.assert_allclose(self.viewer.committed_state.get_qpos(), before)
         self.assertTrue(self.viewer.preview_active)
         self.assertTrue(self.viewer.canvas.show_ghosts)
+
+    def test_ai_lock_survives_toolbar_resynchronization(self):
+        self.window.set_ai_motion_controls_enabled(False)
+        self.window.sync_workflow_toolbar()
+
+        for action in (
+            self.window.preview_action,
+            self.window.slice_action,
+            self.window.generate_action,
+            self.window.reset_action,
+            self.window.clear_action,
+            self.window.move_action,
+            self.window.rotate_action,
+        ):
+            self.assertFalse(action.isEnabled(), action.text())
+        self.assertTrue(self.window.playback_action.isEnabled())
+
+        self.window.set_ai_motion_controls_enabled(True)
+        self.window.sync_workflow_toolbar()
+        self.assertTrue(self.window.generate_action.isEnabled())
 
     def test_editing_mode_switches_sidebar_editor_and_gizmo(self):
         controls = self.window.controls

@@ -347,6 +347,9 @@ structure. It skips outside the explicitly configured visual environment.
 - Send a focused edit and confirm the user message and progress remain visible,
   the committed motion stays unchanged, and the Orange preview automatically
   shows the staged working copy.
+- Confirm request progress appears as one compact list with a small status
+  control to the left of each row, completed rows become checked, and the
+  transcript follows the newest row automatically.
 - Scrub across the complete candidate duration,
   and press **Play**. Confirm Orange follows the staged motion while the
   reference robot follows committed motion at identical times. Confirm
@@ -359,6 +362,15 @@ structure. It skips outside the explicitly configured visual environment.
   first 5s.” Confirm the provider selects `repeat_motion`, the Orange preview
   becomes ten seconds long, every appended qpos Keyframe has the active model's
   complete width, and its values exactly match the corresponding source time.
+- Mark both G1 foot Keyframes protected, then ask “Make the squat much deeper
+  while keeping both feet planted.” Confirm the provider places
+  `left_foot` and `right_foot` in the pelvis target's
+  `locked_end_effectors`, the Orange preview lowers the pelvis, and both feet
+  stay within 1 mm and 0.01 rad of their original poses. Confirm their exact
+  logical Keyframes remain protected and human-authored.
+- Ask to move one protected foot directly and confirm the request is rejected
+  atomically with the foot name and Keyframe time visible in the error. Repeat
+  with a complete-qpos replacement and confirm it cannot bypass protection.
 - Select the right hand in the 3D view, apply “Move this higher,” and confirm the
   MockProvider context identifies both the logical frame and End Effector as
   `right_hand`.
@@ -379,11 +391,25 @@ structure. It skips outside the explicitly configured visual environment.
   unknown logical TargetFrame, invalid time, model mismatch, and same-time FK
   mismatch; confirm each is rejected locally.
 - Scrub the viewer timeline and move the camera while the provider request is
-  running; confirm document-mutating controls remain unavailable.
-- Send two more messages and confirm each turn remains visible and builds on the
-  same staged result without a dedicated Refine action.
+  running; confirm document-mutating controls remain unavailable. Trigger a
+  toolbar-state resynchronization and confirm **Generate**, reset, clear, and
+  editing actions remain disabled while **Play** stays available for candidate
+  inspection.
+- With an unaccepted candidate visible, send a normal new message and confirm
+  the earlier result becomes **Superseded**, the new request starts from the
+  committed motion, and no Generate step is required. Then choose **Refine
+  preview**, send two refinements, and confirm each Orange result is compared
+  against the immediately preceding candidate rather than the original one.
+- Force local validation to fail after mutation and cancel another request
+  during execution. Confirm both restore the exact pre-request candidate and
+  that a later request never reads the failed attempt.
+- Ask “Move the robot 10 cm to the left from 2 s to 4 s” on a sparse five-second
+  motion with no authored Keyframes inside that interval. Confirm local boundary
+  qpos Keyframes are sampled and edited without first pressing **Generate**.
 - Use **Accept** and confirm the entire session is one Undo/Redo entry. Repeat
-  with **Discard** and confirm committed motion does not change.
+  with **Discard** and confirm committed motion does not change. After either
+  action, confirm candidate sampling stops, Orange disappears, and the next
+  request uses the newly committed motion as its reference.
 - Cancel a request, remove network access, use an invalid key, and exercise a
   rate-limited response; confirm the error stays inside Motion Assistant.
 - Run the same focused request with MockProvider and opt-in Gemini and Claude

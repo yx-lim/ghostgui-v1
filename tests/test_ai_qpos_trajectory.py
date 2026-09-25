@@ -30,6 +30,7 @@ from application.ai.trajectory_operations import build_trajectory_operation_hand
 from application.editor_controller import EditorController
 from application.project_document import ProjectDocument
 from application.timeslice_service import capture_timeslice_from_committed_pose
+from core.math3d import quaternion_angle
 from core.models import MuJoCoRobotAdapter, RobotStateTimeline
 
 
@@ -97,6 +98,210 @@ def _execute(executor, session, operation):
 
 
 class QposNativeTrajectoryTests(unittest.TestCase):
+    def test_g1_root_offset_rebuilds_logical_frames_from_shifted_qpos(self):
+        _adapter, _committed, session, _motion, executor = _setup(duration=2.0)
+        operation = TrajectoryOperation(
+            TrajectoryOperationType.ROOT_OFFSET,
+            {
+                "start_time": 0.0,
+                "end_time": 2.0,
+                "translation_m": [0.0, 0.0, 0.05],
+            },
+        )
+
+        result = executor.execute(
+            TrajectoryEditSpec(
+                TrajectoryEditMode.EDIT,
+                "Move the entire robot five centimetres higher.",
+                (operation,),
+            ),
+            context=TrajectoryExecutionContext(session, object()),
+        )
+
+        self.assertTrue(result.validation.valid, result.validation.issues)
+        self.assertTrue(session.can_accept)
+        self.assertEqual(
+            result.operations[0].output["affected_qpos_keyframes"],
+            len(session.working_document.qpos_timeline.times()),
+        )
+
+    def test_qpos_replace_cannot_bypass_protected_logical_keyframe(self):
+        adapter, committed, session, _motion, executor = _setup(duration=1.0)
+        metadata = MotionMetadataService(
+            session.metadata,
+            TimestampMotionIdentityResolver(),
+        )
+        left_foot = committed.trajectory.targets_at_time(0.0)["left_foot"]
+        session.metadata.set_protected(
+            metadata.reference_for_keyframe(left_foot),
+            True,
+        )
+        start = adapter.home_qpos.copy()
+        end = start.copy()
+        end[adapter.joints["left_knee_joint"].qpos_address] += 0.05
+        operation = _operation(
+            "replace",
+            1.0,
+            0.0,
+            1.0,
+            ((0.0, start), (1.0, end)),
+        )
+
+        with self.assertRaisesRegex(
+            Exception,
+            r"protected content: left_foot Keyframe at t=0\.00 s",
+        ):
+            _execute(executor, session, operation)
+
+        self.assertFalse(session.has_changes)
+
+    def test_g1_direct_edit_of_protected_foot_reports_name_and_time(self):
+        _adapter, committed, session, _motion, executor = _setup(duration=1.0)
+        metadata = MotionMetadataService(
+            session.metadata,
+            TimestampMotionIdentityResolver(),
+        )
+        left_foot = committed.trajectory.targets_at_time(0.0)["left_foot"]
+        session.metadata.set_protected(
+            metadata.reference_for_keyframe(left_foot),
+            True,
+        )
+        operation = TrajectoryOperation(
+            TrajectoryOperationType.SET_END_EFFECTOR_TARGET,
+            {
+                "end_effector": "left_foot",
+                "start_time": 0.0,
+                "end_time": 0.0,
+                "mode": "relative",
+                "position_m": [0.0, 0.0, 0.05],
+            },
+        )
+
+        with self.assertRaisesRegex(
+            Exception,
+            r"protected left_foot at t=0\.00 s cannot be targeted",
+        ):
+            executor.execute(
+                TrajectoryEditSpec(
+                    TrajectoryEditMode.EDIT,
+                    "Move the protected left foot.",
+                    (operation,),
+                ),
+                context=TrajectoryExecutionContext(session, object()),
+            )
+
+        self.assertFalse(session.has_changes)
+
+    def test_g1_deeper_squat_preserves_protected_planted_feet(self):
+        adapter, committed, session, _motion, executor = _setup(duration=1.0)
+        metadata = MotionMetadataService(
+            session.metadata,
+            TimestampMotionIdentityResolver(),
+        )
+        protected_frames = {
+            (frame.frame_name, frame.time): frame.to_dict()
+            for frame in committed.trajectory.frames
+            if frame.frame_name in {"left_foot", "right_foot"}
+        }
+        for frame in committed.trajectory.frames:
+            if frame.frame_name in {"left_foot", "right_foot"}:
+                session.metadata.set_protected(
+                    metadata.reference_for_keyframe(frame),
+                    True,
+                )
+
+        before_poses = {}
+        before_pelvis_z = {}
+        for time in (0.0, 1.0):
+            state = adapter.create_state()
+            state.set_qpos(committed.qpos_timeline.sample_state(time))
+            pelvis_kind, pelvis_object = adapter.logical_frame_bindings["pelvis"]
+            before_pelvis_z[time] = float(
+                state.get_body_pose(
+                    pelvis_object,
+                    pelvis_kind,
+                )[0][2]
+            )
+            for name in ("left_foot", "right_foot"):
+                kind, object_name = adapter.logical_frame_bindings[name]
+                before_poses[(name, time)] = state.get_body_pose(
+                    object_name,
+                    kind,
+                )
+
+        operation = TrajectoryOperation(
+            TrajectoryOperationType.SET_LOGICAL_FRAME_TARGET,
+            {
+                "logical_frame": "pelvis",
+                "start_time": 0.0,
+                "end_time": 1.0,
+                "mode": "relative",
+                "position_m": [0.0, 0.0, -0.03],
+                "orientation_rpy_rad": None,
+                "locked_end_effectors": ["left_foot", "right_foot"],
+            },
+        )
+
+        result = executor.execute(
+            TrajectoryEditSpec(
+                TrajectoryEditMode.EDIT,
+                "Make the squat deeper while keeping both feet planted.",
+                (operation,),
+            ),
+            context=TrajectoryExecutionContext(session, object()),
+        )
+
+        self.assertTrue(result.validation.valid, result.validation.issues)
+        self.assertTrue(session.can_accept)
+        self.assertEqual(
+            result.operations[0].output["locked_end_effectors"],
+            ["left_foot", "right_foot"],
+        )
+        after_targets = {
+            (frame.frame_name, frame.time): frame.to_dict()
+            for frame in session.working_document.trajectory.frames
+            if frame.frame_name in {"left_foot", "right_foot"}
+        }
+        self.assertEqual(after_targets, protected_frames)
+
+        for time in (0.0, 1.0):
+            state = adapter.create_state()
+            state.set_qpos(
+                session.working_document.qpos_timeline.sample_state(time)
+            )
+            pelvis_kind, pelvis_object = adapter.logical_frame_bindings["pelvis"]
+            pelvis_position, _pelvis_quaternion = state.get_body_pose(
+                pelvis_object,
+                pelvis_kind,
+            )
+            self.assertAlmostEqual(
+                float(pelvis_position[2]),
+                before_pelvis_z[time] - 0.03,
+                places=3,
+            )
+            for name in ("left_foot", "right_foot"):
+                kind, object_name = adapter.logical_frame_bindings[name]
+                position, quaternion = state.get_body_pose(object_name, kind)
+                expected_position, expected_quaternion = before_poses[(name, time)]
+                self.assertLessEqual(
+                    float(np.linalg.norm(position - expected_position)),
+                    0.001,
+                )
+                self.assertLessEqual(
+                    quaternion_angle(quaternion, expected_quaternion),
+                    0.01,
+                )
+                frame = next(
+                    item
+                    for item in session.working_document.trajectory.frames
+                    if item.frame_name == name and item.time == time
+                )
+                edit_metadata = session.metadata.get(
+                    metadata.reference_for_keyframe(frame)
+                )
+                self.assertEqual(edit_metadata.author, EditAuthor.USER)
+                self.assertTrue(edit_metadata.protected)
+
     def test_g1_repeat_motion_copies_complete_local_qpos_without_provider_reauthoring(self):
         adapter, committed, session, _motion, executor = _setup(duration=1.0)
         self.assertEqual(adapter.mj_model.nq, 36)

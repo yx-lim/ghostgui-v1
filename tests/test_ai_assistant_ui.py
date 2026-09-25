@@ -100,6 +100,7 @@ class AIAssistantPanelTests(unittest.TestCase):
             ("Moved pelvis",),
             accept_permitted=True,
         )
+        self.panel._active_result_card.refine_button.click()
         self.panel.prompt_input.setPlainText("  make it subtler  ")
         self.panel.submit_button.click()
         self.assertEqual(refined, ["make it subtler"])
@@ -128,8 +129,10 @@ class AIAssistantPanelTests(unittest.TestCase):
             "line one\nline two",
         )
 
-    def test_staged_send_refines_without_a_visible_refine_button(self):
+    def test_staged_send_replaces_by_default_and_refine_is_explicit(self):
+        submitted = []
         refined = []
+        self.panel.submit_requested.connect(submitted.append)
         self.panel.refine_requested.connect(refined.append)
         self.panel.show_proposal("Done", ("Moved pelvis",))
         self.assertTrue(self.panel.refine_button.isHidden())
@@ -137,11 +140,56 @@ class AIAssistantPanelTests(unittest.TestCase):
         self.panel.prompt_input.setPlainText("keep both feet planted")
         self.panel.submit_button.click()
 
-        self.assertEqual(refined, ["keep both feet planted"])
+        self.assertEqual(submitted, ["keep both feet planted"])
+        self.assertEqual(refined, [])
         self.assertEqual(
             self.panel.transcript.entries[-1].text,
             "keep both feet planted",
         )
+
+        self.panel.show_proposal("Replacement ready", ("Moved pelvis",))
+        self.panel._active_result_card.refine_button.click()
+        self.panel.prompt_input.setPlainText("make that subtler")
+        self.panel.submit_button.click()
+        self.assertEqual(refined, ["make that subtler"])
+
+    def test_progress_uses_one_compact_status_list_and_scrolls_to_bottom(self):
+        from application.ai.progress import AIProgressEvent, AIProgressStage
+        from gui.widgets.ai_chat import MotionActivityWidget
+
+        self.panel.resize(320, 420)
+        self.panel.show()
+        self.panel.begin_request()
+        events = (
+            AIProgressEvent(AIProgressStage.PLANNING_STARTED),
+            AIProgressEvent(
+                AIProgressStage.STRUCTURED_PLAN_COMPLETED,
+                operation_count=2,
+            ),
+            AIProgressEvent(
+                AIProgressStage.LOCAL_OPERATION,
+                operation_index=1,
+                operation_count=2,
+            ),
+            AIProgressEvent(AIProgressStage.VALIDATION),
+        )
+        for event in events:
+            self.panel.show_progress(event)
+        self.app.processEvents()
+
+        activities = tuple(
+            widget
+            for widget in self.panel.message_widgets
+            if isinstance(widget, MotionActivityWidget)
+        )
+        self.assertEqual(len(activities), 1)
+        self.assertEqual(len(activities[0].step_labels), 5)
+        self.assertEqual(
+            activities[0]._rows[0][0].toolTip(),
+            "Done",
+        )
+        bar = self.panel.transcript_view.verticalScrollBar()
+        self.assertEqual(bar.value(), bar.maximum())
 
     def test_result_card_owns_accept_and_discard_actions(self):
         accepted = []

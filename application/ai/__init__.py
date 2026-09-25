@@ -53,6 +53,7 @@ from application.ai.edit_session import (
     AIEditSessionCheckpoint,
     AIEditSessionError,
     AIEditSessionState,
+    BlockedMotionEntity,
     SessionEditRecord,
 )
 from application.ai.diagnostics import MotionAssistantDiagnostics
@@ -147,7 +148,10 @@ from application.ai.repair_planner import (
     MotionRepairPlanningResult,
     bounded_repair_error,
 )
-from application.ai.preview import sample_working_preview_qpos
+from application.ai.preview import (
+    sample_document_preview_qpos,
+    sample_working_preview_qpos,
+)
 from application.ai.frame_capture import (
     AutomaticMotionFrames,
     EncodedFrame,
@@ -244,6 +248,7 @@ __all__ = [
     "AIEditSessionCheckpoint",
     "AIEditSessionError",
     "AIEditSessionState",
+    "BlockedMotionEntity",
     "AIProgressCallback",
     "AIProgressEvent",
     "AIProgressStage",
@@ -412,6 +417,7 @@ __all__ = [
     "parse_visual_verification",
     "provider_request_fingerprint",
     "sample_working_preview_qpos",
+    "sample_document_preview_qpos",
     "trajectory_edit_spec_response_schema",
     "trajectory_operation_argument_contracts",
     "visual_motion_plan_response_schema",

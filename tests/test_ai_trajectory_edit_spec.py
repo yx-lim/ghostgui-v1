@@ -132,6 +132,7 @@ class TrajectoryEditSpecTests(unittest.TestCase):
                     "mode": "relative",
                     "position_m": None,
                     "orientation_rpy_rad": [0.0, 0.1, 0.0],
+                    "locked_end_effectors": ["left_foot", "right_foot"],
                 },
             ),
             ("generate", "sparse_keyframes", _sparse_keyframes()),
@@ -179,6 +180,19 @@ class TrajectoryEditSpecTests(unittest.TestCase):
                     "end_time": 5.0,
                     "additional_copies": MAX_REPEAT_COPIES + 1,
                     "ping_pong": False,
+                },
+            ),
+            _wire(
+                "edit",
+                "set_logical_frame_target",
+                {
+                    "logical_frame": "pelvis",
+                    "start_time": 0.0,
+                    "end_time": 1.0,
+                    "mode": "relative",
+                    "position_m": [0.0, 0.0, -0.1],
+                    "orientation_rpy_rad": None,
+                    "locked_end_effectors": ["left_foot", "left_foot"],
                 },
             ),
             _wire(

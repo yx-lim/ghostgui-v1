@@ -54,8 +54,18 @@ class Timeline:
         time = float(time)
         if time in self.states:
             return self.states[time].copy()
-        lower = max(value for value in self.states if value < time)
-        upper = min(value for value in self.states if value > time)
+        lower = max(
+            (value for value in self.states if value < time),
+            default=None,
+        )
+        upper = min(
+            (value for value in self.states if value > time),
+            default=None,
+        )
+        if upper is None:
+            return self.states[lower].copy()
+        if lower is None:
+            return self.states[upper].copy()
         fraction = (time - lower) / (upper - lower)
         return self.states[lower] + (self.states[upper] - self.states[lower]) * fraction
 
@@ -138,6 +148,36 @@ class RootOffsetTests(unittest.TestCase):
             before,
         )
         self.assertFalse(session.has_changes)
+
+    def test_sparse_interval_creates_boundary_keyframes_without_generate(self):
+        committed, session, executor, _spec_value = _setup()
+        committed.set_timeline_duration(5.0)
+        session.working_document.set_timeline_duration(5.0)
+        spec = TrajectoryEditSpec(
+            TrajectoryEditMode.EDIT,
+            "Move the robot left between two and four seconds.",
+            (TrajectoryOperation(
+                TrajectoryOperationType.ROOT_OFFSET,
+                {
+                    "start_time": 2.0,
+                    "end_time": 4.0,
+                    "translation_m": [0.0, 0.1, 0.0],
+                },
+            ),),
+        )
+        original = committed.qpos_timeline.sample_state(2.0)
+
+        executor.execute(
+            spec,
+            context=TrajectoryExecutionContext(session, object()),
+        )
+
+        timeline = session.working_document.qpos_timeline
+        self.assertIn(2.0, timeline.times())
+        self.assertIn(4.0, timeline.times())
+        self.assertAlmostEqual(timeline.get_state(2.0)[1], original[1] + 0.1)
+        self.assertAlmostEqual(timeline.get_state(4.0)[1], original[1] + 0.1)
+        self.assertTrue(session.can_accept)
 
 
 class _HoldState:

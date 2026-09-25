@@ -92,6 +92,25 @@ def _repeat_motion_response():
     }))
 
 
+def _constrained_squat_response():
+    return ProviderResponse(text=json.dumps({
+        "mode": "edit",
+        "summary": "Lower the pelvis while both feet remain planted.",
+        "operations": [{
+            "type": "set_logical_frame_target",
+            "arguments": json.dumps({
+                "logical_frame": "pelvis",
+                "start_time": 0.0,
+                "end_time": 1.5,
+                "mode": "relative",
+                "position_m": [0.0, 0.0, -0.08],
+                "orientation_rpy_rad": None,
+                "locked_end_effectors": ["left_foot", "right_foot"],
+            }),
+        }],
+    }))
+
+
 class _Token:
     cancellation_requested = True
 
@@ -126,6 +145,7 @@ class TrajectoryPlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.max_output_tokens, 8192)
         self.assertIn("right_foot", request.messages[0].text)
         self.assertIn("Use repeat_motion", request.messages[0].text)
+        self.assertIn("locked_end_effectors", request.messages[0].text)
         self.assertEqual(session.state, AIEditSessionState.READY)
         delegate.assert_exhausted()
 
@@ -150,6 +170,26 @@ class TrajectoryPlannerTests(unittest.IsolatedAsyncioTestCase):
             "additional_copies": 1,
             "ping_pong": False,
         })
+
+    async def test_planted_squat_keeps_constraints_in_the_movement_operation(self):
+        provider = MockProvider([_constrained_squat_response()])
+
+        result = await TrajectoryPlanner(provider).plan(
+            "Make the squat much deeper while keeping both feet planted.",
+            model="mock",
+            context={"motion": {"duration_seconds": 1.5}},
+            session=AIEditSession(ProjectDocument("g1")),
+        )
+
+        operation = result.spec.operations[0]
+        self.assertEqual(
+            operation.operation_type,
+            TrajectoryOperationType.SET_LOGICAL_FRAME_TARGET,
+        )
+        self.assertEqual(
+            operation.arguments["locked_end_effectors"],
+            ["left_foot", "right_foot"],
+        )
 
     async def test_malformed_response_receives_exactly_one_successful_repair(self):
         delegate = MockProvider([

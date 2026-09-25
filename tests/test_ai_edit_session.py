@@ -312,12 +312,23 @@ class AIEditSessionTests(unittest.TestCase):
         session = AIEditSession(_document())
         reference = MotionEntityRef("protected-foot")
         session.protect(reference)
-        with self.assertRaises(AIEditSessionError):
+        with self.assertRaisesRegex(
+            AIEditSessionError,
+            "protected content: left_foot Keyframe at t=0.50 s",
+        ) as raised:
             session.apply_ai(
                 UpdateKeyframe(0, TargetFrame(frame_name="pelvis", z=0.7)),
                 affected_entities=(reference,),
                 allow_user_override=True,
+                entity_labels={
+                    reference: "left_foot Keyframe at t=0.50 s",
+                },
             )
+        self.assertEqual(raised.exception.blocked_entities[0].reference, reference)
+        self.assertEqual(
+            raised.exception.blocked_entities[0].reason,
+            "protected content",
+        )
 
     def test_unknown_content_is_conservatively_blocked(self):
         session = AIEditSession(_document())

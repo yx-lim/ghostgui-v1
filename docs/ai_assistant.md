@@ -29,8 +29,15 @@ The pinned optional AI baseline is:
 4. Follow the activity in the conversation while GhostGUI plans and validates
    the update. The valid staged result appears automatically as an **Orange
    preview** that can be scrubbed or played.
-5. Send another message to refine the same staged result, or choose **Accept**
-   or **Discard** on its result card.
+5. Choose **Refine preview** before sending a follow-up that should build on the
+   staged result. A normal new message replaces the unaccepted candidate from
+   the last accepted motion. Choose **Accept** or **Discard** on the result card
+   when review is complete.
+
+The compact activity list follows the newest work automatically. Its small
+left-hand status indicators distinguish the active step from completed steps.
+**Generate** is not required before reviewing, refining, or accepting an AI
+motion; the Orange preview samples the staged editable motion directly.
 
 GhostGUI automatically supplies a bounded description of the active robot and
 motion. It includes named Joint Angles, root pose, End Effector forward
@@ -54,7 +61,8 @@ GhostGUI performs all numerical work locally using its existing robot model,
 timeline interpolation, FK, IK, Joint Angle editing, retiming, and constraint
 machinery. Supported intent includes:
 
-- exact root offsets over a time range;
+- exact root offsets over a time range, with sampled boundary Keyframes when
+  the interval contains no already-authored Keyframe;
 - holding a sampled whole-body, Joint Angle, or joint-group pose;
 - retiming an interval;
 - exact local repetition of an existing interval, including optional
@@ -103,7 +111,12 @@ robot-control operations.
 Spatial holds of a hand, foot, or ankle use `lock_end_effector`; anatomical
 ankle wording is resolved to the model's registered foot End Effector. The
 `hold_pose` operation is reserved for whole-body, Joint Angle, and joint-group
-values.
+values. When a request combines a body movement with a planted-hand or
+planted-foot constraint, the movement operation carries those locked End
+Effectors with it. GhostGUI applies the body target and restores each locked
+pose inside one atomic local operation, then verifies every hold against the
+same 1 mm position and 0.01 rad orientation tolerances used by final FK
+validation.
 
 The older semantic ToolRegistry/PlanExecutor workflow remains available in the
 codebase for compatibility and developer use, but it is not the normal Motion
@@ -114,11 +127,20 @@ Assistant path.
 AI work happens in a detached document-level working copy. Orange is only its
 presentation. **Accept** atomically replaces the committed motion and creates
 one history entry, so Undo restores the exact previous motion. **Discard** drops
-the complete candidate. When a candidate is staged, the next chat message
-automatically samples and renders that candidate and refines it rather than
-restarting from committed motion. The visible conversation remains available
-through all refinements, while provider context retains only the original goal
-and a bounded number of recent refinements.
+the complete candidate. A normal message sent while a candidate is staged marks
+that candidate **Superseded** and starts from the last accepted motion. Choosing
+**Refine preview** first instead starts from the current staged candidate. Each
+successful refinement compares Orange against an immutable snapshot of the
+previous candidate, so the newest change remains visible. The visible
+conversation remains available, while provider context retains only the active
+goal and a bounded number of intentional refinements.
+
+Each provider/local-execution request is transactional. Operation, validation,
+provider, and cancellation failures restore its pre-request checkpoint. An
+invalid candidate is therefore never used as the input to the next request.
+Accept and Discard clear the candidate sampler and Orange render state before
+the next editing workflow. Playback-cache or renderer cleanup failures are
+reported without allowing one failed cleanup step to skip the others.
 
 After Accept or Discard, the completed conversation remains visible until the
 next user message. Opening, creating, or restoring a different motion starts a
@@ -137,6 +159,11 @@ human motion may change only when the requested operation explicitly scopes it;
 protected content and human corrections made during the current session remain
 immutable to later AI operations. All identity lookup stays behind the metadata
 service so timestamp-based MVP identity can be migrated to stable Keyframe IDs.
+Replacement-style operations submit only actual before/after entity changes to
+the provenance gate. Recomputing FK for an unchanged protected foot therefore
+does not falsely count as editing that foot. If an edit really would move
+protected or in-session human content, the inline failure identifies the block
+reason and the affected Keyframe name and time.
 
 ## Validation And Warnings
 
