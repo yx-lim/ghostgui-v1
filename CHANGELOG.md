@@ -10,6 +10,10 @@ in this repository.
 
 ### Added
 
+- A Qt-free local agent command workspace with strict schemas, bounded
+  checkpoints, provenance gates, sampled validation, and existing export writers.
+- An explicit Export source selection for fresh generated or editable motion.
+
 - Focused guides for concepts, data formats, models, model import, advanced IK,
   architecture, migration, operations, reliability, testing, and
   troubleshooting.
@@ -31,6 +35,11 @@ in this repository.
   request, response, tool-result, token, and rendered-frame limits.
 
 ### Changed
+
+- Timeline navigation, save and export no longer insert qpos Keyframes.
+- Commit Keyframe and automatic time advance form one reversible history action.
+- Generated playback/export rejects stale motion; generation uses detached
+  inputs and rejects late results when the source changes.
 
 - Reworked the root README as a concise product landing page.
 - Standardized the public workflow around **Preview Path**,

@@ -63,6 +63,12 @@ def _is_core_robotics(path: Path) -> bool:
     )
 
 
+def _is_agent_api(path: Path) -> bool:
+    parts = path.parts
+    return any(parts[index:index + 2] == ("application", "agent_api")
+               for index in range(len(parts) - 1))
+
+
 def check_file(path: Path, layer: str) -> list[ArchitectureViolation]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -81,6 +87,12 @@ def check_file(path: Path, layer: str) -> list[ArchitectureViolation]:
     core_robotics = layer == "core" and _is_core_robotics(path)
     for node in ast.walk(tree):
         for imported_root in _import_roots(node):
+            if _is_agent_api(path) and imported_root in FORBIDDEN_CORE_IMPORTS:
+                violations.append(ArchitectureViolation(
+                    path, int(getattr(node, "lineno", 1)),
+                    f"application/agent_api must remain headless ({imported_root})",
+                ))
+                continue
             if (
                 core_robotics
                 and imported_root in FORBIDDEN_CORE_ROBOTICS_IMPORTS

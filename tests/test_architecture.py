@@ -107,6 +107,21 @@ class ArchitectureGuardrailTests(unittest.TestCase):
 
         self.assertEqual(errors, [])
 
+    def test_agent_command_layer_rejects_qt_and_opengl(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for layer in architecture.SOURCE_LAYERS:
+                (root / layer).mkdir()
+            api = root / "application" / "agent_api"
+            api.mkdir()
+            (api / "bad.py").write_text(
+                "from PySide6.QtCore import QObject\nfrom OpenGL.GL import glClear\n",
+                encoding="utf-8",
+            )
+            violations = architecture.validate_repository(root)
+        self.assertEqual(len(violations), 2)
+        self.assertTrue(all("headless" in violation.message for violation in violations))
+
     def test_wheel_validator_can_require_runtime_resources(self):
         with tempfile.TemporaryDirectory() as directory:
             wheel_path = Path(directory) / "ghostgui.whl"

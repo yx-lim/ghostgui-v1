@@ -112,6 +112,9 @@ FIRST_MOTION_TUTORIAL = [
         title="Export The Result",
         body=(
             "Use File > Export > Trajectory to choose MuJoCo, DSMS, or mjlab. "
+            "Export source in Planning chooses fresh generated motion or the editable "
+            "Keyframe timeline; stale generated motion requires Generate again or "
+            "an explicit editable source choice. "
             "File > Import > Trajectory accepts the same three formats; DSMS "
             "uses its reference folder, while mjlab asks for its source sample "
             "interval. "

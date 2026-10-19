@@ -30,7 +30,7 @@ Use this workflow to create one editable robot motion.
 6. Click **Commit Keyframe** to record the preview at the active time and advance the timeline.
 7. Add another keyframe at a later time.
 8. Click **Generate** or **Generate / Simulate**.
-9. Export the trajectory or qpos data from the app toolbar.
+9. Export from File > Export. In Planning, Export source chooses fresh generated motion or the editable Keyframe timeline. Stale generated motion requires Generate again or an explicit editable source choice.
 
 The main idea is:
 

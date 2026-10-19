@@ -37,6 +37,57 @@ python3 -m unittest tests.test_project_persistence.ResourceLocationTests -v
 Choose the test that owns the changed contract rather than relying only on a
 manual launch.
 
+### Service-Extraction Compatibility
+
+Before extracting Keyframe capture, export-source selection, or project
+workspace services, run the compatibility modules through the isolated runner:
+
+```bash
+python3 scripts/run_test_suite.py --pattern 'test_workflow_compatibility.py'
+python3 scripts/run_test_suite.py --pattern 'test_gui_workflow_compatibility.py'
+```
+
+These tests use synthetic motions and temporary project copies. They preserve
+exact legacy Qpos/MuJoCo/DSMS/mjlab CSV bytes, DSMS elapsed-time scaling,
+semantic G1 joint ordering, quaternion manifold samples, compiled qpos widths
+for all bundled models, and sparse-target/dense-qpos v1/v2 project round trips.
+An imported synthetic model also exercises FK capture and real MuJoCo
+generation, without assuming G1's qpos width or modifying model assets.
+GUI tests cover committed-versus-preview source selection, generated-versus-
+editable export, workspace settings, and Commit Keyframe history.
+
+Commit Keyframe auto-advance is covered by an ordinary passing regression:
+one Undo removes the newly committed targets and restores the prior qpos
+anchors. A commit at the timeline end is separately tested with Undo/Redo
+assertions. The previous expected-failure marker was removed with the shared
+Keyframe transaction fix.
+
+The headless command and shared-service contracts can be checked with:
+
+```bash
+python3 scripts/run_test_suite.py --pattern 'test_agent_api.py'
+python3 scripts/run_test_suite.py --pattern 'test_shared_motion_services.py'
+```
+
+They cover the complete author/repeat/generate/validate/accept/save/reopen/export
+workflow, candidate rollback, review policy, stale revisions, provenance,
+path escapes, incompatible exports, sampled intermediate collisions, and late
+generation results. A subprocess blocks Qt, GUI, and OpenGL imports while
+constructing and executing the local runtime. See the
+[command catalog](agent_integration.md) for supported tools and remaining scope.
+
+Use these modules with the existing project-persistence, export/import,
+robotics-contract, and AI edit-session suites as the entry gate for the
+[implementation plan](implementation_plan.md). Report known failures and
+rendering skips separately from passes. Offscreen checks establish widget and
+data behavior, not real OpenGL rendering or live provider success.
+
+New agent features must preserve the current defaults: external control and
+autonomous Agent mode off, explicit user review, and legacy interpolation and
+export settings. Introduce configuration flags with those defaults when the
+features are implemented; baseline preparation does not add placeholder
+runtime settings or make provider calls.
+
 ### Motion Assistant
 
 The v3.0 AI integration suite is deterministic and needs no provider account,

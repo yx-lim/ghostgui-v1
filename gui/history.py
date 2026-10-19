@@ -25,3 +25,5 @@ class GuiHistorySnapshot:
     show_ghosts: bool
     timeline_duration: float
     motion_metadata: tuple = ()
+    generated_fresh: bool = False
+    generated_settings: bool = False

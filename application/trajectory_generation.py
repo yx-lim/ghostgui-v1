@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import copy, deepcopy
 
 from application.paths import (
     mujoco_playback_cache_path,
@@ -76,6 +77,17 @@ def generate_trajectory_status(
     csv_path=None,
     state_timeline=None,
 ):
+    original_trajectory = trajectory
+    original_targets = trajectory.to_project_dict()
+    trajectory = deepcopy(trajectory)
+    original_timeline = state_timeline
+    original_states = None
+    if state_timeline is not None:
+        original_states = {
+            time: state_timeline.get_state(time) for time in state_timeline.times()
+        }
+        state_timeline = copy(state_timeline)
+        state_timeline.states = {time: qpos.copy() for time, qpos in original_states.items()}
     if csv_path is None:
         csv_path = mujoco_playback_cache_path()
     csv_path = prepare_csv_save_path(csv_path)
@@ -89,6 +101,17 @@ def generate_trajectory_status(
     sampled_trajectory = SampledTrajectory(samples=sampled_tracks)
 
     result_states = backend_interface.solve_trajectory(sampled_trajectory)
+    if original_trajectory.to_project_dict() != original_targets:
+        backend_interface.clear_last_solution()
+        raise ValueError("Motion changed during Generate; generated result was discarded")
+    if original_states is not None:
+        import numpy as np
+        if original_timeline.times() != sorted(original_states) or any(
+            not np.array_equal(original_timeline.get_state(time), qpos)
+            for time, qpos in original_states.items()
+        ):
+            backend_interface.clear_last_solution()
+            raise ValueError("qpos motion changed during Generate; generated result was discarded")
     backend_interface.export_last_solution_csv(csv_path)
 
     lines = []

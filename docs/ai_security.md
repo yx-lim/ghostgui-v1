@@ -1,5 +1,23 @@
 # Motion Assistant Security And Data Boundaries
 
+## Local Deterministic Agent Commands
+
+The [local command layer](agent_integration.md) uses strict schemas, detached
+candidates, bounded checkpoints and revision/provenance checks. It introduces
+no network listener, MCP server or autonomous provider loop. The existing
+Motion Assistant provider workflow below remains separate.
+
+Only `ToolRuntime` is the untrusted dispatch entry point. New tools cannot
+select their approval policy, remove protection, import arbitrary files, execute
+code/shell commands, or control hardware. Candidate acceptance requires current
+sampled validation and an unchanged committed source. Review is the default;
+trusted caller code supplies user approval or explicitly selects an unattended
+policy. Existing outputs and projects are not implicitly overwritten.
+
+Validation distinguishes sampled kinematic checks from unavailable velocity,
+dynamics or continuous-collision evidence. See the command-layer guide for
+roots, limits, checkpoint lifetime, cancellation boundaries and file contracts.
+
 The Motion Assistant is an optional authoring aid, not a robot controller or a
 safety system. Provider output is untrusted. GhostGUI converts that output into
 strict compact motion operations, executes deterministic application services on a

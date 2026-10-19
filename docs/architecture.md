@@ -125,6 +125,11 @@ and records the complete result as one history transition.
 
 ## Trajectory Generation
 
+`application/keyframe_service.py` captures logical targets and qpos through one
+detached replacement command. The GUI and headless tools share that boundary.
+Timeline navigation samples without inserting qpos Keyframes; explicit editing
+commands remain responsible for authoring motion.
+
 The trajectory layer interpolates target positions and orientations. Quaternion
 orientation interpolation uses SLERP. The generation service samples tracks at
 a uniform interval and attaches complete committed qpos anchors from the active
@@ -145,6 +150,11 @@ contract; playback timing and other export formats are not mutated.
 
 ## Files And Projects
 
+`application/trajectory_export_service.py` owns export-source selection,
+content identities, stale-result rejection, and collision checks.
+`application/workspace_state.py` owns detached, lossless workspace merging.
+Existing file writers and persisted schemas remain the compatibility boundary.
+
 Project workspaces live below `projects/` and persist application state in
 `ghostgui_project.json`. CSV import/export is isolated in
 `application/csv_io.py`; project and cache paths are centralized in
@@ -158,6 +168,23 @@ contracts.
 
 The UI should not write files directly when an application service already owns
 the relevant workflow.
+
+## Local Agent Commands
+
+`application/agent_api/` is a Qt/GUI/OpenGL-free command boundary over the
+existing detached `AIEditSession`, strict `ToolRegistry`, motion operations,
+project persistence, and export writers. `HeadlessWorkspace` owns one committed
+document and one candidate; the catalog contains deterministic local tools.
+`ToolRuntime` serializes untrusted calls and owns input/result limits,
+checkpoints, revision/provenance checks, failure rollback and typed activity
+events. Agent acceptance requires sampled path validation and an unchanged
+committed source, with review as the default policy.
+
+The command layer imports neither GUI modules nor provider SDKs for execution;
+its transitive import path is tested with UI/rendering imports blocked. Existing
+AI package exports may load provider adapter definitions without constructing
+SDK clients. No LLM loop, MCP transport or GUI bridge is introduced here.
+See [Local Agent Command Layer](agent_integration.md) for the catalog and gates.
 
 ## Visualization Runtime
 

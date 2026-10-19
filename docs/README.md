@@ -33,6 +33,8 @@ GhostGUI.
 ## Develop GhostGUI
 
 - [Architecture](architecture.md) maps the source tree and data flow.
+- [Local Agent Command Layer](agent_integration.md) documents the headless
+  workspace, deterministic tools, transactions, and compatibility boundaries.
 - [Implementation Plan](implementation_plan.md) coordinates agent integration,
   motion reliability, and the UI redesign with compatibility and release gates.
 - [Migration Guide](migration.md) covers project and integration upgrades.

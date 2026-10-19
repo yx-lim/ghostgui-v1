@@ -36,6 +36,9 @@ from application.paths import (
 )
 from application.background_jobs import SerializedBackgroundJobs
 from application.playback import PlaybackClock
+from application.trajectory_export_service import (
+    GeneratedMotion, build_trajectory_export, motion_source_identity,
+)
 from application.trajectory_export_formats import (
     export_dsms_trajectory,
     export_mjlab_trajectory,
@@ -153,6 +156,8 @@ class RobotViewer3D(QWidget):
         self.robot_state = self.committed_state
         self.playback_state = robot_model.create_state() if robot_model else None
         self.preview_active = False
+        self.motion_document = None
+        self._generated_source = None
         self.last_edited_joint_name = None
         self.current_time = 0.0
         self.display_time = 0.0
@@ -174,6 +179,7 @@ class RobotViewer3D(QWidget):
             )
             if robot_model else None
         )
+        self._generated_source = None
         self.robot_trajectory = []
         self.robot_trajectory_times = []
         self.robot_trajectory_warning_report = None
@@ -613,6 +619,17 @@ class RobotViewer3D(QWidget):
         self.timeslice_context_layout.addRow(
             self.export_dt_label, self.export_dt_input
         )
+        self.export_source_box = QComboBox()
+        _compact_combo(self.export_source_box)
+        self.export_source_box.setObjectName("exportSourceComboBox")
+        self.export_source_box.addItem("Automatic (fresh motion)", "auto")
+        self.export_source_box.addItem("Editable Keyframe timeline", "editable")
+        self.export_source_box.addItem("Generated motion", "generated")
+        self.export_source_box.setToolTip(
+            "Automatic refuses stale generated motion. Generate again, or explicitly "
+            "choose the editable Keyframe timeline to export without another solve."
+        )
+        self.timeslice_context_layout.addRow("Export source", self.export_source_box)
         self.timeslice_context_layout.addRow(
             self.dsms_motion_speed_label, self.dsms_motion_speed_input
         )
@@ -1541,6 +1558,8 @@ class RobotViewer3D(QWidget):
         """Return an interpolated playback qpos and its nearest frame index."""
         if not self.robot_trajectory:
             return None, None
+        if not self.generated_motion_fresh():
+            return None, None
 
         times = self.robot_trajectory_times
         if len(times) != len(self.robot_trajectory):
@@ -1582,6 +1601,9 @@ class RobotViewer3D(QWidget):
             _qpos, frame_index = self._trajectory_sample(
                 self.display_time if time is None else time
             )
+        if frame_index is None:
+            self.timeslice_frame_readout.setText("Generated motion stale — Generate again")
+            return
         self.timeslice_frame_readout.setText(
             f"Frame {int(frame_index) + 1} / {len(self.robot_trajectory)}"
         )
@@ -1792,7 +1814,7 @@ class RobotViewer3D(QWidget):
     def get_current_keyframe(self):
         if not self.state_timeline:
             return None
-        return self.state_timeline.get_state(self.current_time)
+        return self.state_timeline.sample_state(self.current_time)
 
     def ensure_keyframe_at_current_time(self):
         if not self.state_timeline:
@@ -1836,12 +1858,8 @@ class RobotViewer3D(QWidget):
         self.display_time = self.current_time
         self._set_timeslice_widgets(self.current_time)
         qpos, _frame_index = self._trajectory_sample(self.current_time)
-        if qpos is not None:
-            # Releasing the unified scrubber commits exactly the pose that was
-            # shown during live trajectory sampling.
-            self.state_timeline.set_state(self.current_time, qpos)
-        else:
-            qpos = self.ensure_keyframe_at_current_time()
+        if qpos is None:
+            qpos = self.state_timeline.sample_state(self.current_time)
         self.set_robot_state_for_current_time(qpos)
         self._emit_selected_target_pose()
         self._update_frame_readout(self.current_time)
@@ -2343,63 +2361,45 @@ class RobotViewer3D(QWidget):
         self._show_trajectory_saved(path, export)
         return path
 
-    def _trajectory_export_snapshot(self, sample_dt=None):
-        if not self.state_timeline:
-            raise ValueError("no robot timeline is available")
-
-        expected = int(self.robot_model.mj_model.nq)
-        source_name = "generated trajectory"
-
-        if self.robot_trajectory:
-            qposes = tuple(qpos.copy() for qpos in self.robot_trajectory)
-            times = tuple(float(time) for time in self.robot_trajectory_times)
-            if len(times) != len(qposes):
-                times = tuple(float(index) for index in range(len(qposes)))
-        else:
-            self.state_timeline.set_state(
-                self.current_time, self.committed_state.get_qpos()
-            )
-            times = tuple(float(time) for time in self.state_timeline.times())
-            qposes = tuple(
-                self.state_timeline.get_state(time_value)
-                for time_value in times
-            )
-            source_name = "editable timeline"
-
-        export = TrajectoryExport(
-            expected_qpos_count=expected,
-            times=times,
-            qposes=qposes,
-            source_name=source_name,
-            preview_active=bool(self.preview_active),
+    def current_motion_source(self):
+        settings = ()
+        if getattr(self, "_track_generation_settings", False):
+            widget = getattr(self, "smoothing_widget", None)
+            settings = (self.export_dt(), 0.0 if widget is None else widget.value())
+        return motion_source_identity(
+            self.robot_model, self.state_timeline,
+            document=self.motion_document, settings=settings,
         )
-        if sample_dt is not None:
-            export = resample_trajectory_export(
-                export,
-                self.robot_model,
-                sample_dt,
-            )
-            times = export.times
-            qposes = export.qposes
 
-        if self.robot_trajectory and sample_dt is None:
-            warning_report = self.robot_trajectory_warning_report
-            blocking_report = self.robot_trajectory_blocking_report
-        else:
-            warning_report, blocking_report = trajectory_collision_reports(
-                self.robot_model, qposes, checker=self.collision_checker
-            )
-        if blocking_report is not None:
-            names = format_collision_pairs(blocking_report.collisions)
-            details = format_collision_diagnostics(blocking_report.collisions)
-            raise ValueError(
-                f"{source_name} has a blocking collision at sample "
-                f"{blocking_report.sample_index}: {names}; "
-                f"contact geometry: {details}"
-            )
-        self._last_export_collision_warning = warning_report
+    def mark_generated_current(self):
+        self._generated_source = self.current_motion_source()
+        if self.robot_trajectory:
+            self._update_frame_readout()
 
-        return export
+    def generated_motion_fresh(self):
+        return bool(self.robot_trajectory) and self._generated_source == self.current_motion_source()
+
+    def _trajectory_export_snapshot(self, sample_dt=None, *, source=None):
+        source = self.export_source_box.currentData() if source is None else source
+        generated = None
+        if self.robot_trajectory:
+            times = tuple(self.robot_trajectory_times)
+            if len(times) != len(self.robot_trajectory):
+                times = tuple(float(index) for index in range(len(self.robot_trajectory)))
+            generated = GeneratedMotion(
+                TrajectoryExport(self.robot_model.mj_model.nq, times,
+                                 tuple(self.robot_trajectory), "generated trajectory", False),
+                self._generated_source,
+            )
+        result = build_trajectory_export(
+            self.robot_model, self.state_timeline, generated, source=source,
+            current_identity=self.current_motion_source(), sample_dt=sample_dt,
+            preview_active=self.preview_active, checker=self.collision_checker,
+            collision_reports=(self.robot_trajectory_warning_report,
+                               self.robot_trajectory_blocking_report),
+        )
+        self._last_export_collision_warning = result.warning_report
+        return result.export
 
     def _show_trajectory_saved(self, path, export):
         preview_note = (
@@ -2506,10 +2506,14 @@ class RobotViewer3D(QWidget):
         else:
             self._update_frame_readout(self.display_time)
 
+        self._track_generation_settings = False
+        self.mark_generated_current()
+
     def clear_robot_trajectory(self):
         self.pause_playback()
         self.scrub_preview_timer.stop()
         self._pending_scrub_preview_time = None
+        self._generated_source = None
         self.robot_trajectory = []
         self.robot_trajectory_times = []
         self.robot_trajectory_warning_report = None
@@ -2697,7 +2701,7 @@ class RobotViewer3D(QWidget):
     def _playback_bounds(self):
         if self.candidate_preview_active:
             return 0.0, self.timeline_duration
-        if not self.robot_trajectory:
+        if not self.robot_trajectory or not self.generated_motion_fresh():
             return None
         return self.robot_trajectory_times[0], self.robot_trajectory_times[-1]
 

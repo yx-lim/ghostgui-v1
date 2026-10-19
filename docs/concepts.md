@@ -27,8 +27,10 @@ The model-colored robot represents the pose accepted at the active timeline
 time. It is the reference state for edits and the source used by keyframes,
 generation, and pose export.
 
-Moving to a time without an existing keyframe creates an editable state derived
-from the timeline. Existing keyframes at other times remain independent.
+Moving to a time without an existing Keyframe samples the timeline without
+inserting an anchor. Navigation, saving, and exporting do not author motion;
+Commit Keyframe or an explicit editing operation creates the stored anchor.
+Existing Keyframes, including older qpos-only anchors, remain independent.
 
 ## Orange Preview
 
@@ -170,3 +172,10 @@ not exported as additional states.
 Exports use committed or generated states. An orange preview is intentionally
 excluded. If a proposed pose should appear in an export, commit its keyframe
 first.
+
+**Export source** in Planning defaults to Automatic: use generated motion when
+it is current, otherwise use the editable timeline only when no generated motion
+is present. Stale generated motion is blocked for playback and export. Run
+Generate again, or explicitly choose the editable Keyframe timeline to export
+without another IK solve. Pose, target, timing, import, history and AI acceptance
+changes invalidate derived motion through its source identity.

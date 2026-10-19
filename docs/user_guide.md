@@ -279,6 +279,13 @@ Use **File → Export** for:
 - **Trajectory → mjlab**: a headerless G1 29-DoF CSV with `x, y, z`, an
   `x, y, z, w` quaternion, and named G1 joints in mjlab order.
 
+In Planning, **Export source** defaults to Automatic, which uses fresh generated
+motion or the editable Keyframe timeline when no generated path is present.
+After an edit, stale generated playback and export are blocked. Run Generate
+again, or explicitly choose **Editable Keyframe timeline** to export committed
+qpos interpolation without another IK solve. **Generated motion** requires a
+fresh generated path. Moving the playhead does not create a Keyframe.
+
 DSMS and mjlab require uniformly sampled timestamps. Their GUI exports sample
 the current generated trajectory, or the editable qpos timeline, at the selected
 **Export interval**. The mjlab selection is available only for a model matching

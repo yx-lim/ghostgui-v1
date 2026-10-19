@@ -81,6 +81,8 @@ from .robot_viewer_3d import RobotViewer3D
 from .widgets.status import StatusEvent, status_event_from_text
 from gui.viewers.mujoco_player import Mujoco3DViewerPanel
 from application.backend_interface import BackendInterface
+from application.keyframe_service import commit_keyframe
+from application.workspace_state import merge_workspace_payload
 from core.models import MujocoReferenceFrames
 from .app_sidebars import AppLeftSidebar, AppRightSidebar, SidebarSplitter
 from .help import HelpCenterDialog, KeyboardShortcutsDialog
@@ -271,6 +273,7 @@ class RobotGuiMainWindow(QMainWindow):
             file_selection_stage=self.file_selection_stage,
         )
         self.document.attach_qpos_timeline(self.viewer_3d.state_timeline)
+        self.viewer_3d.motion_document = self.document
         self.viewer_3d_mujoco = Mujoco3DViewerPanel(self.robot_model_3d)
         self.viewer_3d_mujoco.set_trajectory_regenerator(
             self.regenerate_mujoco_playback_cache
@@ -1704,11 +1707,6 @@ class RobotGuiMainWindow(QMainWindow):
             return False
 
         viewer = self.viewer_3d
-        if viewer.state_timeline is not None and viewer.committed_state is not None:
-            viewer.state_timeline.set_state(
-                viewer.get_current_time(),
-                viewer.committed_state.get_qpos(),
-            )
 
         project.update_robot(self.model_key, self.current_model_display_name())
         snapshot_saved = False
@@ -1752,10 +1750,6 @@ class RobotGuiMainWindow(QMainWindow):
         if viewer.state_timeline is None or viewer.committed_state is None:
             return False
 
-        viewer.state_timeline.set_state(
-            viewer.get_current_time(),
-            viewer.committed_state.get_qpos(),
-        )
         project.write_autosave(
             self.trajectory,
             viewer.state_timeline,
@@ -1795,7 +1789,7 @@ class RobotGuiMainWindow(QMainWindow):
         viewer = self.viewer_3d
         canvas = viewer.canvas
         selected_kind, selected_name = viewer._selected_target()
-        return {
+        return merge_workspace_payload({}, {
             "schema_version": 1,
             "ai_motion_metadata": (
                 self.ai_assistant_controller.project_motion_metadata(self.document)
@@ -1829,7 +1823,7 @@ class RobotGuiMainWindow(QMainWindow):
                 "show_playback_ghosts": bool(viewer.show_ghosts.isChecked()),
                 "trajectory_import_dt": float(viewer.trajectory_import_dt.value()),
             },
-        }
+        })
 
     def open_project_path(self, path, source="direct"):
         try:
@@ -2451,6 +2445,8 @@ class RobotGuiMainWindow(QMainWindow):
             show_ghosts=bool(viewer.show_ghosts.isChecked()),
             timeline_duration=float(viewer.timeline_duration),
             motion_metadata=motion_metadata,
+            generated_fresh=viewer.generated_motion_fresh() if viewer.robot_trajectory else False,
+            generated_settings=bool(getattr(viewer, "_track_generation_settings", False)),
         )
 
     def _restore_control_frame(self, frame):
@@ -2549,6 +2545,12 @@ class RobotGuiMainWindow(QMainWindow):
 
             control_frame = TargetFrame.from_dict(dict(snapshot.control_frame))
             self._restore_control_frame(control_frame)
+            if snapshot.robot_trajectory:
+                viewer._track_generation_settings = snapshot.generated_settings
+                if snapshot.generated_fresh:
+                    viewer.mark_generated_current()
+                else:
+                    viewer._generated_source = None
             self.refresh_display()
             if 0 <= snapshot.selected_row < self.controls.table.rowCount():
                 self.controls.table.setCurrentCell(snapshot.selected_row, 0)
@@ -3050,6 +3052,7 @@ class RobotGuiMainWindow(QMainWindow):
         ).items():
             setattr(self, name, value)
         self.editor_controller.activate_document(self.document)
+        self.viewer_3d.motion_document = self.document
         self.ai_assistant_controller.activate_document(self.document)
         self.viewer_3d_stack.setCurrentWidget(self.viewer_3d)
         self.viewer_3d_mujoco.set_model_adapter(session.adapter)
@@ -3518,7 +3521,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.refresh_display()
 
     def on_time_changed(self, time):
-        """Load or create the editable qpos keyframe for this GUI time."""
+        """Navigate without changing authored motion or its history baseline."""
         self.viewer_3d.set_current_time(time)
         self.editor_controller.set_current_time(time)
         frame_name = self.controls.frame_box.currentText()
@@ -3534,7 +3537,6 @@ class RobotGuiMainWindow(QMainWindow):
                 emit_pose_changed=False,
             )
         self.refresh_display()
-        self._refresh_history_baseline()
 
     def on_viewer_timeslice_time_changed(self, time):
         """Keep the sidebar time editor in sync with the viewer-bottom scrubber."""
@@ -3546,6 +3548,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.controls.time_slider.set_value(time)
 
     def on_viewer_timeline_duration_changed(self, duration):
+        self.document.set_timeline_duration(duration)
         self.set_sidebar_timeline_duration(duration)
         self.mark_project_dirty("Timeline duration")
 
@@ -3558,6 +3561,7 @@ class RobotGuiMainWindow(QMainWindow):
         self.document.set_timeline_duration(duration)
 
     def on_accept_timeslice_requested(self):
+        before = self.capture_history_snapshot()
         if (
             self.viewer_3d.preview_active
             and not self.viewer_3d.accept_preview(emit_pose_finished=False)
@@ -3583,6 +3587,7 @@ class RobotGuiMainWindow(QMainWindow):
             f"from the committed solved pose;{advance_note}"
         )
         self.viewer_3d.status_label.setText(message)
+        self.history.set_baseline(before)
         self.record_history_action("Commit keyframe")
 
     def on_delete_timeslice_requested(self):
@@ -3620,21 +3625,15 @@ class RobotGuiMainWindow(QMainWindow):
 
     def define_timeslice_from_committed_pose(self):
         """Snapshot every editable logical target from the committed MuJoCo pose."""
-        frames = timeslice_service.capture_timeslice_from_committed_pose(
-            self.viewer_3d.committed_state,
-            time=self.viewer_3d.get_current_time(),
-            phase=self.controls.phase_box.currentText(),
-            frame_names=self.editable_logical_frame_names(),
-            frame_bindings=self.viewer_3d.frame_bindings,
-        )
         selected_frame_name = self.controls.frame_box.currentText()
-        result = self.editor_controller.execute(
-            UpsertKeyframes(
-                frames,
-                selected_frame_name=selected_frame_name,
-                operation="commit_timeslice",
-            )
+        result = commit_keyframe(
+            self.editor_controller, self.robot_model_3d,
+            self.viewer_3d.get_current_time(),
+            qpos=self.viewer_3d.committed_state.get_qpos(),
+            phase=self.controls.phase_box.currentText(),
+            selected_frame=selected_frame_name,
         )
+        frames = self.document.frames_at_time(self.viewer_3d.get_current_time())
         selected_frame = next(
             (
                 frame
@@ -3653,7 +3652,7 @@ class RobotGuiMainWindow(QMainWindow):
                 yaw=selected_frame.yaw,
                 emit_pose_changed=False,
             )
-        return result.affected_count
+        return len(frames) if result.changed else 0
 
     def editable_logical_frame_names(self):
         return timeslice_service.editable_logical_frame_names(
@@ -3976,7 +3975,10 @@ class RobotGuiMainWindow(QMainWindow):
             self.show_status_message("Trajectory is empty. Add keyframes first.")
             return
 
+        previous_settings_tracking = bool(getattr(self.viewer_3d, "_track_generation_settings", False))
         try:
+            self.viewer_3d._track_generation_settings = True
+            source_identity = self.viewer_3d.current_motion_source()
             result = trajectory_generation.generate_trajectory_status(
                 self.trajectory,
                 self.backend_interface,
@@ -3984,12 +3986,18 @@ class RobotGuiMainWindow(QMainWindow):
                 export_dt=self.viewer_3d.export_dt(),
                 state_timeline=self.viewer_3d.state_timeline,
             )
+            if source_identity != self.viewer_3d.current_motion_source():
+                raise ValueError("Motion changed during Generate; run Generate again")
         except (RuntimeError, ValueError) as error:
+            self.viewer_3d._track_generation_settings = previous_settings_tracking
+            self.backend_interface.clear_last_solution()
             self.show_status_message(
                 f"Could not generate trajectory: {error}"
             )
             return
         self.viewer_3d.load_backend_states(result.result_states)
+        self.viewer_3d._track_generation_settings = True
+        self.viewer_3d.mark_generated_current()
         self.viewer_3d_mujoco.set_trajectory_csv(result.csv_path)
         collision_status = self.viewer_3d.robot_trajectory_collision_status()
         self.show_status_message(

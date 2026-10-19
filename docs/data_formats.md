@@ -60,6 +60,11 @@ Requirements:
 trajectory, or from the editable qpos timeline when no generated trajectory is
 active.
 
+The **Export source** selection in Planning can explicitly choose editable
+Keyframes or generated motion. Automatic rejects an existing stale generated
+path instead of exporting old motion. This selection changes the source, not
+the numeric file contract; Orange preview is always excluded.
+
 ## DSMS Reference Folder
 
 **File → Export → Trajectory → DSMS** writes two headerless files into the

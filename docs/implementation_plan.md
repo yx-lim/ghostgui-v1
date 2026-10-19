@@ -1,7 +1,8 @@
 # GhostGUI Implementation Plan
 
-Status: proposed execution guide; the features below are not implemented by
-this document. Update the guide as milestones are accepted.
+Status: W0 baseline and W1 shared-service/command-layer implementation are
+complete. W2 and later phases remain planned. Update the guide as milestones
+are accepted; the later features below are not current product capabilities.
 
 This combines the [UI/UX review](../review/01-uiux-redesign.md),
 [software critique](../review/02-software-critique.md), and
@@ -121,12 +122,24 @@ and W5, with about 6–8 additional hours for the two stretch milestones.
 **Exit:** reproducible baseline and an automated compatibility comparison for
 the services about to be extracted. No paid provider calls are required.
 
+The reproducible comparisons are in `tests/test_workflow_compatibility.py` and
+`tests/test_gui_workflow_compatibility.py`; see the
+[compatibility testing guide](testing.md#service-extraction-compatibility).
+W1 may begin after these modules and the existing suite/docs/architecture
+checks have been run, with any known defects explicitly recorded. The
+auto-advance Commit Keyframe Undo regression is now a passing W1 transaction
+test. Legacy serialization/export settings remain unchanged; the in-app agent
+mode and external bridge are still later milestones.
+
 ### W1 — Shared Services And Minimum Trustworthy Behavior
 
 - Extract `application/keyframe_service.py`,
   `application/trajectory_export_service.py`, and workspace payload helpers
   from Qt callbacks. Reuse existing project, generation, CSV, and motion
   services. Make GUI callbacks delegate to them with parity tests.
+- Keep Commit Keyframe and its optional playhead advance inside one history
+  transaction. Fix the existing auto-advance Undo regression and promote its
+  expected-failure compatibility test to an ordinary passing test.
 - Build `application/agent_api/` with a `Workspace` port,
   `HeadlessWorkspace`, command catalog, runtime, typed events, bounded
   checkpoints, and an output sandbox. Reuse `AIEditSession` and `ToolRegistry`.
@@ -162,6 +175,11 @@ the services about to be extracted. No paid provider calls are required.
 motion, validates it, repeats it, generates samples, accepts under an explicit
 test policy, saves/reopens, and exports through unchanged writers. Invalid,
 protected, stale, or unsupported requests leave committed motion untouched.
+
+The implemented 23-tool Python API and deferred capabilities are documented in
+[Local Agent Command Layer](agent_integration.md). W2 should adapt this catalog
+through `ToolRuntime`, without reimplementing motion operations or enabling a
+provider loop.
 
 ### W2 — MCP Access For Claude Code
 

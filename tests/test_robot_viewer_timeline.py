@@ -175,8 +175,10 @@ class RobotViewerTimelineTests(unittest.TestCase):
             np.testing.assert_allclose(actual, expected)
 
         self.viewer._advance_playback(elapsed=0.8)
+        self.assertFalse(self.viewer.generated_motion_fresh())
+        self.viewer.preview_trajectory_time(1.0)
         np.testing.assert_allclose(
-            self.viewer.playback_state.get_qpos(), second
+            self.viewer.playback_state.get_qpos(), self.viewer.state_timeline.sample_state(1.0)
         )
         np.testing.assert_allclose(
             self.viewer.robot_state.get_qpos(),
@@ -979,7 +981,7 @@ class RobotViewerTimelineTests(unittest.TestCase):
         self.viewer._emit_timeslice_slider_time()
 
         self.assertEqual(self.viewer.get_current_time(), 0.5)
-        self.assertIn(0.5, self.viewer.state_timeline.times())
+        self.assertEqual(self.viewer.state_timeline.times(), initial_times)
         self.assertAlmostEqual(
             self.viewer.committed_state.get_qpos()[-1],
             first[-1] + 0.10,
