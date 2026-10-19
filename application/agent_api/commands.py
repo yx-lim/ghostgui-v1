@@ -44,7 +44,7 @@ class CommandCatalog:
         self.meta = {}
 
 
-def build_command_catalog(workspace):
+def build_command_catalog(workspace, *, renderer=None):
     catalog = CommandCatalog()
     w = workspace
 
@@ -214,4 +214,13 @@ def build_command_catalog(workspace):
               "motion_speed": number(0.1, 4),
               "source": choice("auto", "generated", "editable")},
              ("format", "file_name"), lambda a: w.export_trajectory(**a), app=True)
+    from application.agent_rendering import MuJoCoViewRenderer, render_workspace
+    renderer = MuJoCoViewRenderer() if renderer is None else renderer
+    register("render_views", "Render timestamped front/side views of current motion; reports unavailable GL explicitly.",
+             {"times_s": array(number(), 1, 4), "views": array(choice("front", "side"), 1, 2),
+              "width": {"type": "integer", "minimum": 160, "maximum": 640},
+              "height": {"type": "integer", "minimum": 120, "maximum": 480},
+              "source": choice("candidate", "committed")}, (),
+             lambda a: render_workspace(w, a, renderer))
+    catalog.meta["render_views"] = ToolMeta(read_only=True, returns_images=True)
     return catalog

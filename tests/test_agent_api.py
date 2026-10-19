@@ -240,8 +240,8 @@ class AgentAPIContractTests(unittest.TestCase):
                 self.call(name, args)
                 self.assertIsNone(self.workspace.candidate())
                 self.assertEqual(self.workspace.identity(self.workspace.committed), before)
-        self.assertEqual(len(self.runtime.catalog.registry.definitions()), 23)
-        self.assertNotIn("render_views", self.runtime.catalog.meta)
+        self.assertEqual(len(self.runtime.catalog.registry.definitions()), 24)
+        self.assertTrue(self.runtime.catalog.meta["render_views"].returns_images)
 
     def test_named_ik_scale_delete_and_checkpoint_tools(self):
         self.author()

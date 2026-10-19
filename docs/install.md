@@ -22,6 +22,10 @@ python -m pip install -e .
 Editable installation keeps the registered model and mesh paths anchored to the
 repository checkout.
 
+For optional stdio MCP access, install the `agent` extra in this environment;
+see [Local Agent Command Layer](agent_integration.md#stdio-mcp-server). The base
+GUI does not require MCP.
+
 ## Linux / Ubuntu
 
 ```bash

@@ -1,8 +1,8 @@
 # Local Agent Command Layer
 
 GhostGUI exposes a Qt-free Python command layer for deterministic project and
-motion workflows. It does not call an LLM. MCP transport, GUI attachment, the
-in-app autonomous loop, rendering tools, and an agent CLI are later milestones
+motion workflows. It does not call an LLM. Stdio MCP and bounded offscreen rendering are implemented. GUI attachment, the
+in-app autonomous loop and an agent CLI are later milestones
 in the [implementation plan](implementation_plan.md).
 
 ## Entry Points
@@ -55,7 +55,7 @@ the existing GUI command, see [Installation](install.md).
 ## Implemented Catalog
 
 Schemas, including required fields and limits, are returned by
-`catalog.registry.definitions()`. These 23 tools are implemented:
+`catalog.registry.definitions()`. These 23 motion/project tools are implemented (plus `render_views` below):
 
 | Tool | Inputs / purpose |
 | --- | --- |
@@ -166,3 +166,93 @@ optional rollout and nested planning. F6 adds the remaining agent surfaces and
 render/critique capabilities; F7/F9 add velocity/contact/dynamics quality work.
 No unimplemented tools are registered. MCP packaging, client setup and GUI
 attachment belong to W2/W3 rather than this Python API milestone.
+
+## Stdio MCP Server
+
+After installing with the platform script in [Installation](install.md), activate
+that environment and add the optional agent dependencies:
+
+```bash
+python -m pip install -e ".[agent]"
+ghostgui-mcp --help
+```
+
+The optional extra pins `mcp==1.30.0`. The adapter uses the supported SDK v1
+maintenance line and its low-level `Server`, `stdio_server`, `CallToolResult`,
+resources and prompts APIs. This avoids silently changing protocol generations.
+The API was checked against the [official SDK documentation](https://py.sdk.modelcontextprotocol.io/v1/)
+and tested with that installed version. Base GhostGUI installation and the
+Python command layer do not require MCP or provider credentials.
+
+Start a headless workspace with an explicit project root:
+
+```bash
+ghostgui-mcp --projects-dir ./projects --attach never
+```
+
+This is a stdio process intended to be launched by an MCP client. Protocol data
+uses stdout; startup and application diagnostics use stderr. No network server
+or GUI connection is opened. The initialization instructions and
+`ghostgui://workspace` resource identify the selected workspace, root, and
+approval policy. `--output-dir` optionally selects a separate export root;
+otherwise exports stay inside the opened project's exports directory.
+
+`--attach never` is the default. `required` and `auto` fail with an explicit
+unsupported-attachment error until the GUI bridge milestone is implemented;
+there is no silent fallback. Existing open GUI projects are unaffected.
+
+The default `--approval review` leaves `accept_candidate` pending user review.
+This milestone has no external approval interface; unattended headless clients
+must be launched explicitly with `--approval auto_accept`. The tool schema
+cannot change this policy or provide user approval. `auto_accept_and_export`
+also permits acceptance, but the client must still explicitly export and check
+the resulting paths; the server has no autonomous orchestration loop.
+
+### Claude Code Project Setup
+
+The following syntax was checked against the installed `claude mcp add --help`
+and [Claude Code's official MCP documentation](https://code.claude.com/docs/en/mcp).
+Run from the intended Claude Code project with the GhostGUI environment active:
+
+```bash
+claude mcp add --transport stdio --scope project ghostgui -- ghostgui-mcp --projects-dir ./projects --attach never --approval auto_accept
+```
+
+This writes project-scoped configuration. Ensure Claude Code inherits a PATH
+containing `ghostgui-mcp`; otherwise set its command to your environment's
+absolute executable path locally. No personal paths or credentials belong in
+shared configuration. Use `review` instead of `auto_accept` to stage candidates
+without authorizing acceptance. A project configuration alone does not fund or
+run Claude. The local MCP transport tests use no model calls.
+
+### Resources, Prompt, And Images
+
+MCP exposes the same shared catalog: 23 motion/project tools plus `render_views`.
+Its three resources are `ghostgui://terminology`, `ghostgui://robot`, and
+`ghostgui://workspace`. The `author_motion` prompt describes the inspect,
+author, generate, validate, accept, save, and export workflow. Tool errors set
+`isError` and carry the same bounded `ok`, `code`, `message`, and `revision`
+fields in structured content and text. Invalid inputs use the shared runtime
+validator rather than transport-specific motion handlers.
+
+`render_views` accepts optional `times_s` (default `[0]`), `views` (default
+`["front", "side"]`), `source` (`candidate` or `committed`), `width` (160–640,
+default 480), and `height` (120–480, default 360). The product of times and views
+must not exceed four images. Times must fit the motion duration and views must
+be unique. Each PNG has a timestamp and f/s view marker; text metadata identifies its view.
+Front and side are nominal +X and +Y camera positions, respectively.
+Fresh generated motion is sampled when it matches the selected document;
+otherwise the response explicitly identifies editable motion. Rendering samples
+detached poses into private MuJoCo data and never changes Keyframes or navigation.
+
+Images are limited to 2 MiB total binary data (before base64 encoding), alongside
+the normal 64 KiB text result budget. They arrive as MCP `image/png` content,
+not file paths or fake placeholders. The renderer closes its offscreen context
+on every request. Missing GL returns `available: false` with code
+`rendering_unavailable` and no images. This is an observation, not visual
+validation. Unexpected renderer failures and image-limit violations are errors.
+
+All calls and mutable model/resource reads are serialized within the process.
+A long generation/render call may delay other requests; cooperative interruption
+inside every solver or driver operation remains later work. On disconnect,
+the stdio server exits; no GUI, socket listener, or background agent remains.

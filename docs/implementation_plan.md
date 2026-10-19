@@ -1,8 +1,10 @@
 # GhostGUI Implementation Plan
 
 Status: W0 baseline and W1 shared-service/command-layer implementation are
-complete. W2 and later phases remain planned. Update the guide as milestones
-are accepted; the later features below are not current product capabilities.
+complete. W2 transport is implemented and tested; real rendering passes with
+macOS graphics access and reports unavailable inside the sandbox. Live Claude
+acceptance remains untested. W3 and later phases remain planned.
+Update the guide as milestones are accepted; the later features below are not current product capabilities.
 
 This combines the [UI/UX review](../review/01-uiux-redesign.md),
 [software critique](../review/02-software-critique.md), and

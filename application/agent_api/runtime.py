@@ -89,6 +89,9 @@ class ToolRuntime:
                     session.invalidate_validation()
                     self.workspace.generated = None
                     self.workspace._validation_identity = None
+                from application.agent_rendering import ImageResult
+                images = result.images if isinstance(result, ImageResult) else ()
+                result = result.payload if isinstance(result, ImageResult) else result
                 payload = {"ok": True, **result, "revision": self.workspace.document().revision}
                 if len(json.dumps(payload, allow_nan=False).encode()) > self.max_result_bytes:
                     raise ValueError("tool result exceeds the byte limit; request a smaller result")
@@ -96,7 +99,7 @@ class ToolRuntime:
                     payload["checkpoint_id"] = self.workspace.checkpoints.add(checkpoint, previous_generated)
                     self.workspace.publish_candidate(capture_motion_state(session.working_document))
                 self.workspace.emit(AgentEvent("tool_finished", name, payload["revision"]))
-                return ToolOutcome(True, payload)
+                return ToolOutcome(True, payload, images=images)
             except Exception as error:
                 if checkpoint is not None:
                     session = self.workspace.candidate()

@@ -183,7 +183,11 @@ committed source, with review as the default policy.
 The command layer imports neither GUI modules nor provider SDKs for execution;
 its transitive import path is tested with UI/rendering imports blocked. Existing
 AI package exports may load provider adapter definitions without constructing
-SDK clients. No LLM loop, MCP transport or GUI bridge is introduced here.
+SDK clients. The optional `application.mcp_server` stdio adapter exposes this catalog, resources
+and a prompt without duplicating motion handlers. `application.agent_rendering`
+owns bounded offscreen MuJoCo images and private rendering data; the runtime
+serializes rendering with all other commands. No LLM loop or GUI bridge is
+introduced here.
 See [Local Agent Command Layer](agent_integration.md) for the catalog and gates.
 
 ## Visualization Runtime

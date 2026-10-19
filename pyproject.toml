@@ -41,6 +41,7 @@ ai = [
     "google-genai==2.21.0",
     "keyring==25.7.0",
 ]
+agent = ["mcp==1.30.0"]
 
 [project.urls]
 Homepage = "https://github.com/yx-lim/ghostgui"
@@ -50,6 +51,7 @@ Issues = "https://github.com/yx-lim/ghostgui/issues"
 
 [project.scripts]
 ghostgui = "application.launcher:main"
+ghostgui-mcp = "application.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

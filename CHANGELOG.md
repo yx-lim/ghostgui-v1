@@ -10,6 +10,9 @@ in this repository.
 
 ### Added
 
+- Optional `ghostgui-mcp` stdio server with shared tool schemas, resources, a
+  motion-authoring prompt, structured errors, and bounded timestamped MuJoCo images.
+
 - A Qt-free local agent command workspace with strict schemas, bounded
   checkpoints, provenance gates, sampled validation, and existing export writers.
 - An explicit Export source selection for fresh generated or editable motion.

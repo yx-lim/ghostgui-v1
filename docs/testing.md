@@ -528,3 +528,25 @@ Documentation validation should reject:
 - legacy user-facing workflow terminology;
 - undocumented public pages;
 - trailing whitespace.
+
+## MCP Transport And Rendering
+
+With the optional agent extra installed, run:
+
+```bash
+python scripts/run_test_suite.py --pattern test_mcp_server.py
+```
+
+These tests use the actual MCP SDK client over subprocess stdio, including the
+installed console entry point, catalog/resources/prompt, a nonconstant motion
+workflow, read-back of exported motion, malformed inputs, path rejection,
+unsupported formats, PNG delivery, stdout isolation, and EOF shutdown. The
+deterministic renderer exists only in tests and cannot be enabled by a server
+flag. Real MuJoCo rendering has separate local and stdio probes: environments
+without a usable graphics connection explicitly skip these, while deterministic
+image transport remains required. No test sends a funded model request.
+
+Treat transport, real-rendering, and live-Claude acceptance as separate gates.
+On macOS, sandboxed execution may report an invalid CoreGraphics connection
+while normal graphics access succeeds. A rendering skip is not a passing visual
+acceptance result.
