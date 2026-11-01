@@ -34,7 +34,7 @@ GhostGUI.
 
 - [Architecture](architecture.md) maps the source tree and data flow.
 - [Local Agent Command Layer](agent_integration.md) documents the headless
-  workspace, stdio MCP setup, bounded rendering, deterministic tools, transactions,
+  workspace, stdio MCP and GUI attachment setup, bounded rendering, deterministic tools, transactions,
   and compatibility boundaries.
 - [Implementation Plan](implementation_plan.md) coordinates agent integration,
   motion reliability, and the UI redesign with compatibility and release gates.

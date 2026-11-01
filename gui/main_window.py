@@ -292,6 +292,7 @@ class RobotGuiMainWindow(QMainWindow):
         self._shutting_down = False
         self._ai_motion_controls_enabled = True
         self.current_project = None
+        self._project_workspace_payload = {}
         self._pending_project_restore = None
         self._pending_project_restore_autosave = False
         self._pending_project_restore_source = "direct"
@@ -401,6 +402,8 @@ class RobotGuiMainWindow(QMainWindow):
             self.ui_settings,
             self.background_jobs,
         )
+        from .agent_bridge import AgentBridgeController
+        self.agent_bridge_controller = AgentBridgeController(self)
         if self._restore_left_sidebar_collapsed:
             restored_width = self._left_sidebar_last_width
             self.set_left_sidebar_visible(False)
@@ -1234,8 +1237,8 @@ class RobotGuiMainWindow(QMainWindow):
         playing = viewer.play_timer.isActive()
         self.playback_action.setText("Pause" if playing else "Play")
         self.playback_action.setIcon(theme_icon("pause" if playing else "play", self))
-        self.undo_action.setEnabled(bool(self.undo_stack))
-        self.redo_action.setEnabled(bool(self.redo_stack))
+        self.undo_action.setEnabled(bool(self.undo_stack) and mutation_enabled)
+        self.redo_action.setEnabled(bool(self.redo_stack) and mutation_enabled)
         self.copy_motion_range_action.setEnabled(has_robot)
         self.repeat_motion_action.setEnabled(has_robot)
         clipboard_compatible = (
@@ -1303,6 +1306,9 @@ class RobotGuiMainWindow(QMainWindow):
             event.ignore()
             return
         self._shutting_down = True
+        bridge = getattr(self, "agent_bridge_controller", None)
+        if bridge is not None:
+            bridge.shutdown()
         self.autosave_timer.stop()
         self.save_ui_settings()
         self.model_file_selection_stage.cancel()
@@ -1376,6 +1382,13 @@ class RobotGuiMainWindow(QMainWindow):
         model_info = self.model_registry.get(self.model_key)
         return getattr(model_info, "display_name", self.model_key)
 
+    def external_agent_blocks(self, action):
+        bridge = getattr(self, "agent_bridge_controller", None)
+        if bridge is not None and bridge.owns_document and not bridge.internal_transition:
+            self.show_status_message(f"Stop external control and resolve its Orange preview before {action}.")
+            return True
+        return False
+
     def project_transition_reason(self, action):
         clean = "".join(
             character.lower() if character.isalnum() else "_"
@@ -1447,6 +1460,8 @@ class RobotGuiMainWindow(QMainWindow):
         return False
 
     def confirm_project_transition(self, action):
+        if action != "close GhostGUI" and self.external_agent_blocks(action):
+            return False
         if not self.project_dirty or self.current_project is None:
             return True
 
@@ -1644,6 +1659,8 @@ class RobotGuiMainWindow(QMainWindow):
             QMessageBox.warning(self, "Save project failed", str(exc))
 
     def reset_workspace_for_new_project(self):
+        if self.external_agent_blocks("changing the active motion"):
+            return False
         was_suppressing_dirty = self._suppress_project_dirty
         self._suppress_project_dirty = True
         try:
@@ -1684,6 +1701,8 @@ class RobotGuiMainWindow(QMainWindow):
             self._suppress_project_dirty = was_suppressing_dirty
 
     def create_project_at(self, project_root, project_name, reset_workspace=False):
+        if self.external_agent_blocks("changing the active motion"):
+            return False
         if reset_workspace:
             self.reset_workspace_for_new_project()
         project = GhostGUIProject.create(
@@ -1693,6 +1712,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.current_model_display_name(),
         )
         self.current_project = project
+        self._project_workspace_payload = {}
         self.save_current_project(reason="initial_create")
         return project
 
@@ -1789,7 +1809,13 @@ class RobotGuiMainWindow(QMainWindow):
         viewer = self.viewer_3d
         canvas = viewer.canvas
         selected_kind, selected_name = viewer._selected_target()
-        return merge_workspace_payload({}, {
+        candidate = bool(getattr(viewer, "candidate_preview_active", False))
+        current_time = float(self.document.current_time if candidate else viewer.get_current_time())
+        duration = float(self.document.timeline_duration if candidate else viewer.timeline_duration)
+        control_frame = self.controls.current_frame().to_dict()
+        if candidate:
+            control_frame["time"] = current_time
+        return merge_workspace_payload(self._project_workspace_payload, {
             "schema_version": 1,
             "ai_motion_metadata": (
                 self.ai_assistant_controller.project_motion_metadata(self.document)
@@ -1799,11 +1825,11 @@ class RobotGuiMainWindow(QMainWindow):
             "active_view": self.viewer_tabs.tabText(
                 self.viewer_tabs.currentIndex()
             ),
-            "current_time": float(viewer.get_current_time()),
+            "current_time": current_time,
             "selected_frame": self.controls.frame_box.currentText(),
             "selected_row": int(self.controls.selected_row()),
-            "timeline_duration": float(viewer.timeline_duration),
-            "control_frame": self.controls.current_frame().to_dict(),
+            "timeline_duration": duration,
+            "control_frame": control_frame,
             "target_selection": {
                 "kind": selected_kind,
                 "name": selected_name,
@@ -1909,15 +1935,23 @@ class RobotGuiMainWindow(QMainWindow):
         self._pending_project_restore_source = "direct"
         return self.restore_project(project, autosave=autosave, source=source)
 
-    def restore_project(self, project, autosave=False, source="direct"):
+    def restore_project(self, project, autosave=False, source="direct", *, report_error=True):
+        if self.external_agent_blocks("changing the active motion"):
+            return False
+        def report(*arguments):
+            if report_error:
+                QMessageBox.warning(*arguments)
+            else:
+                raise ValueError(str(arguments[-1]))
+
         try:
             trajectory_data = project.read_trajectory_dict(autosave=autosave)
             workspace = project.read_workspace(autosave=autosave)
         except (OSError, TypeError, ValueError) as exc:
-            QMessageBox.warning(self, "Open project failed", str(exc))
+            report(self, "Open project failed", str(exc))
             return False
         if not isinstance(workspace, dict):
-            QMessageBox.warning(
+            report(
                 self,
                 "Open project failed",
                 "Project workspace data must be a JSON object.",
@@ -1933,7 +1967,7 @@ class RobotGuiMainWindow(QMainWindow):
         try:
             self.trajectory.load_project_dict(trajectory_data)
         except (TypeError, ValueError) as exc:
-            QMessageBox.warning(self, "Open project failed", str(exc))
+            report(self, "Open project failed", str(exc))
             return False
 
         if viewer.state_timeline is not None:
@@ -1948,7 +1982,7 @@ class RobotGuiMainWindow(QMainWindow):
                         autosave=autosave,
                     )
                 except ValueError as exc:
-                    QMessageBox.warning(self, "Open project failed", str(exc))
+                    report(self, "Open project failed", str(exc))
                     return False
             else:
                 viewer.clear_editable_timeline(keep_current_pose=True, reset_time=0.0)
@@ -1959,7 +1993,7 @@ class RobotGuiMainWindow(QMainWindow):
                 self.document,
             )
         except (TypeError, ValueError) as exc:
-            QMessageBox.warning(self, "Open project failed", str(exc))
+            report(self, "Open project failed", str(exc))
             return False
 
         timeline_duration = workspace.get("timeline_duration")
@@ -1971,7 +2005,7 @@ class RobotGuiMainWindow(QMainWindow):
             try:
                 self._restore_control_frame(TargetFrame.from_dict(dict(frame_data)))
             except (TypeError, ValueError) as exc:
-                QMessageBox.warning(self, "Open project failed", str(exc))
+                report(self, "Open project failed", str(exc))
                 return False
 
         was_suppressing_dirty = self._suppress_project_dirty
@@ -1998,6 +2032,7 @@ class RobotGuiMainWindow(QMainWindow):
             self.controls.table.clearSelection()
 
         self.current_project = project
+        self._project_workspace_payload = merge_workspace_payload({}, workspace)
         self.set_project_dirty(False)
         self.remember_current_project()
         project.append_session_event(
@@ -2588,6 +2623,8 @@ class RobotGuiMainWindow(QMainWindow):
         return True
 
     def undo_last_action(self):
+        if self.external_agent_blocks("changing the active motion"):
+            return False
         if not self.undo_stack:
             self.statusBar().showMessage("Nothing to undo.", 2000)
             return
@@ -2600,6 +2637,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.sync_workflow_toolbar()
 
     def redo_last_action(self):
+        if self.external_agent_blocks("changing the active motion"):
+            return False
         if not self.redo_stack:
             self.statusBar().showMessage("Nothing to redo.", 2000)
             return
@@ -2727,6 +2766,8 @@ class RobotGuiMainWindow(QMainWindow):
         )
 
     def on_model_changed(self, model_key):
+        if self.external_agent_blocks("changing the active motion"):
+            return False
         """Swap model-owned widgets while retaining the surrounding app."""
         if model_key == self.model_key:
             return
@@ -2932,6 +2973,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.show_status_message(f"Mesh folder: {self.import_mesh_folder}")
 
     def import_model_file(self, path):
+        if self.external_agent_blocks("changing the active motion"):
+            return False
         mesh_roots = (
             (self.import_mesh_folder,) if self.import_mesh_folder else ()
         )
@@ -3036,6 +3079,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.statusBar().clearMessage()
 
     def activate_model_session(self, model_key, session):
+        if self.external_agent_blocks("changing the active motion"):
+            return False
         previous_model_key = self.model_key
         restoring_project = (
             self._pending_project_restore is not None
@@ -3086,6 +3131,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.restore_pending_project_if_ready()
 
     def on_trajectory_csv_loaded(self, csv_path):
+        if self.external_agent_blocks("changing the active motion"):
+            return False
         playback_path = (
             self.viewer_3d.loaded_trajectory_playback_path() or csv_path
         )
@@ -3181,6 +3228,8 @@ class RobotGuiMainWindow(QMainWindow):
     # ============================================================
 
     def on_insert_time_requested(self):
+        if self.external_agent_blocks("editing committed motion"):
+            return False
         at_time = self.viewer_3d.get_current_time()
         dialog = insert_time_dialog(
             self,
@@ -3197,6 +3246,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.insert_timeline_time(at_time, dialog.value("duration"))
 
     def on_shift_entire_motion_requested(self):
+        if self.external_agent_blocks("editing committed motion"):
+            return False
         dialog = shift_motion_dialog(
             self,
             default_offset=self.viewer_3d.timeslice_step(),
@@ -3207,6 +3258,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.shift_entire_motion(dialog.value("offset"))
 
     def on_move_time_range_requested(self):
+        if self.external_agent_blocks("editing committed motion"):
+            return False
         step = self.viewer_3d.timeslice_step()
         start_time = self.viewer_3d.get_current_time()
         end_time = min(self.viewer_3d.timeline_duration, start_time + step)
@@ -3228,6 +3281,8 @@ class RobotGuiMainWindow(QMainWindow):
         )
 
     def on_scale_time_range_requested(self):
+        if self.external_agent_blocks("editing committed motion"):
+            return False
         bounds = timeline_editing.timeline_content_bounds(self.document)
         if bounds is None or bounds[1] <= bounds[0] + 1e-9:
             QMessageBox.warning(
@@ -3305,6 +3360,8 @@ class RobotGuiMainWindow(QMainWindow):
         return True
 
     def paste_motion_at_current_time(self, *, reverse=False):
+        if self.external_agent_blocks("editing committed motion"):
+            return False
         clip = self.motion_clipboard
         compatible = (
             clip is not None
@@ -3340,6 +3397,8 @@ class RobotGuiMainWindow(QMainWindow):
         return self._apply_timeline_edit(plan, description, message)
 
     def on_repeat_motion_requested(self):
+        if self.external_agent_blocks("editing committed motion"):
+            return False
         bounds = self._motion_range_bounds("Repeat Motion")
         if bounds is None:
             return
@@ -3561,6 +3620,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.document.set_timeline_duration(duration)
 
     def on_accept_timeslice_requested(self):
+        if self.external_agent_blocks("editing committed motion"):
+            return False
         before = self.capture_history_snapshot()
         if (
             self.viewer_3d.preview_active
@@ -3591,6 +3652,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.record_history_action("Commit keyframe")
 
     def on_delete_timeslice_requested(self):
+        if self.external_agent_blocks("editing committed motion"):
+            return False
         time = self.viewer_3d.get_current_time()
         deleted_targets = self.delete_timeslice_at_time(time)
         deleted_qpos = False
@@ -3821,6 +3884,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.mark_project_dirty("Display settings")
 
     def on_add_keyframe(self):
+        if self.external_agent_blocks("editing committed motion"):
+            return False
         """
         Add the currently edited target frame to the trajectory array.
         """
@@ -3832,6 +3897,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.record_history_action("Add keyframe")
 
     def on_update_keyframe(self):
+        if self.external_agent_blocks("editing committed motion"):
+            return False
         """
         Replace selected keyframe with current editor values.
         """
@@ -3848,6 +3915,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.record_history_action("Update keyframe")
 
     def on_delete_keyframe(self):
+        if self.external_agent_blocks("editing committed motion"):
+            return False
         """
         Delete selected keyframe.
         """
@@ -3864,6 +3933,8 @@ class RobotGuiMainWindow(QMainWindow):
         self.record_history_action("Delete keyframe")
 
     def on_clear_trajectory(self):
+        if self.external_agent_blocks("editing committed motion"):
+            return False
         keyframe_count = len(self.trajectory.frames)
         if keyframe_count == 0:
             self.show_status_message("Trajectory is already empty.")
@@ -3971,6 +4042,8 @@ class RobotGuiMainWindow(QMainWindow):
         return True
 
     def on_generate_trajectory(self):
+        if self.external_agent_blocks("editing committed motion"):
+            return False
         if len(self.trajectory.frames) == 0:
             self.show_status_message("Trajectory is empty. Add keyframes first.")
             return

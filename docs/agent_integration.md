@@ -1,7 +1,7 @@
 # Local Agent Command Layer
 
 GhostGUI exposes a Qt-free Python command layer for deterministic project and
-motion workflows. It does not call an LLM. Stdio MCP and bounded offscreen rendering are implemented. GUI attachment, the
+motion workflows. It does not call an LLM. Stdio MCP and bounded offscreen rendering are implemented. Opt-in GUI attachment is also implemented. The
 in-app autonomous loop and an agent CLI are later milestones
 in the [implementation plan](implementation_plan.md).
 
@@ -191,18 +191,19 @@ ghostgui-mcp --projects-dir ./projects --attach never
 ```
 
 This is a stdio process intended to be launched by an MCP client. Protocol data
-uses stdout; startup and application diagnostics use stderr. No network server
-or GUI connection is opened. The initialization instructions and
+uses stdout; startup and application diagnostics use stderr. With `--attach never`,
+no network server or GUI connection is opened. The initialization instructions and
 `ghostgui://workspace` resource identify the selected workspace, root, and
 approval policy. `--output-dir` optionally selects a separate export root;
 otherwise exports stay inside the opened project's exports directory.
 
-`--attach never` is the default. `required` and `auto` fail with an explicit
-unsupported-attachment error until the GUI bridge milestone is implemented;
-there is no silent fallback. Existing open GUI projects are unaffected.
+`--attach never` is the default. `required` connects to an opted-in GUI or fails;
+`auto` attempts attachment and announces any headless fallback on stderr and in
+initialization instructions. An established GUI connection never falls back
+to headless after a disconnect. See GUI attachment below.
 
 The default `--approval review` leaves `accept_candidate` pending user review.
-This milestone has no external approval interface; unattended headless clients
+Headless mode has no external approval interface; unattended headless clients
 must be launched explicitly with `--approval auto_accept`. The tool schema
 cannot change this policy or provide user approval. `auto_accept_and_export`
 also permits acceptance, but the client must still explicitly export and check
@@ -247,7 +248,7 @@ detached poses into private MuJoCo data and never changes Keyframes or navigatio
 
 Images are limited to 2 MiB total binary data (before base64 encoding), alongside
 the normal 64 KiB text result budget. They arrive as MCP `image/png` content,
-not file paths or fake placeholders. The renderer closes its offscreen context
+not file paths or fake placeholders. The headless renderer closes its offscreen context
 on every request. Missing GL returns `available: false` with code
 `rendering_unavailable` and no images. This is an observation, not visual
 validation. Unexpected renderer failures and image-limit violations are errors.
@@ -255,4 +256,95 @@ validation. Unexpected renderer failures and image-limit violations are errors.
 All calls and mutable model/resource reads are serialized within the process.
 A long generation/render call may delay other requests; cooperative interruption
 inside every solver or driver operation remains later work. On disconnect,
-the stdio server exits; no GUI, socket listener, or background agent remains.
+the stdio process exits. Headless mode leaves no GUI or listener; attached mode
+leaves the opted-in GUI available for review/reconnection until Stop or shutdown.
+
+## Attach To An Open GUI
+
+In **Motion Assistant**, enable **Allow external agent control** for the current
+session. It starts off every launch and is never persisted as an enabled setting.
+Select **Review before accepting** (the default) or explicitly authorize
+**Allow unattended acceptance** before enabling. **Edit existing Keyframes** is
+a separate trusted opt-in: without it, existing user-owned motion remains
+protected from agent changes. Protected Keyframes remain blocking in both modes.
+
+Launch the installed stdio adapter with:
+
+```bash
+ghostgui-mcp --attach required
+```
+
+Or configure Claude Code with the same project-scoped syntax:
+
+```bash
+claude mcp add --transport stdio --scope project ghostgui -- ghostgui-mcp --attach required
+```
+
+Only the GUI controls the attached approval/override policy. `--approval`,
+`--model`, `--projects-dir`, and `--output-dir` configure headless mode and cannot
+replace GUI policy or choose another GUI document. New/open project tools use
+the GUI's configured projects directory; saving and exporting the project already
+opened by the user use that project. Export file names remain sandboxed. The
+banner, initialization instructions, and workspace resource identify GUI versus
+headless selection. No paid provider call is needed to attach or test tools.
+
+The GUI writes a private discovery file below its configuration directory's
+`agent-bridges` folder. The waiting banner shows its path. If multiple GUI
+instances are enabled, choose one explicitly:
+
+```bash
+ghostgui-mcp --attach required --discovery-file ./selected-bridge.json
+```
+
+Replace the example with the local path shown by that GUI. Discovery contains a
+session identity and secret, not portable project configuration. Never commit it,
+share it, or log its contents. On POSIX, the directory and file must have owner-only
+0700/0600 permissions and the expected owner. The socket binds only to
+127.0.0.1 on a dynamic port, authenticates a random session token and protocol
+version, accepts one active client, and caps request/response frames. Discovery
+is removed and active credentials are revoked on Stop or normal shutdown. A
+crashed process may leave a stale file: remove that file locally after checking
+that the corresponding GUI is no longer running. Ambiguous discovery fails rather
+than selecting another open project arbitrarily.
+
+Tools mutate one worker-owned detached candidate. Immutable motion publications
+are decoded into separate GUI-owned preview timelines; the sampler never reads
+the worker's mutable document. A fresh generated path is published for preview
+and retained for subsequent external export across acceptance/save; edits invalidate
+it. GUI acceptance retains its existing derived-cache teardown, so regenerate
+before selecting generated output through the manual GUI export controls.
+The Orange preview can be scrubbed or played while
+committed Keyframes, navigation, provenance and history stay unchanged. Save and
+autosave during preview retain the committed time domain rather than the candidate
+preview duration. Unknown workspace extension fields survive GUI open/save. Manual
+motion editing and the compact assistant are paused while external control owns
+the document. Model/project transitions require resolving the candidate and saving
+unsaved motion first. A dirty project is never silently discarded; disconnect and
+use the normal GUI Save/Save As workflow when a tool cannot resolve it. Model
+switching retains the existing GUI dirty-project behavior.
+
+**Accept** in the external controls revalidates the latest candidate on the worker,
+then checks the actual GUI document identity, current protection and ownership on
+Qt's thread. It reuses the existing atomic motion/provenance/one-entry history
+transaction and clears preview only after success. One Undo reverses acceptance
+once external control is stopped. **Discard** drops the candidate. A remote tool
+cannot impersonate the trusted GUI Accept action. Unattended acceptance still
+requires successful current validation and the same stale/protection checks.
+
+**Stop / Disconnect** revokes the connection and cancels queued invocations.
+The last published candidate remains reviewable; Accept or Discard resolves it.
+Native generation/IK work may finish its bounded local computation before it
+observes cancellation; pending ownership is retained until that worker returns.
+Queued Qt callbacks have a 15-second timeout, and bridge calls have a 120-second
+timeout. Cancelled or expired callbacks do not run later or publish stale results.
+An atomic acceptance already completed before a disconnect remains committed and
+can be undone; losing its response does not retroactively roll back a completed
+transaction.
+
+Attached `render_views` captures private poses on the Qt/OpenGL thread using the
+existing clean-frame renderer. It temporarily selects nominal front/side cameras,
+restores camera and canvas presentation in `finally`, and respects the same PNG
+count/byte budgets. Captures are scaled within the requested dimensions, retain
+aspect ratio, and label time/view. A missing context or unfinished geometry
+reports `rendering_unavailable` with no image. Retry when the model is ready.
+The headless MuJoCo renderer remains independent of Qt.

@@ -3,8 +3,11 @@
 ## Local Deterministic Agent Commands
 
 The [local command layer](agent_integration.md) uses strict schemas, detached
-candidates, bounded checkpoints and revision/provenance checks. It introduces
-no network listener, MCP server or autonomous provider loop. The existing
+candidates, bounded checkpoints and revision/provenance checks. The optional stdio MCP adapter exposes
+the same runtime without a provider loop. Opt-in GUI attachment starts an
+authenticated loopback listener, disabled on every launch. Its private discovery
+secret, single-client limit, frame bounds and cancellation gates are described in
+[GUI attachment](agent_integration.md#attach-to-an-open-gui). The existing
 Motion Assistant provider workflow below remains separate.
 
 Only `ToolRuntime` is the untrusted dispatch entry point. New tools cannot

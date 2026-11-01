@@ -550,3 +550,19 @@ Treat transport, real-rendering, and live-Claude acceptance as separate gates.
 On macOS, sandboxed execution may report an invalid CoreGraphics connection
 while normal graphics access succeeds. A rendering skip is not a passing visual
 acceptance result.
+
+## GUI Attachment
+
+```bash
+python scripts/run_test_suite.py --pattern test_agent_bridge.py
+```
+
+Loopback socket access is required for this gate. Tests cover opt-in defaults,
+owner-only discovery, wrong tokens, competing clients, a real attached MCP client,
+non-bypassable GUI approval, worker/GUI candidate isolation, dirty-project and
+model transitions, stale/protected acceptance, disconnect rollback, timeout and
+shutdown callback suppression, capture restoration, and one-entry Undo/Redo.
+Run the normal full suite as well. Native visual acceptance must separately
+inspect a fully rendered robot, the Orange preview, the external controls,
+actual image capture and Accept/Undo/Redo; offscreen Qt has no usable canvas.
+No live model call is needed.

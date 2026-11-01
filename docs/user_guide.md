@@ -325,3 +325,12 @@ and workflow diagnostics.
   selection.
 - IK priority numbers are descriptive metadata; the current solver uses one
   weighted task stack rather than strict null-space priority projection.
+
+## External Agent Control
+
+In Motion Assistant, **Allow external agent control** opts this GUI session into
+local MCP attachment. It starts off. Keep **Review before accepting** to inspect
+the Orange preview before **Accept** or **Discard**. **Stop / Disconnect** revokes
+access while retaining the last candidate for review. Resolve the preview and
+stop external control to resume manual editing and Undo. Setup, policies,
+limits and discovery are covered in [GUI attachment](agent_integration.md#attach-to-an-open-gui).

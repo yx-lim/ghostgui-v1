@@ -3,7 +3,9 @@
 Status: W0 baseline and W1 shared-service/command-layer implementation are
 complete. W2 transport is implemented and tested; real rendering passes with
 macOS graphics access and reports unavailable inside the sandbox. Live Claude
-acceptance remains untested. W3 and later phases remain planned.
+acceptance remains untested. W3 GUI attachment is implemented with opt-in review,
+authenticated loopback access, immutable preview publications and one-entry Undo.
+Native Qt preview/capture and Accept/Undo/Redo passed. W4 and later remain planned.
 Update the guide as milestones are accepted; the later features below are not current product capabilities.
 
 This combines the [UI/UX review](../review/01-uiux-redesign.md),

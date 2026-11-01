@@ -169,6 +169,10 @@ class AIAssistantController:
         )
 
     def start_edit(self, instruction: str) -> None:
+        bridge = getattr(self.host, "agent_bridge_controller", None)
+        if bridge is not None and bridge.owns_document:
+            self.panel.show_error("Disconnect external control and resolve its Orange preview first.")
+            return
         if self.active_handle is not None:
             return
         replacing_candidate = self.session_staged
@@ -200,12 +204,20 @@ class AIAssistantController:
         self._start_request(instruction, refinement=False)
 
     def refine(self, instruction: str) -> None:
+        bridge = getattr(self.host, "agent_bridge_controller", None)
+        if bridge is not None and bridge.owns_document:
+            self.panel.show_error("Disconnect external control and resolve its Orange preview first.")
+            return
         if not self.session_staged or self.active_handle is not None:
             return
         self._pending_refinement = instruction.strip()
         self._start_request(instruction, refinement=True)
 
     def start_visual_refinement(self, instruction: str = "") -> None:
+        bridge = getattr(self.host, "agent_bridge_controller", None)
+        if bridge is not None and bridge.owns_document:
+            self.panel.show_error("Disconnect external control and resolve its Orange preview first.")
+            return
         if not self.session_staged or self.active_handle is not None:
             return
         if self.host.robot_model_3d is None:
@@ -311,6 +323,10 @@ class AIAssistantController:
         self.preview()
 
     def start_visual_verification(self, instruction: str = "") -> None:
+        bridge = getattr(self.host, "agent_bridge_controller", None)
+        if bridge is not None and bridge.owns_document:
+            self.panel.show_error("Disconnect external control and resolve its Orange preview first.")
+            return
         if not self.session_staged or self.active_handle is not None:
             return
         if self.host.robot_model_3d is None:
@@ -485,6 +501,10 @@ class AIAssistantController:
         return self._session_goal or addition or "Improve the remaining visual motion issues."
 
     def start_critique(self, instruction: str) -> None:
+        bridge = getattr(self.host, "agent_bridge_controller", None)
+        if bridge is not None and bridge.owns_document:
+            self.panel.show_error("Disconnect external control and resolve its Orange preview first.")
+            return
         """Inspect committed or staged motion without opening an edit session."""
 
         if self.active_handle is not None:

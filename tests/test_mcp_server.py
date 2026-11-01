@@ -210,12 +210,17 @@ class MCPTransportTests(unittest.IsolatedAsyncioTestCase):
                                     capture_output=True, text=True, timeout=10)
             self.assertEqual(closed.returncode, 0, closed.stderr)
             self.assertFalse(closed.stdout)
-        for mode in ['required', 'auto']:
-            result = subprocess.run([str(command), '--projects-dir', '.', '--attach', mode],
-                                    capture_output=True, text=True, timeout=10)
-            self.assertEqual(result.returncode, 2)
-            self.assertFalse(result.stdout)
-            self.assertIn('unavailable', result.stderr)
+        with tempfile.TemporaryDirectory() as directory:
+            for mode in ['required', 'auto']:
+                result = subprocess.run([str(command), '--projects-dir', directory, '--attach', mode,
+                                         '--discovery-file', str(Path(directory) / 'missing.json')], input='',
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 2 if mode == 'required' else 0, result.stderr)
+                self.assertFalse(result.stdout)
+                self.assertIn('unavailable', result.stderr)
+                if mode == 'auto':
+                    self.assertIn('headless fallback', result.stderr)
+
 
 
 if __name__ == '__main__' and '--serve-stub' in sys.argv:

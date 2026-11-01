@@ -65,7 +65,7 @@ def _is_core_robotics(path: Path) -> bool:
 
 def _is_agent_api(path: Path) -> bool:
     parts = path.parts
-    return any(parts[index:index + 2] == ("application", "agent_api")
+    return any(parts[index:index + 2] in {("application", "agent_api"), ("application", "agent_bridge")}
                for index in range(len(parts) - 1))
 
 
@@ -90,7 +90,7 @@ def check_file(path: Path, layer: str) -> list[ArchitectureViolation]:
             if _is_agent_api(path) and imported_root in FORBIDDEN_CORE_IMPORTS:
                 violations.append(ArchitectureViolation(
                     path, int(getattr(node, "lineno", 1)),
-                    f"application/agent_api must remain headless ({imported_root})",
+                    f"agent application modules must remain headless ({imported_root})",
                 ))
                 continue
             if (

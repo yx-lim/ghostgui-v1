@@ -10,6 +10,10 @@ in this repository.
 
 ### Added
 
+- Opt-in authenticated GUI attachment for external MCP agents, with immutable
+  Orange preview, current-revision Accept, one-entry Undo, visible activity and
+  Stop/Disconnect. Camera capture stays on the Qt thread and restores presentation.
+
 - Optional `ghostgui-mcp` stdio server with shared tool schemas, resources, a
   motion-authoring prompt, structured errors, and bounded timestamped MuJoCo images.
 

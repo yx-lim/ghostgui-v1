@@ -288,7 +288,7 @@ class HeadlessWorkspace:
         self._validation_identity = source if report["valid"] else None
         return report
 
-    def accept_candidate(self, *, user_approved=False):
+    def _preflight_accept(self):
         session = self.candidate()
         if session is None:
             raise ValueError("no candidate to accept")
@@ -305,6 +305,10 @@ class HeadlessWorkspace:
                     (metadata.author is EditAuthor.USER and not self.allow_user_override)
                 ):
                     raise ValueError("candidate affects protected or user-owned content")
+        return session
+
+    def accept_candidate(self, *, user_approved=False):
+        session = self._preflight_accept()
         if self.approval == "review" and not user_approved:
             return {"status": "pending_user_review"}
         before = (capture_motion_state(self.committed), self.metadata_store.snapshot())

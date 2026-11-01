@@ -112,14 +112,15 @@ class ArchitectureGuardrailTests(unittest.TestCase):
             root = Path(directory)
             for layer in architecture.SOURCE_LAYERS:
                 (root / layer).mkdir()
-            api = root / "application" / "agent_api"
-            api.mkdir()
-            (api / "bad.py").write_text(
-                "from PySide6.QtCore import QObject\nfrom OpenGL.GL import glClear\n",
-                encoding="utf-8",
-            )
+            for name in ("agent_api", "agent_bridge"):
+                api = root / "application" / name
+                api.mkdir()
+                (api / "bad.py").write_text(
+                    "from PySide6.QtCore import QObject\nfrom OpenGL.GL import glClear\n",
+                    encoding="utf-8",
+                )
             violations = architecture.validate_repository(root)
-        self.assertEqual(len(violations), 2)
+        self.assertEqual(len(violations), 4)
         self.assertTrue(all("headless" in violation.message for violation in violations))
 
     def test_wheel_validator_can_require_runtime_resources(self):

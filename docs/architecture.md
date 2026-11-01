@@ -186,8 +186,17 @@ AI package exports may load provider adapter definitions without constructing
 SDK clients. The optional `application.mcp_server` stdio adapter exposes this catalog, resources
 and a prompt without duplicating motion handlers. `application.agent_rendering`
 owns bounded offscreen MuJoCo images and private rendering data; the runtime
-serializes rendering with all other commands. No LLM loop or GUI bridge is
-introduced here.
+serializes rendering with all other commands. No in-app autonomous LLM loop is introduced here.
+
+`application/agent_bridge/` owns Qt-free bounded JSON framing, owner-only discovery,
+authenticated loopback transport and its client. `gui/agent_bridge.py` owns the
+opt-in controls, one worker-owned `GuiWorkspace`, queued Qt invocation futures and
+immutable preview publications. Qt owns committed state, model/project changes,
+camera capture and the existing atomic Accept/history transaction. Worker code
+never publishes a mutable document to a Qt sampler. Stop/shutdown revoke tokens,
+remove discovery and invalidate pending callbacks; long native work cooperatively
+finishes before releasing worker ownership. GUI policy cannot be replaced by MCP
+arguments.
 See [Local Agent Command Layer](agent_integration.md) for the catalog and gates.
 
 ## Visualization Runtime
