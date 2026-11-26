@@ -29,7 +29,14 @@ def create_server(workspace=None, *, renderer=None, bridge_client=None):
     from application.agent_api.commands import build_command_catalog
     from application.agent_api.runtime import ToolRuntime
 
-    catalog = build_command_catalog(workspace, renderer=renderer)
+    from application.commands import Effect, Surface
+
+    if bridge_client is not None:
+        # Attached GUI: the GUI owns execution; the listing adds GUI app commands.
+        catalog = build_command_catalog(workspace, renderer=renderer, surface=Surface.MCP_ATTACHED,
+                                        ports={'gui': None})
+    else:
+        catalog = build_command_catalog(workspace, renderer=renderer)
     runtime = None if bridge_client is not None else ToolRuntime(catalog, workspace)
     lock = RLock()
     info = bridge_client.info if bridge_client is not None else {
@@ -54,14 +61,45 @@ def create_server(workspace=None, *, renderer=None, bridge_client=None):
 
     @server.list_tools()
     async def list_tools():
-        return [types.Tool(name=tool.name, description=tool.description, inputSchema=dict(tool.input_schema))
-                for tool in catalog.registry.definitions()]
+        tools = []
+        for tool in catalog.registry.definitions():
+            spec = catalog.specs.get(tool.name)
+            annotations = None if spec is None else types.ToolAnnotations(
+                title=spec.title, readOnlyHint=spec.effect is Effect.READ,
+                destructiveHint=spec.effect is Effect.DESTRUCTIVE, idempotentHint=bool(spec.idempotent),
+                openWorldHint=False)
+            tools.append(types.Tool(name=tool.name, description=tool.description,
+                                    inputSchema=dict(tool.input_schema), annotations=annotations))
+        return tools
+
+    async def confirm_destructive(name, arguments):
+        """MCP elicitation when the client supports it; otherwise deny."""
+        try:
+            session = server.request_context.session
+            capabilities = getattr(getattr(session, 'client_params', None), 'capabilities', None)
+            if capabilities is None or getattr(capabilities, 'elicitation', None) is None:
+                return False
+            spec = catalog.specs[name]
+            result = await session.elicit(
+                f'Allow GhostGUI to run {spec.title}? {spec.summarize(arguments)}'[:300],
+                {'type': 'object', 'properties': {'confirm': {'type': 'boolean', 'title': 'Allow'}},
+                 'required': ['confirm']})
+            return result.action == 'accept' and bool((result.content or {}).get('confirm'))
+        except Exception:
+            return False
 
     # Runtime is the authoritative validator, including structured validation errors.
     @server.call_tool(validate_input=False)
     async def call_tool(name, arguments):
-        with lock, redirect_stdout(sys.stderr):
-            outcome = dispatch(name, arguments)
+        from application.agent_api.runtime import ToolOutcome
+        spec = catalog.specs.get(name) if isinstance(name, str) else None
+        if spec is not None and spec.effect is Effect.DESTRUCTIVE and not await confirm_destructive(name, arguments or {}):
+            outcome = ToolOutcome(False, {'ok': False, 'code': 'user_declined',
+                                          'message': 'This action needs the user\'s confirmation and was not run',
+                                          'revision': None}, is_error=True)
+        else:
+            with lock, redirect_stdout(sys.stderr):
+                outcome = dispatch(name, arguments)
         content = [types.TextContent(type='text', text=json.dumps(outcome.payload, allow_nan=False))]
         content.extend(types.ImageContent(type='image', data=base64.b64encode(image.data).decode('ascii'),
                                          mimeType=image.mime_type) for image in outcome.images)

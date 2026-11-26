@@ -26,15 +26,25 @@ palette: type `/` plus a command name, for example `/recent actions`.
   request), capture the viewport, list recent actions.
 - Navigate (`go_to_time`), control playback, switch views and sidebars,
   change display options, camera and gizmo, select an End Effector, open Help.
-- Edit motion on the detached Orange preview with the shipped motion tools,
-  validate it and stage it for your review.
+- Edit motion on the detached Orange preview: author Keyframes, set Joint
+  Angles, solve IK, insert time, shift or move ranges, scale, repeat, copy and
+  paste (optionally reversed), set the duration, reset a pose to home, clear,
+  generate and validate, then stage it for your review.
+- Import a qpos or trajectory CSV from the project's `imports/` folder (plain
+  file names only). DSMS, mjlab and robot-model imports stay in the File menu.
+- Adjust export, generation and IK settings, validate Preview Path, and open
+  or close the MuJoCo viewer (confirmation required).
 - Create, open and save projects, load models and export trajectories.
 - Ask you a short clarifying question.
 
 ## Safety
 
 - Motion edits never change committed motion directly; one prompt produces at
-  most one Undo entry, created when the preview is accepted.
+  most one Undo entry, created when the preview is accepted. Because you review
+  every preview, command-bar edits may change Keyframes you authored (never
+  protected ones); external MCP agents keep the panel's override policy.
+- Your own clicks on menu and toolbar commands are recorded in the same action
+  log, so you can ask Claude to "do what I just did, but for the right hand".
 - Every command carries a risk class. Destructive commands (for example GUI
   Undo/Redo) show an inline card: **Deny** (default), **Allow once** or
   **Allow for this run**. A card times out as a denial after 5 minutes, and

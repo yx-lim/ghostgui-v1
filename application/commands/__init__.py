@@ -17,9 +17,11 @@ __all__ = [
 def default_registry() -> CommandRegistry:
     """The process-wide registry. Specs are immutable, so sharing it is safe."""
     from .catalog import app as app_catalog
+    from .catalog import motion as motion_catalog
     from .catalog.legacy import register_legacy
 
     registry = CommandRegistry()
     register_legacy(registry)
     app_catalog.register(registry)
+    motion_catalog.register(registry)
     return registry

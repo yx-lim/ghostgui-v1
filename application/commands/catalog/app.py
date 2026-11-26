@@ -12,7 +12,7 @@ from ..limits import CameraDistance, CameraPitch, CameraYaw, PlaybackSpeed, Ques
 from ..schema import Doc, Items, Len, Range
 from ..spec import Affinity, Binding, Effect, Surface
 
-INAPP = frozenset({Surface.AGENT_INAPP, Surface.PALETTE})
+INAPP = frozenset({Surface.AGENT_INAPP, Surface.PALETTE, Surface.MCP_ATTACHED})
 StateSection = Literal["project", "motion", "candidate", "playback", "view", "selection",
                        "history", "camera", "display", "commands"]
 
@@ -109,6 +109,41 @@ def show_help(ctx, topic: Literal["help_center", "keyboard_shortcuts", "tutorial
     return _gui(ctx, "show_help", topic)
 
 
+def preview_path(ctx):
+    """Validate the path from the committed pose to the user's manual (gizmo) preview pose and show it as
+    playback ghosts. Never changes Keyframes."""
+    return _gui(ctx, "preview_path")
+
+
+def set_export_settings(ctx, sample_interval_s: Annotated[float, Range(0.01, 10.0), Doc("Export sample interval in seconds.")] | None = None,
+                        motion_speed: PlaybackSpeed | None = None):
+    """Set the GUI export sample interval and DSMS motion speed used by File > Export."""
+    return _gui(ctx, "set_export_settings", sample_interval_s, motion_speed)
+
+
+def set_generation_settings(ctx, smoothing: Annotated[float, Range(0.0, 1.0), Doc("Corner smoothing 0-1.")]):
+    """Set the corner smoothing used when generating a trajectory in the GUI."""
+    return _gui(ctx, "set_generation_settings", smoothing)
+
+
+def set_ik_settings(ctx, damping: Annotated[float, Range(0.001, 1.0)] | None = None,
+                    max_iterations: Annotated[int, Range(1, 300)] | None = None,
+                    step_size: Annotated[float, Range(0.01, 1.0)] | None = None,
+                    max_step: Annotated[float, Range(0.001, 0.5)] | None = None,
+                    position_tolerance: Annotated[float, Range(0.0001, 0.1), Doc("Meters.")] | None = None,
+                    orientation_tolerance: Annotated[float, Range(0.001, 1.0), Doc("Radians.")] | None = None):
+    """Adjust the interactive IK solver settings used by gizmo dragging in the GUI."""
+    return _gui(ctx, "set_ik_settings", damping=damping, max_iterations=max_iterations, step_size=step_size,
+                max_step=max_step, position_tolerance=position_tolerance,
+                orientation_tolerance=orientation_tolerance)
+
+
+def simulation_viewer(ctx, action: Literal["open", "close"]):
+    """Open or close the external MuJoCo simulation viewer for the generated trajectory (opening launches
+    a separate process and needs the user's confirmation)."""
+    return _gui(ctx, "simulation_viewer", action)
+
+
 def ask_user(ctx, question: Question,
              options: Annotated[tuple[Annotated[str, Len(1, 60)], ...], Items(0, 6)] = ()):
     """Ask the user a short clarifying question and wait for the answer. Use only when the
@@ -126,7 +161,8 @@ def register(registry):
             surfaces=INAPP, tool="get_recent_actions")(get_recent_actions)
     command("timeline.go_to_time", title="Go to Time", effect=Effect.UI, **ui)(go_to_time)
     command("playback.control", title="Playback", effect=Effect.UI, tool="playback",
-            gui=(Binding("playbackToolbarButtonAction", {"action": "toggle"}),), **ui)(playback)
+            gui=(Binding("playbackToolbarButtonAction", {"action": "toggle"}),
+                 Binding("playbackToolbarButton", {"action": "toggle"})), **ui)(playback)
     command("view.layout", title="View Layout", effect=Effect.UI, tool="set_view",
             gui=(Binding("leftSidebarAction"), Binding("rightSidebarAction"),
                  Binding("leftSidebarCollapseButton"), Binding("rightSidebarCollapseButton")),
@@ -134,16 +170,26 @@ def register(registry):
     command("view.display", title="Display Options", effect=Effect.UI, tool="set_display", **ui)(set_display)
     command("view.camera", title="Camera", effect=Effect.UI, tool="set_camera", **ui)(set_camera)
     command("view.gizmo", title="Transform Gizmo", effect=Effect.UI, tool="set_gizmo",
-            gui=(Binding("gizmoVisibilityButtonAction"), Binding("moveToolButtonAction", {"mode": "translate"}),
-                 Binding("rotateToolButtonAction", {"mode": "rotate"})), **ui)(set_gizmo)
+            gui=(Binding("gizmoVisibilityButtonAction"), Binding("gizmoVisibilityButton"),
+                 Binding("moveToolButtonAction", {"mode": "translate"}), Binding("moveToolButton", {"mode": "translate"}),
+                 Binding("rotateToolButtonAction", {"mode": "rotate"}), Binding("rotateToolButton", {"mode": "rotate"})),
+            **ui)(set_gizmo)
     command("selection.target", title="Select Target", effect=Effect.UI, tool="select_target", **ui)(select_target)
     command("history.undo", title="Undo", effect=Effect.DESTRUCTIVE, tool="history_undo",
-            gui=(Binding("undoToolbarButtonAction"),), **ui)(history_undo)
+            gui=(Binding("undoToolbarButtonAction"), Binding("undoToolbarButton")), **ui)(history_undo)
     command("history.redo", title="Redo", effect=Effect.DESTRUCTIVE, tool="history_redo",
-            gui=(Binding("redoToolbarButtonAction"),), **ui)(history_redo)
+            gui=(Binding("redoToolbarButtonAction"), Binding("redoToolbarButton")), **ui)(history_redo)
     command("help.show", title="Help", effect=Effect.UI, tool="show_help",
             gui=(Binding("helpCenterAction"), Binding("keyboardShortcutsAction", {"topic": "keyboard_shortcuts"}),
                  Binding("startTutorialAction", {"topic": "tutorial"})), **ui)(show_help)
+    command("motion.preview_path", title="Preview Path", effect=Effect.UI, tool="preview_path",
+            gui=(Binding("planPreviewButtonAction"), Binding("planPreviewButton")), **ui)(preview_path)
+    command("settings.export", title="Export Settings", effect=Effect.UI, tool="set_export_settings", **ui)(set_export_settings)
+    command("settings.generation", title="Generation Settings", effect=Effect.UI, tool="set_generation_settings",
+            **ui)(set_generation_settings)
+    command("settings.ik", title="IK Settings", effect=Effect.UI, tool="set_ik_settings", **ui)(set_ik_settings)
+    command("simulation.viewer", title="MuJoCo Viewer", effect=Effect.DESTRUCTIVE, tool="simulation_viewer",
+            **ui)(simulation_viewer)
     command("interaction.ask_user", title="Ask User", effect=Effect.READ, tool="ask_user",
             surfaces=frozenset({Surface.AGENT_INAPP}))(ask_user)
     return registry

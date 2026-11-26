@@ -108,3 +108,21 @@ class HeadlessImportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DialogManifestTests(unittest.TestCase):
+    def test_every_gui_dialog_is_classified(self):
+        import ast
+
+        manifest = json.loads((ROOT / "tests" / "fixtures" / "dialog_manifest.json").read_text())
+        found = set()
+        dialog_names = {"QDialog"}
+        for _ in range(3):  # follow subclasses of dialogs defined under gui/
+            for path in (ROOT / "gui").rglob("*.py"):
+                for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                    if isinstance(node, ast.ClassDef) and any(
+                            getattr(base, "id", getattr(base, "attr", "")) in dialog_names for base in node.bases):
+                        found.add(node.name)
+            dialog_names |= found
+        self.assertEqual(sorted(found - set(manifest)), [], "classify new dialogs in dialog_manifest.json")
+        self.assertEqual(sorted(set(manifest) - found), [], "remove stale manifest entries")

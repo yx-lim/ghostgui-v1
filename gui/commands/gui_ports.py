@@ -257,3 +257,43 @@ class GuiCommandPort:
         {"help_center": w.show_help_center, "keyboard_shortcuts": w.show_keyboard_shortcuts,
          "tutorial": w.start_first_motion_tutorial}[topic]()
         return {"opened": topic}
+
+    # --------------------------------------------------------------- settings
+    def preview_path(self):
+        viewer = self._viewer()
+        if not viewer.preview_active:
+            raise ValueError("there is no manual preview pose to validate")
+        viewer.plan_preview()
+        return {"status": viewer.status_label.text()[:200]}
+
+    def set_export_settings(self, sample_interval_s=None, motion_speed=None):
+        viewer = self._viewer()
+        if sample_interval_s is not None:
+            viewer.set_export_dt(float(sample_interval_s))
+        if motion_speed is not None:
+            viewer.set_dsms_motion_speed(float(motion_speed))
+        return {"sample_interval_s": float(viewer.export_dt()), "motion_speed": float(viewer.dsms_motion_speed())}
+
+    def set_generation_settings(self, smoothing):
+        slider = self.window.controls.corner_smoothing_slider
+        slider.set_value(float(smoothing))
+        return {"smoothing": float(self.window.controls.corner_smoothing())}
+
+    def set_ik_settings(self, **values):
+        viewer = self._viewer()
+        widgets = {"damping": viewer.ik_damping, "max_iterations": viewer.ik_max_iterations,
+                   "step_size": viewer.ik_step_size, "max_step": viewer.ik_max_step,
+                   "position_tolerance": viewer.ik_position_tolerance,
+                   "orientation_tolerance": viewer.ik_orientation_tolerance}
+        for key, value in values.items():
+            if value is not None:
+                widgets[key].setValue(value)
+        return {key: widget.value() for key, widget in widgets.items()}
+
+    def simulation_viewer(self, action):
+        panel = self.window.viewer_3d_mujoco
+        if action == "open":
+            panel.open_viewer()
+        else:
+            panel.close_viewer()
+        return {"action": action}

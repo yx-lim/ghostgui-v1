@@ -52,6 +52,9 @@ class CommandCoverageTests(unittest.TestCase):
             write_baseline(BASELINE, report.unbound)
         errors = exemption_errors(controls, exemptions) + ratchet_errors(report, load_baseline(BASELINE))
         self.assertEqual(errors, [])
+        # Strict since M3: every named control is bound or exempt.
+        self.assertEqual(load_baseline(BASELINE), frozenset())
+        self.assertEqual(report.unbound, frozenset())
 
     def test_bound_controls_are_tagged(self):
         controls = collect_controls(self.window)

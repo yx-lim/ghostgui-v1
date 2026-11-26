@@ -353,3 +353,16 @@ count/byte budgets. Captures are scaled within the requested dimensions, retain
 aspect ratio, and label time/view. A missing context or unfinished geometry
 reports `rendering_unavailable` with no image. Retry when the model is ready.
 The headless MuJoCo renderer remains independent of Qt.
+
+## Registry Surfaces And MCP Annotations
+
+The shared registry projects onto several surfaces. Headless MCP keeps the
+shipped 24 tools unchanged. Attached MCP sessions (GUI bridge) and the in-app
+command bar additionally list GUI app commands (state, view, playback, camera,
+settings, history, help) and candidate timeline commands (`insert_time`,
+`shift_motion`, `move_time_range`, `set_motion_duration`, `copy_motion_range`,
+`paste_motion`, `clear_motion`, `reset_pose`, `import_file`, `list_projects`).
+Every MCP tool carries `ToolAnnotations` (`readOnlyHint`, `destructiveHint`,
+`idempotentHint`). Destructive tools request MCP elicitation and are denied
+when the client cannot confirm. Whichever surface creates the Orange preview
+owns it until Accept or Discard.

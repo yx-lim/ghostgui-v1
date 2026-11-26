@@ -14,7 +14,12 @@ in this repository.
   your own Anthropic key through the shared command registry, with streaming
   transcript, inline confirmations, Plan first, Stop, cost meter, Orange preview
   review and an offline command palette.
-- Shared Qt-free command registry used by GUI bindings, MCP and the command bar.
+- Shared Qt-free command registry used by GUI bindings, MCP and the command bar;
+  every named menu/toolbar control is bound or explicitly exempt.
+- Candidate timeline commands (insert, shift, move, duration, copy/paste, clear,
+  reset pose, sandboxed CSV import) and settings/Preview Path/MuJoCo viewer
+  commands for the command bar and attached MCP; MCP tool annotations and
+  elicitation for destructive commands.
 
 - Opt-in authenticated GUI attachment for external MCP agents, with immutable
   Orange preview, current-revision Accept, one-entry Undo, visible activity and

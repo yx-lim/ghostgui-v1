@@ -334,7 +334,12 @@ class AgentBridgeTests(unittest.TestCase):
                     async with ClientSession(read, write) as session:
                         info = await session.initialize()
                         self.assertIn('gui', info.instructions)
-                        self.assertEqual(len((await session.list_tools()).tools), 24)
+                        listed = {tool.name for tool in (await session.list_tools()).tools}
+                        legacy = {tool['name'] for tool in json.loads(
+                            (Path(__file__).parent / 'fixtures' / 'legacy_agent_tools.json').read_text())['tools']}
+                        # Attached sessions keep every shipped tool and add GUI app commands (M3).
+                        self.assertLessEqual(legacy, listed)
+                        self.assertIn('set_view', listed)
                         resource = await session.read_resource('ghostgui://workspace')
                         self.assertEqual(json.loads(resource.contents[0].text)['approval'], 'review')
                         async def call(name, arguments):

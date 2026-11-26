@@ -431,6 +431,7 @@ class RobotGuiMainWindow(QMainWindow):
         from .commands import CommandBinder
         self.command_binder = CommandBinder(default_registry(), self)
         self.command_binder.tag()
+        self.command_binder.route(self.agent_command_bar.controller.action_log)
 
         # Initial view
         if self.robot_model_3d is not None:

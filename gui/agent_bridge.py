@@ -338,6 +338,10 @@ class AgentBridgeController(QObject):
         self.inapp_runtime = None
         self.inapp_port = None
         self.action_log = None
+        # The user reviews every in-app candidate before Accept, so command-bar edits may change
+        # user-owned (not protected) motion; external agents keep the panel's policy.
+        self.inapp_allow_user_override = True
+        self.candidate_origin = None
         self.closed = False
         self.internal_transition = False
         self._pending = []
@@ -443,6 +447,15 @@ class AgentBridgeController(QObject):
             return future
         return self._submit(name, {}, Event(), trusted=True)
 
+    def _external_runtime(self, workspace):
+        from application.commands import Origin, Surface
+        from .commands.gui_ports import GuiCommandPort
+        self.inapp_port = self.inapp_port or GuiCommandPort(self.host)
+        return ToolRuntime(build_command_catalog(
+            workspace, renderer=GuiViewRenderer(workspace), surface=Surface.MCP_ATTACHED,
+            ports={'gui': self.inapp_port}, origin=Origin.AGENT_MCP, action_log=self.action_log,
+            gui=lambda callback: workspace.gui(callback)), workspace)
+
     def _inapp_runtime(self):
         if self.inapp_runtime is None:
             from application.commands import Origin, Surface
@@ -463,17 +476,26 @@ class AgentBridgeController(QObject):
             if self.workspace is None:
                 live = self.invoker.call(self.capture_live, cancellation)
                 self.workspace = GuiWorkspace(self, live)
-                self.runtime = ToolRuntime(build_command_catalog(self.workspace, renderer=GuiViewRenderer(self.workspace)), self.workspace)
+                self.runtime = self._external_runtime(self.workspace)
                 self.inapp_runtime = None
             workspace = self.workspace
+            # Whichever surface creates the candidate owns it until Accept or Discard.
+            if not trusted:
+                surface = 'inapp' if inapp else 'external'
+                if workspace.candidate() is None:
+                    self.candidate_origin = surface
+                elif self.candidate_origin not in (None, surface):
+                    raise ValueError('document_owned_elsewhere: resolve the other Orange preview first')
+            workspace.allow_user_override = (self.inapp_allow_user_override if self.candidate_origin == 'inapp'
+                                             else self.allow_user_override)
             workspace.call_cancel = cancellation
             runtime = self._inapp_runtime() if inapp else self.runtime
             runtime.cancellation_token = CancelToken(cancellation)
-            spec = runtime.catalog.specs.get(name) if inapp and isinstance(name, str) else None
-            if inapp and spec is not None:
+            spec = runtime.catalog.specs.get(name) if isinstance(name, str) else None
+            if spec is not None:
                 from application.commands import Effect
                 light = spec.effect in (Effect.READ, Effect.UI, Effect.DESTRUCTIVE) and 'gui' in spec.requires
-                if self.server is not None and not light and spec.effect is not Effect.READ:
+                if inapp and self.server is not None and not light and spec.effect is not Effect.READ:
                     raise ValueError('document_owned_elsewhere: external control owns the document')
             else:
                 light = False

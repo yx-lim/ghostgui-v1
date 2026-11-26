@@ -1,0 +1,11 @@
+{
+ "AISettingsDialog": "forbidden:secrets",
+ "AnthropicKeyDialog": "forbidden:secrets",
+ "HelpCenterDialog": "read_only_ui (show_help, non-modal show)",
+ "KeyboardShortcutsDialog": "read_only_ui (show_help, non-modal show)",
+ "MotionRangeDialog": "argument collector for copy_motion_range",
+ "ProjectBrowserDialog": "argument collector for open_project / list_projects",
+ "RepeatMotionDialog": "argument collector for repeat_motion",
+ "ScaleTimeRangeDialog": "argument collector for edit_timeline",
+ "TimelineEditDialog": "argument collector for insert_time / shift_motion / move_time_range"
+}

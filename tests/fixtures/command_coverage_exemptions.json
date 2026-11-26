@@ -31,6 +31,14 @@
   "category": "human_review",
   "reason": "Motion Assistant request control"
  },
+ "aiPreviewButton": {
+  "category": "human_review",
+  "reason": "Motion Assistant preview review belongs to the user"
+ },
+ "aiRefineButton": {
+  "category": "text_input",
+  "reason": "Motion Assistant refinement composer"
+ },
  "aiRejectButton": {
   "category": "human_review",
   "reason": "Motion Assistant review belongs to the user"
@@ -42,6 +50,18 @@
  "aiSubmitButton": {
   "category": "text_input",
   "reason": "Motion Assistant composer"
+ },
+ "importModelAction": {
+  "category": "human_only:library",
+  "reason": "robot model import changes the model library; user-only in v1"
+ },
+ "importTrajectoryDsmsAction": {
+  "category": "user_picks_file",
+  "reason": "DSMS import needs a directory chosen in the GUI"
+ },
+ "importTrajectoryMjlabAction": {
+  "category": "user_picks_file",
+  "reason": "mjlab import needs a source interval and file chosen in the GUI"
  },
  "sectionHeader": {
   "category": "layout_chrome",

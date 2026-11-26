@@ -44,3 +44,29 @@ class CommandBinder:
                 control.setProperty(COMMAND_PROPERTY, spec.id)
                 self.tagged[name] = spec.id
         return dict(self.tagged)
+
+    def route(self, action_log) -> int:
+        """Route mode: record the user's own triggers of bound controls in the action log.
+
+        Behaviour stays on the existing slots (dialogs remain argument collectors); the
+        registry records the canonical command so ``get_recent_actions`` can reuse it.
+        """
+        from application.commands import Origin
+
+        controls = collect_controls(self.root)
+        routed = 0
+        for name, (spec, args) in self.registry.bindings().items():
+            control = controls.get(name)
+            if control is None:
+                continue
+            default_action = getattr(control, "defaultAction", None)
+            if isinstance(control, QAbstractButton) and callable(default_action) and default_action() is not None:
+                continue  # its QAction is routed instead; avoid double records
+            signal = control.triggered if isinstance(control, QAction) else control.clicked
+
+            def record(*_unused, _spec=spec, _args=dict(args)):
+                action_log.record(origin=Origin.USER_GUI.value, command=_spec.tool, arguments=_args, status="ok")
+
+            signal.connect(record)
+            routed += 1
+        return routed
