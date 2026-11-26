@@ -32,6 +32,8 @@ class ProviderAuthenticationError(ProviderError):
 class ProviderRateLimitError(ProviderError):
     """A provider rejected a request because its usage limit was reached."""
 
+    retry_after: float | None = None
+
 
 class ProviderResponseError(ProviderError):
     """A provider returned a response that cannot satisfy the common contract."""
@@ -60,3 +62,47 @@ class ToolValidationError(AIError, ValueError):
 
 class ToolExecutionError(AIError):
     """A registered tool failed while executing validated arguments."""
+
+
+class ProviderOfflineError(ProviderError):
+    """The provider could not be reached (connection or timeout)."""
+
+
+class ProviderOverloadedError(ProviderError):
+    """The provider is overloaded or temporarily unavailable after SDK retries."""
+
+    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class ProviderPermissionError(ProviderError):
+    """The key is valid but lacks permission for the request."""
+
+
+class ProviderModelUnavailableError(ProviderError):
+    """The selected model does not exist or is unavailable for this key."""
+
+
+class ProviderBadRequestError(ProviderError):
+    """The provider rejected the request shape."""
+
+    def __init__(self, message: str, *, request_id: str = "") -> None:
+        super().__init__(message)
+        self.request_id = request_id
+
+
+class ProviderRefusalError(ProviderError):
+    """The model (and any fallback) declined the request."""
+
+    def __init__(self, message: str, *, category: str | None = None) -> None:
+        super().__init__(message)
+        self.category = category
+
+
+class ProviderContextLimitError(ProviderError):
+    """The conversation no longer fits the model's context window."""
+
+
+class ProviderMalformedStreamError(ProviderError):
+    """A streamed tool input could not be parsed; the turn may be re-issued."""

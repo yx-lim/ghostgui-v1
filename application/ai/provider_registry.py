@@ -30,6 +30,11 @@ class ProviderRegistration:
     credential_identifier: str
     environment_variables: tuple[str, ...]
     sdk_distribution: str
+    agent_models: tuple[str, ...] = ()
+    supports_agent_loop: bool = False
+    supports_fallbacks: bool = False
+    supports_mid_conversation_system: bool = False
+    agent_factory: Callable[..., object] | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip() or self.name != self.name.strip().lower():
@@ -50,6 +55,8 @@ class ProviderRegistration:
             raise ValueError("credential environment variables must not be empty")
         if not self.sdk_distribution.strip():
             raise ValueError("SDK distribution must not be empty")
+        if self.supports_agent_loop and (not self.agent_models or self.agent_factory is None):
+            raise ValueError("agent-capable providers need agent models and an agent factory")
 
     @property
     def default_model(self) -> str:
@@ -57,6 +64,11 @@ class ProviderRegistration:
 
     def create(self, *, api_key: str | None = None) -> LLMProvider:
         return self.factory(api_key=api_key)
+
+    def create_agent(self, *, api_key=None):
+        if not self.supports_agent_loop or self.agent_factory is None:
+            raise ValueError(f"{self.display_name} does not support the command bar agent loop")
+        return self.agent_factory(api_key=api_key)
 
 
 class ProviderRegistry:
@@ -122,6 +134,12 @@ def _gemini_factory(*, api_key: str | None = None) -> LLMProvider:
     return GeminiProvider(api_key=api_key)
 
 
+def _anthropic_agent_factory(*, api_key=None):
+    from application.ai.providers.anthropic_agent import AnthropicAgentProvider
+
+    return AnthropicAgentProvider(api_key=api_key)
+
+
 def _anthropic_factory(*, api_key: str | None = None) -> LLMProvider:
     from application.ai.providers.anthropic import AnthropicProvider
 
@@ -153,6 +171,11 @@ DEFAULT_PROVIDER_REGISTRY = ProviderRegistry(
             credential_identifier="anthropic",
             environment_variables=("ANTHROPIC_API_KEY",),
             sdk_distribution="anthropic",
+            agent_models=("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"),
+            supports_agent_loop=True,
+            supports_fallbacks=True,
+            supports_mid_conversation_system=True,
+            agent_factory=_anthropic_agent_factory,
         ),
     ),
     default_name="gemini",

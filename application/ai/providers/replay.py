@@ -372,3 +372,86 @@ def _validate_fingerprint(value: str) -> str:
     ):
         raise ProviderRecordingError("provider recording fingerprint is invalid")
     return value
+
+
+# --- Agent-loop replay ------------------------------------------------------------
+
+def agent_request_fingerprint(request) -> str:
+    """Stable digest over model, settings, tool-schema hash and full message blocks.
+
+    Image data is folded in through its digest so fixtures stay small but strict.
+    """
+    import hashlib
+
+    from application.ai.agent_wire import canonical_json
+
+    def fold(value):
+        if isinstance(value, dict):
+            if value.get("type") == "base64" and "data" in value:
+                return {**value, "data": hashlib.sha256(str(value["data"]).encode()).hexdigest()}
+            return {key: fold(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [fold(item) for item in value]
+        return value
+
+    tools_hash = hashlib.sha256(canonical_json([dict(tool) for tool in request.tools]).encode()).hexdigest()
+    body = {"model": request.model, "effort": request.effort.value, "system": request.system,
+            "tools": tools_hash, "messages": fold([dict(message) for message in request.messages]),
+            "thinking_display": request.thinking_display, "fallbacks": request.fallbacks}
+    return hashlib.sha256(canonical_json(body).encode()).hexdigest()
+
+
+class AgentReplayProvider:
+    """Replays recorded turns keyed by request fingerprint; fails closed on any mismatch."""
+
+    provider_name = "replay"
+    supports_agent_loop = True
+    supports_mid_conversation_system = True
+
+    def __init__(self, recordings):
+        self._turns = {}
+        for entry in recordings:
+            self._turns[entry["fingerprint"]] = entry["response"]
+
+    @classmethod
+    def from_file(cls, path):
+        import json
+        from pathlib import Path
+
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return cls(data["turns"])
+
+    async def stream_turn(self, request, on_event=None, cancellation_token=None):
+        from application.ai.agent_wire import AgentStopReason, AgentTurnResponse, AgentUsage
+        from application.ai.errors import ProviderResponseError
+
+        fingerprint = agent_request_fingerprint(request)
+        if fingerprint not in self._turns:
+            raise ProviderResponseError("no recorded agent turn matches this request",
+                                        diagnostic_details={"fingerprint": fingerprint})
+        raw = self._turns[fingerprint]
+        usage = raw.get("usage") or {}
+        return AgentTurnResponse(
+            content=tuple(dict(block) for block in raw["content"]),
+            stop_reason=AgentStopReason.parse(raw.get("stop_reason")),
+            usage=AgentUsage(input_tokens=int(usage.get("input_tokens", 0)),
+                             output_tokens=int(usage.get("output_tokens", 0)),
+                             served_model=raw.get("model", request.model)),
+            model=raw.get("model", request.model), request_id="req_replay",
+            stop_details=raw.get("stop_details"))
+
+    async def aclose(self):
+        return None
+
+
+def record_agent_turn(request, response) -> dict:
+    """Sanitised fixture entry (secrets scrubbed) for a dev-only recorder."""
+    import json
+
+    from application.ai.secrets import scrub_secrets
+
+    content = json.loads(scrub_secrets(json.dumps([dict(block) for block in response.content])))
+    return {"fingerprint": agent_request_fingerprint(request), "response": {
+        "content": content, "stop_reason": response.stop_reason.value, "model": response.model,
+        "usage": {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens},
+        "stop_details": response.stop_details}}
