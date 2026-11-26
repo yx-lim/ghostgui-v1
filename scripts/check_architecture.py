@@ -65,7 +65,8 @@ def _is_core_robotics(path: Path) -> bool:
 
 def _is_agent_api(path: Path) -> bool:
     parts = path.parts
-    return any(parts[index:index + 2] in {("application", "agent_api"), ("application", "agent_bridge")}
+    return any(parts[index:index + 2] in {("application", "agent_api"), ("application", "agent_bridge"),
+                                                   ("application", "commands")}
                for index in range(len(parts) - 1))
 
 

@@ -13,7 +13,12 @@ and acceptance history. Caller code configures the project root, optional
 output root, registered models, and approval policy.
 
 `build_command_catalog(workspace)` provides closed JSON schemas through the
-existing `ToolRegistry`. `ToolRuntime.call(name, arguments)` is the untrusted
+existing `ToolRegistry`. It is a projection of the shared, Qt-free command
+registry in `application/commands/` (`default_registry()`), which is also the
+source for GUI bindings and the in-app command bar. Each `CommandSpec` carries a
+tool name, closed schema, risk class (`Effect`), thread affinity and the
+surfaces it is exposed on. The MCP projection is pinned by
+`tests/fixtures/legacy_agent_tools.json`. `ToolRuntime.call(name, arguments)` is the untrusted
 dispatch boundary. Front ends must use the runtime rather than calling registry
 handlers or workspace methods directly.
 

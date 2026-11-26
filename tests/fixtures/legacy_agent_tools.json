@@ -1,0 +1,777 @@
+{
+ "meta": {
+  "accept_candidate": {
+   "app_level": true,
+   "mutates_candidate": false,
+   "read_only": false,
+   "returns_images": false
+  },
+  "apply_edit_spec": {
+   "app_level": false,
+   "mutates_candidate": true,
+   "read_only": false,
+   "returns_images": false
+  },
+  "author_keyframes": {
+   "app_level": false,
+   "mutates_candidate": true,
+   "read_only": false,
+   "returns_images": false
+  },
+  "commit_keyframe": {
+   "app_level": false,
+   "mutates_candidate": true,
+   "read_only": false,
+   "returns_images": false
+  },
+  "delete_keyframes": {
+   "app_level": false,
+   "mutates_candidate": true,
+   "read_only": false,
+   "returns_images": false
+  },
+  "discard_candidate": {
+   "app_level": true,
+   "mutates_candidate": false,
+   "read_only": false,
+   "returns_images": false
+  },
+  "edit_timeline": {
+   "app_level": false,
+   "mutates_candidate": true,
+   "read_only": false,
+   "returns_images": false
+  },
+  "export_trajectory": {
+   "app_level": true,
+   "mutates_candidate": false,
+   "read_only": false,
+   "returns_images": false
+  },
+  "generate_trajectory": {
+   "app_level": true,
+   "mutates_candidate": false,
+   "read_only": false,
+   "returns_images": false
+  },
+  "get_pose": {
+   "app_level": false,
+   "mutates_candidate": false,
+   "read_only": true,
+   "returns_images": false
+  },
+  "get_robot_summary": {
+   "app_level": false,
+   "mutates_candidate": false,
+   "read_only": true,
+   "returns_images": false
+  },
+  "get_status": {
+   "app_level": false,
+   "mutates_candidate": false,
+   "read_only": true,
+   "returns_images": false
+  },
+  "list_keyframes": {
+   "app_level": false,
+   "mutates_candidate": false,
+   "read_only": true,
+   "returns_images": false
+  },
+  "list_models": {
+   "app_level": false,
+   "mutates_candidate": false,
+   "read_only": true,
+   "returns_images": false
+  },
+  "load_model": {
+   "app_level": true,
+   "mutates_candidate": false,
+   "read_only": false,
+   "returns_images": false
+  },
+  "new_project": {
+   "app_level": true,
+   "mutates_candidate": false,
+   "read_only": false,
+   "returns_images": false
+  },
+  "open_project": {
+   "app_level": true,
+   "mutates_candidate": false,
+   "read_only": false,
+   "returns_images": false
+  },
+  "render_views": {
+   "app_level": false,
+   "mutates_candidate": false,
+   "read_only": true,
+   "returns_images": true
+  },
+  "repeat_motion": {
+   "app_level": false,
+   "mutates_candidate": true,
+   "read_only": false,
+   "returns_images": false
+  },
+  "save_project": {
+   "app_level": true,
+   "mutates_candidate": false,
+   "read_only": false,
+   "returns_images": false
+  },
+  "set_joint_angles": {
+   "app_level": false,
+   "mutates_candidate": true,
+   "read_only": false,
+   "returns_images": false
+  },
+  "solve_ik": {
+   "app_level": false,
+   "mutates_candidate": true,
+   "read_only": false,
+   "returns_images": false
+  },
+  "undo": {
+   "app_level": true,
+   "mutates_candidate": false,
+   "read_only": false,
+   "returns_images": false
+  },
+  "validate_motion": {
+   "app_level": false,
+   "mutates_candidate": false,
+   "read_only": true,
+   "returns_images": false
+  }
+ },
+ "tools": [
+  {
+   "description": "List available robot models.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+   },
+   "name": "list_models"
+  },
+  {
+   "description": "Inspect workspace and candidate revision.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+   },
+   "name": "get_status"
+  },
+  {
+   "description": "Load a registered model when no unsaved motion is unresolved.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "model_key": {
+      "maxLength": 80,
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "model_key"
+    ],
+    "type": "object"
+   },
+   "name": "load_model"
+  },
+  {
+   "description": "Create a new project; never overwrite an existing project.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "duration_s": {
+      "maximum": 120,
+      "minimum": 0.01,
+      "type": "number"
+     },
+     "model_key": {
+      "maxLength": 80,
+      "minLength": 1,
+      "type": "string"
+     },
+     "name": {
+      "maxLength": 80,
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   },
+   "name": "new_project"
+  },
+  {
+   "description": "Open an existing project by local project name.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "name": {
+      "maxLength": 80,
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   },
+   "name": "open_project"
+  },
+  {
+   "description": "Save accepted committed motion, preserving workspace fields.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+   },
+   "name": "save_project"
+  },
+  {
+   "description": "Inspect the compiled robot and named End Effectors/Joint Angles.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+   },
+   "name": "get_robot_summary"
+  },
+  {
+   "description": "List committed or candidate Keyframes with a bounded result.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "limit": {
+      "maximum": 128,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "source": {
+      "enum": [
+       "candidate",
+       "committed"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [],
+    "type": "object"
+   },
+   "name": "list_keyframes"
+  },
+  {
+   "description": "Sample a complete qpos without creating a Keyframe.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "source": {
+      "enum": [
+       "candidate",
+       "committed"
+      ],
+      "type": "string"
+     },
+     "time_s": {
+      "maximum": 120,
+      "minimum": 0,
+      "type": "number"
+     }
+    },
+    "required": [
+     "time_s"
+    ],
+    "type": "object"
+   },
+   "name": "get_pose"
+  },
+  {
+   "description": "Author sparse complete qpos anchors on the detached Orange preview.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "duration_s": {
+      "maximum": 120,
+      "minimum": 0.01,
+      "type": "number"
+     },
+     "expected_revision": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "keyframes": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "qpos": {
+         "items": {
+          "maximum": 1000000.0,
+          "minimum": -1000000.0,
+          "type": "number"
+         },
+         "maxItems": 512,
+         "minItems": 1,
+         "type": "array"
+        },
+        "time_seconds": {
+         "maximum": 120,
+         "minimum": 0,
+         "type": "number"
+        }
+       },
+       "required": [
+        "time_seconds",
+        "qpos"
+       ],
+       "type": "object"
+      },
+      "maxItems": 16,
+      "minItems": 2,
+      "type": "array"
+     }
+    },
+    "required": [
+     "keyframes"
+    ],
+    "type": "object"
+   },
+   "name": "author_keyframes"
+  },
+  {
+   "description": "Commit Keyframe on the candidate using FK of its sampled pose.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "expected_revision": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "phase": {
+      "maxLength": 80,
+      "minLength": 1,
+      "type": "string"
+     },
+     "time_s": {
+      "maximum": 120,
+      "minimum": 0,
+      "type": "number"
+     }
+    },
+    "required": [
+     "time_s"
+    ],
+    "type": "object"
+   },
+   "name": "commit_keyframe"
+  },
+  {
+   "description": "Set named Joint Angles in radians on the candidate.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "expected_revision": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "time_s": {
+      "maximum": 120,
+      "minimum": 0,
+      "type": "number"
+     },
+     "values": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "angle_rad": {
+         "maximum": 100,
+         "minimum": -100,
+         "type": "number"
+        },
+        "joint": {
+         "maxLength": 80,
+         "minLength": 1,
+         "type": "string"
+        }
+       },
+       "required": [
+        "joint",
+        "angle_rad"
+       ],
+       "type": "object"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "time_s",
+     "values"
+    ],
+    "type": "object"
+   },
+   "name": "set_joint_angles"
+  },
+  {
+   "description": "Solve a logical frame/End Effector pose in meters and radians.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "expected_revision": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "locked_end_effectors": {
+      "items": {
+       "maxLength": 80,
+       "minLength": 1,
+       "type": "string"
+      },
+      "maxItems": 16,
+      "minItems": 0,
+      "type": "array"
+     },
+     "logical_frame": {
+      "maxLength": 80,
+      "minLength": 1,
+      "type": "string"
+     },
+     "orientation_rpy_rad": {
+      "items": {
+       "maximum": 100,
+       "minimum": -100,
+       "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+     },
+     "position_m": {
+      "items": {
+       "maximum": 100,
+       "minimum": -100,
+       "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+     },
+     "time_s": {
+      "maximum": 120,
+      "minimum": 0,
+      "type": "number"
+     }
+    },
+    "required": [
+     "time_s",
+     "logical_frame",
+     "position_m"
+    ],
+    "type": "object"
+   },
+   "name": "solve_ik"
+  },
+  {
+   "description": "Append exact copies of a candidate motion interval.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "additional_copies": {
+      "maximum": 32,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "end_s": {
+      "maximum": 120,
+      "minimum": 0,
+      "type": "number"
+     },
+     "expected_revision": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "ping_pong": {
+      "type": "boolean"
+     },
+     "start_s": {
+      "maximum": 120,
+      "minimum": 0,
+      "type": "number"
+     }
+    },
+    "required": [
+     "start_s",
+     "end_s",
+     "additional_copies"
+    ],
+    "type": "object"
+   },
+   "name": "repeat_motion"
+  },
+  {
+   "description": "Delete logical and qpos Keyframes atomically on the candidate.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "expected_revision": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "times": {
+      "items": {
+       "maximum": 120,
+       "minimum": 0,
+       "type": "number"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "times"
+    ],
+    "type": "object"
+   },
+   "name": "delete_keyframes"
+  },
+  {
+   "description": "Scale a candidate time interval through the shared planner.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "end_s": {
+      "maximum": 120,
+      "minimum": 0,
+      "type": "number"
+     },
+     "expected_revision": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "scale": {
+      "maximum": 100,
+      "minimum": 0.01,
+      "type": "number"
+     },
+     "start_s": {
+      "maximum": 120,
+      "minimum": 0,
+      "type": "number"
+     }
+    },
+    "required": [
+     "start_s",
+     "end_s",
+     "scale"
+    ],
+    "type": "object"
+   },
+   "name": "edit_timeline"
+  },
+  {
+   "description": "Apply a validated compact motion spec locally; no nested LLM call.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "expected_revision": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "spec_json": {
+      "maxLength": 24000,
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "spec_json"
+    ],
+    "type": "object"
+   },
+   "name": "apply_edit_spec"
+  },
+  {
+   "description": "Generate a detached candidate path using existing exact backend contracts.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "dt": {
+      "maximum": 1,
+      "minimum": 0.001,
+      "type": "number"
+     },
+     "smoothing": {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+     }
+    },
+    "required": [],
+    "type": "object"
+   },
+   "name": "generate_trajectory"
+  },
+  {
+   "description": "Check structure, limits and collisions over the sampled candidate path.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "dt": {
+      "maximum": 1,
+      "minimum": 0.001,
+      "type": "number"
+     }
+    },
+    "required": [],
+    "type": "object"
+   },
+   "name": "validate_motion"
+  },
+  {
+   "description": "Restore an owned candidate checkpoint; committed history is untouched.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "checkpoint_id": {
+      "maxLength": 80,
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [],
+    "type": "object"
+   },
+   "name": "undo"
+  },
+  {
+   "description": "Accept validated motion under the caller-configured review policy.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+   },
+   "name": "accept_candidate"
+  },
+  {
+   "description": "Discard the Orange preview without changing committed motion.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+   },
+   "name": "discard_candidate"
+  },
+  {
+   "description": "Export accepted motion through unchanged legacy format writers.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "dt": {
+      "maximum": 1,
+      "minimum": 0.001,
+      "type": "number"
+     },
+     "file_name": {
+      "maxLength": 80,
+      "minLength": 1,
+      "type": "string"
+     },
+     "format": {
+      "enum": [
+       "mujoco_csv",
+       "qpos_csv",
+       "mjlab_csv",
+       "dsms"
+      ],
+      "type": "string"
+     },
+     "motion_speed": {
+      "maximum": 4,
+      "minimum": 0.1,
+      "type": "number"
+     },
+     "source": {
+      "enum": [
+       "auto",
+       "generated",
+       "editable"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "format",
+     "file_name"
+    ],
+    "type": "object"
+   },
+   "name": "export_trajectory"
+  },
+  {
+   "description": "Render timestamped front/side views of current motion; reports unavailable GL explicitly.",
+   "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+     "height": {
+      "maximum": 480,
+      "minimum": 120,
+      "type": "integer"
+     },
+     "source": {
+      "enum": [
+       "candidate",
+       "committed"
+      ],
+      "type": "string"
+     },
+     "times_s": {
+      "items": {
+       "maximum": 120,
+       "minimum": 0,
+       "type": "number"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "type": "array"
+     },
+     "views": {
+      "items": {
+       "enum": [
+        "front",
+        "side"
+       ],
+       "type": "string"
+      },
+      "maxItems": 2,
+      "minItems": 1,
+      "type": "array"
+     },
+     "width": {
+      "maximum": 640,
+      "minimum": 160,
+      "type": "integer"
+     }
+    },
+    "required": [],
+    "type": "object"
+   },
+   "name": "render_views"
+  }
+ ]
+}

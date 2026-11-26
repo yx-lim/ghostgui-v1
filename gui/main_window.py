@@ -418,6 +418,10 @@ class RobotGuiMainWindow(QMainWindow):
             self._sync_right_sidebar_controls()
         self.render_progress_overlay = RenderProgressOverlay(self.viewer_3d_stack)
         self.tutorial_manager = TutorialManager(self)
+        from application.commands import default_registry
+        from .commands import CommandBinder
+        self.command_binder = CommandBinder(default_registry(), self)
+        self.command_binder.tag()
 
         # Initial view
         if self.robot_model_3d is not None:
