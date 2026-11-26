@@ -1,0 +1,50 @@
+{
+ "agentKeyButton": {
+  "category": "forbidden:secrets",
+  "reason": "API key entry"
+ },
+ "agentNewConversationButton": {
+  "category": "forbidden:agent_policy",
+  "reason": "the agent cannot reset its own conversation"
+ },
+ "agentPlanFirst": {
+  "category": "forbidden:agent_policy",
+  "reason": "the agent cannot change its own run policy"
+ },
+ "agentSendButton": {
+  "category": "human_review",
+  "reason": "starts or stops a Claude run; the agent never triggers itself"
+ },
+ "agentTranscriptButton": {
+  "category": "layout_chrome",
+  "reason": "shows the transcript popover"
+ },
+ "agentTranscriptHideButton": {
+  "category": "layout_chrome",
+  "reason": "hides the transcript popover"
+ },
+ "aiAcceptButton": {
+  "category": "human_review",
+  "reason": "Motion Assistant review belongs to the user"
+ },
+ "aiCancelButton": {
+  "category": "human_review",
+  "reason": "Motion Assistant request control"
+ },
+ "aiRejectButton": {
+  "category": "human_review",
+  "reason": "Motion Assistant review belongs to the user"
+ },
+ "aiSettingsButton": {
+  "category": "forbidden:secrets",
+  "reason": "Motion Assistant provider and key settings"
+ },
+ "aiSubmitButton": {
+  "category": "text_input",
+  "reason": "Motion Assistant composer"
+ },
+ "sectionHeader": {
+  "category": "layout_chrome",
+  "reason": "collapsible section expanders"
+ }
+}

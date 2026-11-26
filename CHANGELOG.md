@@ -10,6 +10,12 @@ in this repository.
 
 ### Added
 
+- Claude command bar (Ctrl+K): type a request and Claude operates GhostGUI with
+  your own Anthropic key through the shared command registry, with streaming
+  transcript, inline confirmations, Plan first, Stop, cost meter, Orange preview
+  review and an offline command palette.
+- Shared Qt-free command registry used by GUI bindings, MCP and the command bar.
+
 - Opt-in authenticated GUI attachment for external MCP agents, with immutable
   Orange preview, current-revision Accept, one-entry Undo, visible activity and
   Stop/Disconnect. Camera capture stays on the Qt thread and restores presentation.

@@ -28,6 +28,8 @@ UI_LEGACY_PATTERN = re.compile(
     r"Delete Slice|Slice step|saved slices)\b"
 )
 UI_COPY_FILES = (
+    "gui/agent_command_bar.py",
+    "gui/agent_transcript.py",
     "gui/controls.py",
     "gui/help/help_content.py",
     "gui/main_window.py",

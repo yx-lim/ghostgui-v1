@@ -20,6 +20,8 @@ GhostGUI.
   automatic robot/visual context, local compact motion generation, and the
   conversational generation, replacement-by-default, explicit **Refine preview**,
   Orange preview, Accept, and Discard workflow.
+- [Claude Command Bar](command_bar.md) explains the in-app Ask Claude bar,
+  keys, approvals, Stop and costs.
 - [Motion Assistant Security](ai_security.md) defines provider trust, disclosed
   data, local limits, credentials, failure isolation, and safety exclusions.
 - [Models](models.md) describes bundled models, assets, and runtime caching.

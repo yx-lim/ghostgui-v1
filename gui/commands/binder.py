@@ -20,11 +20,11 @@ def collect_controls(root: QObject) -> dict[str, QObject]:
         if item.menu() is not None or item.isSeparator():
             continue
         name = item.objectName()
-        if name and not name.startswith("qt_"):
+        if name and not name.startswith(("qt_", "_q_")):
             controls.setdefault(name, item)
     for item in root.findChildren(QAbstractButton):
         name = item.objectName()
-        if name and not name.startswith("qt_") and not isinstance(item.parent(), (QMenu, QTabBar)):
+        if name and not name.startswith(("qt_", "_q_")) and not isinstance(item.parent(), (QMenu, QTabBar)):
             controls.setdefault(name, item)
     return controls
 

@@ -2,8 +2,8 @@
 
 GhostGUI exposes a Qt-free Python command layer for deterministic project and
 motion workflows. It does not call an LLM. Stdio MCP and bounded offscreen rendering are implemented. Opt-in GUI attachment is also implemented. The
-in-app autonomous loop and an agent CLI are later milestones
-in the [implementation plan](implementation_plan.md).
+in-app autonomous loop is the [Claude Command Bar](command_bar.md); an agent CLI
+is a later milestone in the [implementation plan](implementation_plan.md).
 
 ## Entry Points
 

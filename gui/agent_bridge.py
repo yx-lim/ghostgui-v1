@@ -335,6 +335,9 @@ class AgentBridgeController(QObject):
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='ghostgui-agent')
         self.server = None
         self.workspace = self.runtime = None
+        self.inapp_runtime = None
+        self.inapp_port = None
+        self.action_log = None
         self.closed = False
         self.internal_transition = False
         self._pending = []
@@ -419,10 +422,14 @@ class AgentBridgeController(QObject):
     def submit(self, name, arguments, cancellation):
         return self._submit(name, arguments, cancellation, trusted=False)
 
-    def _submit(self, name, arguments, cancellation, *, trusted):
+    def submit_inapp(self, name, arguments, cancellation):
+        """Command bar entry: same worker, in-app registry projection with GUI ports."""
+        return self._submit(name, arguments, cancellation, trusted=False, inapp=True)
+
+    def _submit(self, name, arguments, cancellation, *, trusted, inapp=False):
         with self._lock:
             self._tokens.add(cancellation)
-            future = self.executor.submit(self._work, name, arguments, cancellation, trusted)
+            future = self.executor.submit(self._work, name, arguments, cancellation, trusted, inapp)
             self._pending.append((future, name, cancellation))
         return future
 
@@ -436,7 +443,19 @@ class AgentBridgeController(QObject):
             return future
         return self._submit(name, {}, Event(), trusted=True)
 
-    def _work(self, name, arguments, cancellation, trusted=False):
+    def _inapp_runtime(self):
+        if self.inapp_runtime is None:
+            from application.commands import Origin, Surface
+            from .commands.gui_ports import GuiCommandPort
+            workspace = self.workspace
+            self.inapp_port = self.inapp_port or GuiCommandPort(self.host)
+            self.inapp_runtime = ToolRuntime(build_command_catalog(
+                workspace, renderer=GuiViewRenderer(workspace), surface=Surface.AGENT_INAPP,
+                ports={'gui': self.inapp_port}, origin=Origin.AGENT_INAPP, action_log=self.action_log,
+                gui=lambda callback: workspace.gui(callback)), workspace)
+        return self.inapp_runtime
+
+    def _work(self, name, arguments, cancellation, trusted=False, inapp=False):
         checkpoint = None
         try:
             if cancellation.is_set():
@@ -445,13 +464,24 @@ class AgentBridgeController(QObject):
                 live = self.invoker.call(self.capture_live, cancellation)
                 self.workspace = GuiWorkspace(self, live)
                 self.runtime = ToolRuntime(build_command_catalog(self.workspace, renderer=GuiViewRenderer(self.workspace)), self.workspace)
+                self.inapp_runtime = None
             workspace = self.workspace
             workspace.call_cancel = cancellation
-            self.runtime.cancellation_token = CancelToken(cancellation)
-            if name != 'discard_candidate':
+            runtime = self._inapp_runtime() if inapp else self.runtime
+            runtime.cancellation_token = CancelToken(cancellation)
+            spec = runtime.catalog.specs.get(name) if inapp and isinstance(name, str) else None
+            if inapp and spec is not None:
+                from application.commands import Effect
+                light = spec.effect in (Effect.READ, Effect.UI, Effect.DESTRUCTIVE) and 'gui' in spec.requires
+                if self.server is not None and not light and spec.effect is not Effect.READ:
+                    raise ValueError('document_owned_elsewhere: external control owns the document')
+            else:
+                light = False
+            if name != 'discard_candidate' and not light:
                 workspace.sync_live()
-            self.invoker.call(lambda: self.panel.activity.setText('Running: ' + str(name)[:64]), cancellation)
-            meta = self.runtime.catalog.meta.get(name) if isinstance(name, str) else None
+            if not inapp:
+                self.invoker.call(lambda: self.panel.activity.setText('Running: ' + str(name)[:64]), cancellation)
+            meta = runtime.catalog.meta.get(name) if isinstance(name, str) else None
             if (meta is not None and meta.mutates_candidate) or name in ('generate_trajectory', 'validate_motion', 'undo'):
                 checkpoint = workspace.call_checkpoint()
             if name == '_user_accept' and trusted:
@@ -461,7 +491,7 @@ class AgentBridgeController(QObject):
                 result = workspace.accept_candidate(user_approved=True)
                 outcome = {'ok': True, 'payload': {'ok': True, **result}, 'images': [], 'is_error': False}
             else:
-                result = self.runtime.call(name, arguments)
+                result = runtime.call(name, arguments)
                 outcome = {'ok': result.ok, 'payload': result.payload, 'is_error': result.is_error,
                            'images': [{'data': base64.b64encode(image.data).decode('ascii'), 'mime_type': image.mime_type}
                                       for image in result.images]}

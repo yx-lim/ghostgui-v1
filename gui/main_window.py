@@ -404,6 +404,15 @@ class RobotGuiMainWindow(QMainWindow):
         )
         from .agent_bridge import AgentBridgeController
         self.agent_bridge_controller = AgentBridgeController(self)
+        from .agent_command_bar import AgentCommandBar
+        from .agent_transcript import AgentTranscript
+        from .commands.gui_ports import GuiCommandPort
+        self.agent_command_port = GuiCommandPort(self)
+        self.agent_bridge_controller.inapp_port = self.agent_command_port
+        self.agent_transcript = AgentTranscript(self)
+        self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
+        self.agent_command_bar = AgentCommandBar(self)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.agent_command_bar)
         if self._restore_left_sidebar_collapsed:
             restored_width = self._left_sidebar_last_width
             self.set_left_sidebar_visible(False)
@@ -1289,6 +1298,9 @@ class RobotGuiMainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_render_progress_overlay_geometry()
+        transcript = getattr(self, "agent_transcript", None)
+        if transcript is not None and transcript.isVisible():
+            transcript.reposition()
 
     def changeEvent(self, event):
         super().changeEvent(event)
@@ -1310,6 +1322,9 @@ class RobotGuiMainWindow(QMainWindow):
             event.ignore()
             return
         self._shutting_down = True
+        command_bar = getattr(self, "agent_command_bar", None)
+        if command_bar is not None:
+            command_bar.shutdown()
         bridge = getattr(self, "agent_bridge_controller", None)
         if bridge is not None:
             bridge.shutdown()

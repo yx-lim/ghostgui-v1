@@ -186,7 +186,9 @@ AI package exports may load provider adapter definitions without constructing
 SDK clients. The optional `application.mcp_server` stdio adapter exposes this catalog, resources
 and a prompt without duplicating motion handlers. `application.agent_rendering`
 owns bounded offscreen MuJoCo images and private rendering data; the runtime
-serializes rendering with all other commands. No in-app autonomous LLM loop is introduced here.
+serializes rendering with all other commands. The in-app [Claude Command Bar](command_bar.md)
+runs a bounded agent loop (`application/ai/agent_loop.py`) over the same registry; its tools
+execute on the bridge worker and hop to Qt through `QtInvoker`.
 
 `application/agent_bridge/` owns Qt-free bounded JSON framing, owner-only discovery,
 authenticated loopback transport and its client. `gui/agent_bridge.py` owns the
@@ -286,7 +288,8 @@ as compact JSON object text. `motion_plan.py` decodes that text into the normal
 tool name and its complete argument schema through `ToolRegistry` before any
 handler runs. The encoded text is never evaluated as code.
 
-The default text path has no autonomous provider loop. A successful initial
+The Motion Assistant text path has no autonomous provider loop (the separate
+command bar does; see [Claude Command Bar](command_bar.md)). A successful initial
 plan uses one provider request. Failed operations may trigger one compact
 replacement-operation request using the already-updated working copy; local
 execution then stops whether the replacement set succeeds or fails. Earlier

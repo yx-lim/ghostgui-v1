@@ -147,4 +147,4 @@ def derive_parameters(handler) -> dict[str, Any]:
 
 
 def handler_description(handler) -> str:
-    return inspect.cleandoc(handler.__doc__ or "").strip()
+    return " ".join(inspect.cleandoc(handler.__doc__ or "").split())

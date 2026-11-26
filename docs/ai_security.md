@@ -100,7 +100,7 @@ network connection, or provider credential.
   the combined workflow is capped at three planning attempts.
 - A rendered frame is limited to 8 MiB, and provider capability limits still
   constrain the total image count.
-- Normal generation/refinement receives no executable tool declarations. It accepts a
+- Motion Assistant generation/refinement receives no executable tool declarations. It accepts a
   compact structured plan and executes deterministic local handlers only.
 - Gemini makes one outbound attempt by default. Explicit transient-server retry
   settings never make quota-exhaustion or HTTP 429 responses retryable.
@@ -160,3 +160,13 @@ proof of real-world stability, continuous-path collision safety, actuator
 feasibility, contact stability, or hardware safety. Dynamic validation remains
 future DSMS/v3.2 work. Review and test accepted motion through the appropriate
 robotics workflow before deployment.
+
+## Claude Command Bar
+
+The [command bar](command_bar.md) is a separate, bounded agent loop that sends
+the in-app tool catalog to Anthropic with your own key. Commands carry risk
+classes: forbidden commands (keys, settings, external-control policy) are never
+sent; destructive commands need an inline confirmation; motion edits stay on
+the Orange preview until accepted. Tool results and app state are untrusted
+data. The bar additionally discloses app and view state, project names in the
+projects directory, action-log entries when requested, and viewport captures.
