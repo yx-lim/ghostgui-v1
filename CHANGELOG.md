@@ -14,6 +14,10 @@ in this repository.
   your own Anthropic key through the shared command registry, with streaming
   transcript, inline confirmations, Plan first, Stop, cost meter, Orange preview
   review and an offline command palette.
+- Command bar **Undo run** (reverts the last run's accepted edit and its view
+  changes in one step), Undo entries named "Claude: <prompt>", Up/Down prompt
+  history (persisted owner-only, clearable, can be turned off) and an "Allow
+  viewport images" setting.
 - Command-bar evaluation scenarios with fail-closed replay fixtures and a
   replay/live evaluation script; Ask Claude help topic and shortcut rows.
 - `ghostgui agent` headless command-bar runs, a manual live agent smoke check,

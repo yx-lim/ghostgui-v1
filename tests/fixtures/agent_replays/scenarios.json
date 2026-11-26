@@ -266,7 +266,7 @@
     "response": {
      "content": [
       {
-       "text": "I can't manage API keys; use Key\u2026 in the command bar.",
+       "text": "I can't manage API keys; use Settings\u2026 in the command bar.",
        "type": "text"
       }
      ],

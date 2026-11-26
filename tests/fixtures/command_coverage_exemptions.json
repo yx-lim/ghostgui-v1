@@ -23,6 +23,10 @@
   "category": "layout_chrome",
   "reason": "hides the transcript popover"
  },
+ "agentUndoRunButton": {
+  "category": "human_review",
+  "reason": "reverts a Claude run; the agent cannot undo its own runs"
+ },
  "aiAcceptButton": {
   "category": "human_review",
   "reason": "Motion Assistant review belongs to the user"

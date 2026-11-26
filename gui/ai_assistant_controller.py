@@ -946,10 +946,10 @@ class AIAssistantController:
             self.host.document.current_time
         )
 
-    def accept(self) -> None:
+    def accept(self, description: str | None = None) -> None:
         if not self.session_staged or self.active_handle is not None:
             return
-        description = "Accept AI motion edit"
+        description = description or "Accept AI motion edit"
         try:
             self._accepting_session = True
             self.session.accept(

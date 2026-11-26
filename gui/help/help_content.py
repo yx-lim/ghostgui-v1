@@ -210,13 +210,15 @@ Changing robot models changes the available bodies, sites, joints, and logical t
 
 Press **Ctrl+K** and describe what you want, for example "hide the left sidebar, go to 2 s and play at half speed" or "add a 0.5 s pause at 1 s".
 
-1. Click **Key…** once to add your own Anthropic API key (stored in the system keychain).
+1. Click **Settings…** once to add your own Anthropic API key (stored in the system keychain).
 2. Choose a model. Opus 5.5 is the default; Sonnet 5.5 costs about half; Haiku 5.5 is cheapest.
 3. Type a request and press Enter. Each action appears as a row in the transcript.
-4. Motion edits appear as the orange preview. Click **Accept** to keep them (one Undo entry) or **Discard**.
+4. Motion edits appear as the orange preview. Click **Accept** to keep them (one Undo entry named after your prompt) or **Discard**. **Undo run** reverts the last run's edit and view changes in one step.
 5. Press **Stop** or **Esc** to stop Claude at any time.
 
 Some actions, such as Undo or opening the MuJoCo viewer, show a card first: **Deny**, **Allow once** or **Allow for this run**. Turn on **Plan first** to review UI, save, export and project actions before they run.
+
+Press **Up** and **Down** in the bar to recall earlier prompts. **Settings…** turns viewport images and prompt history on or off.
 
 Without a key, type `/` and a command name to run GhostGUI commands locally.
 """.strip(),

@@ -1,5 +1,6 @@
 """M2: offscreen command bar runs with a scripted provider (no network)."""
 import asyncio
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -7,6 +8,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QPushButton
 
 from application.ai.agent_events import RunOutcome
@@ -130,6 +132,111 @@ class CommandBarTests(unittest.TestCase):
         self.wait(lambda: not self.controller.bridge.has_candidate)
         self.assertEqual(len(self.window.undo_stack), before + 1)
 
+    def _author_turn(self, call_id, delta):
+        def author(_request):
+            home = [float(value) for value in self.window.document.qpos_timeline.sample_state(0.0)]
+            middle = list(home)
+            middle[-1] += delta
+            return scripted_turn(use(call_id, "author_keyframes", {"duration_s": 0.4, "keyframes": [
+                {"time_seconds": 0.0, "qpos": home}, {"time_seconds": 0.2, "qpos": middle},
+                {"time_seconds": 0.4, "qpos": home}]}))
+        return author
+
+    def _accept(self):
+        future = self.controller.accept_candidate()
+        self.wait(future.done)
+        self.assertTrue(future.result()["ok"], future.result())
+        self.wait(lambda: self.controller.run_entry is not None)
+
+    def test_undo_run_reverts_edit_and_view_with_prompt_label(self):
+        first = ScriptedAgentProvider([
+            scripted_turn(use("t0", "new_project", {"name": "motion", "duration_s": 0.4})),
+            self._author_turn("t1", 0.05), scripted_turn(text("Preview ready."))])
+        self.assertIs(self.run_prompt("make a small motion", first).outcome, RunOutcome.COMPLETED)
+        self._accept()
+        self.assertIn("opened a project", self.controller.undo_run_blocker())
+        self.assertFalse(self.bar.undo_run_button.isEnabled())
+
+        self.assertFalse(self.window._left_sidebar_collapsed)
+        second = ScriptedAgentProvider([
+            scripted_turn(use("t2", "set_view", {"left_sidebar": False})),
+            self._author_turn("t3", 0.08), scripted_turn(text("Raised it."))])
+        prompt = "raise the last joint a bit more and hide the left sidebar please, thanks"
+        self.assertIs(self.run_prompt(prompt, second).outcome, RunOutcome.COMPLETED)
+        self.assertIn("Orange preview", self.controller.undo_run_blocker())
+        before = len(self.window.undo_stack)
+        before_state = list(self.window.document.qpos_timeline.sample_state(0.2))
+        self._accept()
+        entry = self.window.undo_stack[-1]
+        self.assertEqual(len(self.window.undo_stack), before + 1)
+        self.assertTrue(entry.description.startswith("Claude: raise the last joint"), entry.description)
+        self.assertTrue(entry.description.endswith("…"))
+        self.assertLessEqual(len(entry.description), len("Claude: ") + 48)
+        self.assertTrue(self.window._left_sidebar_collapsed)
+        self.wait(self.bar.undo_run_button.isEnabled)
+
+        self.bar.undo_run()
+        self.assertEqual(len(self.window.undo_stack), before)
+        self.assertEqual(list(self.window.document.qpos_timeline.sample_state(0.2)), before_state)
+        self.assertFalse(self.window._left_sidebar_collapsed)
+        self.assertFalse(self.bar.undo_run_button.isEnabled())
+        self.assertIn("No Claude run", self.controller.undo_run_blocker())
+
+    def test_undo_run_refuses_when_other_edits_follow(self):
+        first = ScriptedAgentProvider([
+            scripted_turn(use("t0", "new_project", {"name": "motion", "duration_s": 0.4})),
+            self._author_turn("t1", 0.05), scripted_turn(text("ok"))])
+        self.run_prompt("make a motion", first)
+        self._accept()
+        second = ScriptedAgentProvider([self._author_turn("t2", 0.07), scripted_turn(text("ok"))])
+        self.run_prompt("tweak it", second)
+        self._accept()
+        self.window.undo_stack.append(type("Entry", (), {"description": "Manual edit", "snapshot": None})())
+        self.assertIn("Other edits", self.controller.undo_run_blocker())
+        self.assertNotEqual(self.controller.undo_run(), "")
+        self.window.undo_stack.pop()
+
+    def test_viewport_images_can_be_turned_off(self):
+        self.bar.apply_settings(allow_images=False)
+        self.assertFalse(self.controller.allow_images)
+        provider = ScriptedAgentProvider([scripted_turn(use("t1", "capture_viewport", {})),
+                                          scripted_turn(text("ok"))])
+        self.run_prompt("look at the robot", provider)
+        result = str(provider.requests[1].messages[-1])
+        self.assertIn("images_disabled", result)
+        self.assertNotIn("'type': 'image'", result)
+        self.assertEqual(self.controller.action_log.tail(1)[0]["code"], "images_disabled")
+        self.bar.apply_settings(allow_images=True)
+        self.assertTrue(self.controller.allow_images)
+
+    def test_prompt_history_up_down_and_persistence(self):
+        from PySide6.QtTest import QTest
+
+        self.controller.provider_factory = lambda: None
+        self.controller.set_provider(None)
+        for prompt in ("/recent actions", "/help"):
+            self.bar.prompt.setText(prompt)
+            self.bar.submit()
+        self.bar.prompt.setText("draft")
+        QTest.keyClick(self.bar.prompt, Qt.Key.Key_Up)
+        self.assertEqual(self.bar.prompt.text(), "/help")
+        QTest.keyClick(self.bar.prompt, Qt.Key.Key_Up)
+        self.assertEqual(self.bar.prompt.text(), "/recent actions")
+        QTest.keyClick(self.bar.prompt, Qt.Key.Key_Up)
+        self.assertEqual(self.bar.prompt.text(), "/recent actions")
+        QTest.keyClick(self.bar.prompt, Qt.Key.Key_Down)
+        QTest.keyClick(self.bar.prompt, Qt.Key.Key_Down)
+        self.assertEqual(self.bar.prompt.text(), "draft")
+        path = self.root / "config" / "agent" / "prompt_history.json"
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(path.read_text())["prompts"], ["/recent actions", "/help"])
+        self.bar.apply_settings(remember_prompts=False)
+        self.bar.prompt.setText("/undo")
+        self.bar.submit()
+        self.assertNotIn("/undo", path.read_text())
+        self.bar.history.clear()
+        self.assertFalse(path.exists())
+
     def test_stop_mid_stream(self):
         provider = HangingProvider()
         self.controller.set_provider(provider)
@@ -187,6 +294,9 @@ class CommandBarTests(unittest.TestCase):
                 self.assertNotIn(CANARY.encode(), path.read_bytes(), path)
         self.assertNotIn(CANARY, repr(self.bar.session_key))
         self.assertNotIn(CANARY, str(self.controller.action_log.tail()))
+        history = self.root / "config" / "agent" / "prompt_history.json"
+        self.assertIn("go to half a second", history.read_text())
+
 
 
 if __name__ == "__main__":

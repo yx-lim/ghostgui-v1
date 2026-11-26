@@ -343,6 +343,8 @@ class AgentBridgeController(QObject):
         # user-owned (not protected) motion; external agents keep the panel's policy.
         self.inapp_allow_user_override = True
         self.candidate_origin = None
+        # Undo-history label for in-app (command bar) accepts, e.g. "Claude: add a pause".
+        self.accept_label = None
         self._external_futures = set()
         self.closed = False
         self.internal_transition = False
@@ -647,7 +649,7 @@ class AgentBridgeController(QObject):
         session.mark_current_revision_validated()
         ai.session = session
         # Reuse the existing atomic Accept/provenance/history/teardown path.
-        ai.accept()
+        ai.accept(self.accept_label if self.candidate_origin == 'inapp' else None)
         if ai.session is not None:
             ai.session = None
             raise ValueError('GUI acceptance failed; inspect the Motion Assistant error')

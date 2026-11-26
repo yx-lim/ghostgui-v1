@@ -16,7 +16,8 @@ from application.ai.agent_events import RunOutcome
 from application.ai.secrets import SecretStr, contains_secret
 from application.commands import Surface, default_registry
 
-from .agent_run_controller import AgentRunController
+from .agent_prompt_history import PromptHistory
+from .agent_run_controller import BRIDGE_BUSY, AgentRunController
 from .agent_transcript import Card
 
 MODELS = (("Opus 5.5", "claude-opus-5-5"), ("Sonnet 5.5", "claude-sonnet-5-5"), ("Haiku 5.5", "claude-haiku-5-5"))
@@ -27,6 +28,20 @@ OUTCOME_TEXT = {
     RunOutcome.TOOL_ERRORS: "Stopped after repeated tool errors", RunOutcome.ERROR: "Claude could not finish",
     RunOutcome.PLAN_READY: "Plan ready for your approval",
 }
+
+
+IMAGES_DISCLOSURE = ("When on, Claude can capture the 3D viewport and send the image to Anthropic "
+                     "with your request. Turn off to send text state only.")
+
+
+def _setting_bool(settings, key, default):
+    try:
+        value = settings.value(key, default)
+    except Exception:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
 
 
 def palette_matches(text, registry=None, limit=5):
@@ -44,9 +59,10 @@ def palette_matches(text, registry=None, limit=5):
 
 
 class AnthropicKeyDialog(QDialog):
-    """User-initiated key entry: session-only or system keychain. The key is never displayed."""
+    """Claude settings: key entry (session-only or system keychain; never displayed),
+    viewport images and prompt history."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, allow_images=True, remember_prompts=True, on_clear_history=None):
         super().__init__(parent)
         self.setWindowTitle("Claude Settings")
         self.setObjectName("agentKeyDialog")
@@ -63,7 +79,25 @@ class AnthropicKeyDialog(QDialog):
         form.addRow("", self.store)
         layout.addLayout(form)
         layout.addWidget(QLabel("Your key is used only for requests you start. GhostGUI never writes it to "
-                                "projects, logs or exports."))
+                                "projects, logs or exports. Leave it empty to keep the current key."))
+        self.allow_images = QCheckBox("Allow viewport images")
+        self.allow_images.setObjectName("agentAllowImages")
+        self.allow_images.setChecked(bool(allow_images))
+        self.allow_images.setToolTip(IMAGES_DISCLOSURE)
+        layout.addWidget(self.allow_images)
+        disclosure = QLabel(IMAGES_DISCLOSURE)
+        disclosure.setWordWrap(True)
+        layout.addWidget(disclosure)
+        self.remember = QCheckBox("Remember prompt history (Up/Down in the bar)")
+        self.remember.setObjectName("agentRememberPrompts")
+        self.remember.setChecked(bool(remember_prompts))
+        layout.addWidget(self.remember)
+        clear = QPushButton("Clear prompt history")
+        clear.setObjectName("agentClearPromptHistory")
+        clear.setAutoDefault(False)
+        if on_clear_history is not None:
+            clear.clicked.connect(lambda: (on_clear_history(), clear.setText("Prompt history cleared")))
+        layout.addWidget(clear)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -117,6 +151,11 @@ class AgentCommandBar(QToolBar):
         self.cost.setObjectName("agentCostLabel")
         self.cost.setToolTip("Estimated session spend; set Console spend limits too")
         self.addWidget(self.cost)
+        self.undo_run_button = QPushButton("Undo run")
+        self.undo_run_button.setObjectName("agentUndoRunButton")
+        self.undo_run_button.clicked.connect(self.undo_run)
+        self.undo_run_button.setEnabled(False)
+        self.addWidget(self.undo_run_button)
         self.history_button = QPushButton("Transcript")
         self.history_button.setObjectName("agentTranscriptButton")
         self.history_button.clicked.connect(self._toggle_transcript)
@@ -126,8 +165,9 @@ class AgentCommandBar(QToolBar):
         self.new_button.setToolTip("Start a new conversation")
         self.new_button.clicked.connect(self.new_conversation)
         self.addWidget(self.new_button)
-        self.key_button = QPushButton("Key…")
+        self.key_button = QPushButton("Settings…")
         self.key_button.setObjectName("agentKeyButton")
+        self.key_button.setToolTip("Anthropic API key, viewport images and prompt history")
         self.key_button.clicked.connect(self.edit_key)
         self.addWidget(self.key_button)
         self.pill = QLabel("Claude is controlling GhostGUI · Stop (Esc)", window.viewer_3d_stack)
@@ -135,13 +175,15 @@ class AgentCommandBar(QToolBar):
         self.pill.setStyleSheet("background: palette(highlight); color: palette(highlighted-text);"
                                 " border-radius: 10px; padding: 3px 10px;")
         self.pill.hide()
-        self._history: list[str] = []
-        self._history_index = 0
+        settings = window.ui_settings
+        self.controller.allow_images = _setting_bool(settings, "agent/allow_viewport_images", True)
+        self.history = PromptHistory(enabled=_setting_bool(settings, "agent/remember_prompts", True))
         self._last_prompt = ""
         self.controller.event.connect(self._on_event)
         self.controller.card.connect(self._on_card)
         self.controller.run_finished.connect(self._on_finished)
         self.controller.busy_changed.connect(self._on_busy)
+        self.controller.undo_changed.connect(self._sync_undo_run)
         window.agent_bridge_controller.external_activity.connect(self._on_external)
         self.prompt.installEventFilter(self)
         focus = QShortcut(QKeySequence("Ctrl+K"), window)
@@ -180,9 +222,12 @@ class AgentCommandBar(QToolBar):
             return None
 
     def edit_key(self):
-        dialog = AnthropicKeyDialog(self.window_)
+        dialog = AnthropicKeyDialog(self.window_, allow_images=self.controller.allow_images,
+                                    remember_prompts=self.history.enabled, on_clear_history=self.history.clear)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        self.apply_settings(allow_images=dialog.allow_images.isChecked(),
+                            remember_prompts=dialog.remember.isChecked())
         secret = dialog.secret()
         if secret is None:
             return
@@ -202,6 +247,15 @@ class AgentCommandBar(QToolBar):
             self.session_key = secret
         self.controller.set_provider(None)
 
+    def apply_settings(self, *, allow_images=None, remember_prompts=None):
+        settings = self.window_.ui_settings
+        if allow_images is not None:
+            self.controller.allow_images = bool(allow_images)
+            settings.setValue("agent/allow_viewport_images", bool(allow_images))
+        if remember_prompts is not None:
+            self.history.set_enabled(bool(remember_prompts))
+            settings.setValue("agent/remember_prompts", bool(remember_prompts))
+
     # ------------------------------------------------------------------ input
     def focus_prompt(self):
         self.prompt.setFocus(Qt.FocusReason.ShortcutFocusReason)
@@ -209,10 +263,17 @@ class AgentCommandBar(QToolBar):
 
     def eventFilter(self, watched, event):
         from PySide6.QtCore import QEvent
-        if (watched is self.prompt and event.type() == QEvent.Type.KeyPress
-                and event.key() == Qt.Key.Key_Escape):
-            self._escape()
-            return True
+        if watched is self.prompt and event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self._escape()
+                return True
+            if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+                recalled = (self.history.previous(self.prompt.text()) if event.key() == Qt.Key.Key_Up
+                            else self.history.next())
+                if recalled is not None:
+                    self.prompt.setText(recalled)
+                    self.prompt.end(False)
+                return True
         if watched is self.prompt and event.type() == QEvent.Type.FocusIn:
             try:
                 self.controller.prewarm_if_idle()
@@ -243,11 +304,10 @@ class AgentCommandBar(QToolBar):
         if not text:
             return
         if contains_secret(text):
-            self.transcript.add_notice("Your message looks like it contains an API key. Use Key… to store it securely.")
+            self.transcript.add_notice("Your message looks like it contains an API key. Use Settings… to store it securely.")
             self.transcript.show_popover()
             return
-        self._history.append(text)
-        self._history_index = len(self._history)
+        self.history.add(text)
         self.prompt.clear()
         self.transcript.show_popover()
         self.transcript.add_user(text)
@@ -300,6 +360,18 @@ class AgentCommandBar(QToolBar):
         except RuntimeError as error:
             self.transcript.add_notice(str(error))
 
+    def _sync_undo_run(self):
+        reason = self.controller.undo_run_blocker()
+        if reason == BRIDGE_BUSY:
+            QTimer.singleShot(100, self._sync_undo_run)
+        self.undo_run_button.setEnabled(not reason)
+        self.undo_run_button.setToolTip(reason or "Undo the last Claude run's edit and restore the view it started from")
+
+    def undo_run(self):
+        reason = self.controller.undo_run()
+        self.transcript.add_notice("Undid the last Claude run." if not reason else f"Undo run: {reason}")
+        self._sync_undo_run()
+
     def _toggle_transcript(self):
         if self.transcript.isVisible():
             self.transcript.hide_popover()
@@ -311,6 +383,7 @@ class AgentCommandBar(QToolBar):
         self.send.setText("Stop" if busy else "Send")
         self.stop_shortcut.setEnabled(bool(busy))
         self.model.setEnabled(not busy)
+        self._sync_undo_run()
         self.new_button.setEnabled(not busy)
         self.pill.setVisible(busy)
         if busy:

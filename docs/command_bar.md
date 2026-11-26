@@ -7,7 +7,7 @@ registry that drives the menus, toolbar and MCP server.
 
 ## Setup
 
-1. Click **Key…** and paste an Anthropic API key. By default it is stored in
+1. Click **Settings…** and paste an Anthropic API key. By default it is stored in
    the system keychain; clear the checkbox to keep it for this session only.
    `ANTHROPIC_API_KEY` also works. Admin keys are refused.
 2. Choose a model: Opus 5.5 (default, effort `medium`), Sonnet 5.5 (about
@@ -19,6 +19,18 @@ registry that drives the menus, toolbar and MCP server.
 
 Without a key, or when Claude is unreachable, the bar works as a local command
 palette: type `/` plus a command name, for example `/recent actions`.
+
+**Settings…** also holds two switches, both on by default and remembered
+between sessions:
+
+- **Allow viewport images.** When on, Claude can capture the 3D viewport and
+  the image is sent to Anthropic with your request. When off, viewport
+  captures are refused and Claude works from text state only.
+- **Remember prompt history.** Up and Down in the bar recall earlier prompts.
+  They are stored in `agent/prompt_history.json` in the GhostGUI config
+  folder (owner-only permissions, last 200 prompts); prompts that look like
+  they contain an API key are never stored. **Clear prompt history** deletes
+  the file.
 
 ## What Claude Can Do
 
@@ -40,9 +52,15 @@ palette: type `/` plus a command name, for example `/recent actions`.
 ## Safety
 
 - Motion edits never change committed motion directly; one prompt produces at
-  most one Undo entry, created when the preview is accepted. Because you review
+  most one Undo entry, named "Claude: <your prompt>", created when the preview
+  is accepted. Because you review
   every preview, command-bar edits may change Keyframes you authored (never
   protected ones); external MCP agents keep the panel's override policy.
+- **Undo run** reverts the last run in one step: it undoes that run's
+  accepted edit and restores the view, display, camera, selection, time and
+  sidebars from before the run. It is unavailable while Claude works, while a
+  preview is still waiting for Accept or Discard, after other edits were made
+  on top, or when the run opened a project or robot (which clears history).
 - Your own clicks on menu and toolbar commands are recorded in the same action
   log, so you can ask Claude to "do what I just did, but for the right hand".
 - Every command carries a risk class. Destructive commands (for example GUI

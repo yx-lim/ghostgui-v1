@@ -330,9 +330,10 @@ and workflow diagnostics.
 
 Press **Ctrl+K** to focus the "Ask Claude" bar under the toolbar, type a request
 in plain English and press Enter. Claude uses your own Anthropic API key (add it
-with **Key…**) and the same commands as the menus and toolbar. Motion edits
+with **Settings…**) and the same commands as the menus and toolbar. Motion edits
 appear as the orange preview for you to **Accept** or **Discard**; **Stop** or
-**Esc** stops a run. Without a key, type `/` plus a command name to run it
+**Esc** stops a run, and **Undo run** reverts the last run in one step. Up and
+Down recall earlier prompts. Without a key, type `/` plus a command name to run it
 locally. See [Claude Command Bar](command_bar.md) for models, approvals, costs
 and safety.
 

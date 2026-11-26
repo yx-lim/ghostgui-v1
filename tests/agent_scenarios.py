@@ -115,7 +115,7 @@ SCENARIOS = [
              and any(event.data.get("suspicious") for event in sc.events)),
     Scenario("unknown_tool_rejected", "Store my API key for me.",
              [([use("t1", "set_api_key", {"key": "redacted"})], None),
-              ([text("I can't manage API keys; use Key… in the command bar.")], None)],
+              ([text("I can't manage API keys; use Settings… in the command bar.")], None)],
              RunOutcome.COMPLETED,
              check=lambda result, ws, sc: result.actions == 0),
 ]
