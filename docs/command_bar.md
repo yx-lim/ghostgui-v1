@@ -61,6 +61,26 @@ palette: type `/` plus a command name, for example `/recent actions`.
 - Settings, keys, external-control policy and the bar itself are never exposed
   to Claude.
 
+## Headless Use
+
+`ghostgui agent "<request>" --projects-dir <folder> [--project NAME]` runs one
+request without the GUI, using the same loop, registry and gates. GUI-only
+commands are not offered; destructive commands ask on an interactive terminal
+and are denied otherwise. Options: `--model`, `--effort`, `--approval
+review|auto_accept`, `--plan`, `--max-cost` (default $1.00) and `--json`.
+
+## Other Behaviour
+
+- Actions by an attached external MCP agent appear in the transcript and the
+  action log.
+- Instruction-like text inside a tool result is flagged in the transcript as
+  suspicious and still treated as data.
+- Cache pre-warming (refreshing the 1-hour prompt cache when you return after
+  an idle hour) exists but is off by default because it bills a cache write.
+- `scripts/smoke_agent_loop.py --i-understand-this-spends` is the manual live
+  check (models, two-turn loop, cache reads, spend cap). It also runs from the
+  Live AI Provider Smoke workflow with `suite: agent`; it never runs on PRs.
+
 ## Data Sent To Anthropic
 
 Your prompt, the state digest, tool results (app and view state, project and

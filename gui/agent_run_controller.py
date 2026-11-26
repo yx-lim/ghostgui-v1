@@ -99,6 +99,8 @@ class AgentRunController(QObject):
         self.conversation = AgentConversation(self.model)
         self.loop_obj = None
         self.running = False
+        self.prewarm_enabled = False
+        self._last_activity = float("-inf")
         self.last_result: RunResult | None = None
         self._cancel = Event()
         self._cards: dict[int, tuple] = {}
@@ -135,6 +137,30 @@ class AgentRunController(QObject):
     def _tools(self):
         ports = ("gui",)
         return tuple(self.registry.tool_definitions(Surface.AGENT_INAPP, ports=ports))
+
+    # ---------------------------------------------------------------- prewarm
+    PREWARM_IDLE_S = 55 * 60
+
+    def prewarm_if_idle(self):
+        """Opt-in: refresh the 1-hour cache when the bar is focused after an idle period."""
+        if not self.prewarm_enabled or self.running:
+            return False
+        provider = self.ensure_provider()
+        if provider is None or not hasattr(provider, "prewarm"):
+            return False
+        if time.monotonic() - self._last_activity < self.PREWARM_IDLE_S:
+            return False
+        from application.ai.agent_prompts import COMMAND_BAR_SYSTEM_PROMPT
+        from application.ai.agent_wire import AgentTurnRequest
+
+        messages = self.conversation.wire() or ({"role": "user", "content": [{"type": "text", "text": "."}]},)
+        if messages[-1]["role"] == "assistant":
+            messages = messages + ({"role": "user", "content": [{"type": "text", "text": "."}]},)
+        request = AgentTurnRequest(model=self.model, system=COMMAND_BAR_SYSTEM_PROMPT, tools=self._tools(),
+                                   messages=tuple(messages), effort=self.effort, fallbacks=self.policy.fallbacks)
+        self._last_activity = time.monotonic()
+        asyncio.run_coroutine_threadsafe(provider.prewarm(request), self._aio)
+        return True
 
     # --------------------------------------------------------------------- run
     def can_start(self) -> str:
@@ -173,6 +199,7 @@ class AgentRunController(QObject):
         except Exception:
             digest = None
         self.running = True
+        self._last_activity = time.monotonic()
         self.busy_changed.emit(True)
         self._lock_controls()
         future = asyncio.run_coroutine_threadsafe(

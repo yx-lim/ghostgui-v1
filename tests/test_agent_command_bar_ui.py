@@ -163,6 +163,15 @@ class CommandBarTests(unittest.TestCase):
         self.bar.submit()
         self.wait(lambda: any(chip.state == "ok" for chip in self.bar.transcript.chips.values()))
 
+    def test_external_activity_is_shown_and_logged(self):
+        self.window.agent_bridge_controller.external_activity.emit("get_pose", True, "")
+        self.app.processEvents()
+        self.assertEqual(self.controller.action_log.tail(1)[0]["origin"], "agent_mcp")
+
+    def test_prewarm_is_opt_in(self):
+        self.controller.set_provider(ScriptedAgentProvider([]))
+        self.assertFalse(self.controller.prewarm_if_idle())
+
     def test_key_in_prompt_is_blocked_and_canary_never_written(self):
         self.bar.session_key = SecretStr(CANARY)
         self.assertIsNotNone(self.bar._default_provider())

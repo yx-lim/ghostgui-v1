@@ -14,6 +14,8 @@ in this repository.
   your own Anthropic key through the shared command registry, with streaming
   transcript, inline confirmations, Plan first, Stop, cost meter, Orange preview
   review and an offline command palette.
+- `ghostgui agent` headless command-bar runs, a manual live agent smoke check,
+  prompt-injection red-team tests and a CI leg with the AI/agent extras.
 - Shared Qt-free command registry used by GUI bindings, MCP and the command bar;
   every named menu/toolbar control is bound or explicitly exempt.
 - Candidate timeline commands (insert, shift, move, duration, copy/paste, clear,

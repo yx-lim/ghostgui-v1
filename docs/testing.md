@@ -566,3 +566,14 @@ Run the normal full suite as well. Native visual acceptance must separately
 inspect a fully rendered robot, the Orange preview, the external controls,
 actual image capture and Accept/Undo/Redo; offscreen Qt has no usable canvas.
 No live model call is needed.
+
+## Command Bar And Registry
+
+Network-free suites cover the registry and golden MCP snapshot
+(`test_command_registry`), GUI coverage and exemptions (`test_command_coverage`),
+candidate timeline commands (`test_command_motion_ops`), dialog-free execution and
+GUI/agent parity (`test_command_dialog_free`), the streaming provider
+(`test_agent_provider`), the loop (`test_agent_loop`), the offscreen bar
+(`test_agent_command_bar_ui`) and red-team, cache-stability and CLI checks
+(`test_agent_security`). Live checks are manual:
+`scripts/smoke_agent_loop.py --i-understand-this-spends --max-cost-usd 0.50`.

@@ -32,7 +32,12 @@ from application.ai.limits import AGENT_MAX_OUTPUT_TOKENS, AgentRunLimits
 from application.ai.secrets import contains_secret
 from application.commands.spec import CONFIRM_EFFECTS, PLAN_DEFERRED_EFFECTS, Effect
 
+import re
+
 RAISED_OUTPUT_TOKENS = 128_000
+# Advisory only: flags instruction-like text arriving through tool results.
+SUSPICIOUS = re.compile(r"ignore (all |any )?(previous|prior|above) instructions|disregard .{0,20}instructions|"
+                        r"you are now|new system prompt|act as (the )?(system|developer)", re.IGNORECASE)
 INTERACTION_TOOLS = frozenset({"ask_user"})
 
 
@@ -245,6 +250,9 @@ class AgentLoop:
                 state.stop, state.stop_message = RunOutcome.TOOL_ERRORS, "the same call failed repeatedly"
             elif state.consecutive_errors >= self.limits.max_consecutive_tool_errors:
                 state.stop, state.stop_message = RunOutcome.TOOL_ERRORS, "too many tool errors in a row"
+        if SUSPICIOUS.search(json.dumps(payload, default=str)):
+            self._emit("notice", text=f"Suspicious instruction-like text in the {spec.title} result was "
+                                      "treated as data.", data={"suspicious": True, "tool": name})
         self._emit("tool_finished", tool=name, call_id=call_id, title=spec.title, summary=preview,
                    ok=outcome.ok, duration_ms=duration,
                    data={"message": str(payload.get("message", ""))[:300], "images": len(images)})

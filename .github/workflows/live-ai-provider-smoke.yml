@@ -15,6 +15,19 @@ on:
         description: Optional model override
         required: false
         type: string
+      suite:
+        description: contract (provider adapter) or agent (command-bar loop, Anthropic only)
+        required: true
+        default: contract
+        type: choice
+        options:
+          - contract
+          - agent
+      max_cost_usd:
+        description: Spend cap for the agent suite
+        required: false
+        default: "0.50"
+        type: string
 
 permissions:
   contents: read
@@ -40,6 +53,7 @@ jobs:
         run: python -m pip install '.[ai]'
 
       - name: Run four-request live contract smoke
+        if: ${{ inputs.suite == 'contract' }}
         shell: bash
         run: |
           arguments=("$AI_SMOKE_PROVIDER")
@@ -47,3 +61,12 @@ jobs:
             arguments+=(--model "$AI_SMOKE_MODEL")
           fi
           python scripts/smoke_ai_provider.py "${arguments[@]}"
+
+      - name: Run command-bar agent loop smoke
+        if: ${{ inputs.suite == 'agent' }}
+        shell: bash
+        env:
+          AI_SMOKE_MAX_COST: ${{ inputs.max_cost_usd }}
+        run: |
+          python scripts/smoke_agent_loop.py --i-understand-this-spends \
+            --max-cost-usd "$AI_SMOKE_MAX_COST" ${AI_SMOKE_MODEL:+--model "$AI_SMOKE_MODEL"}

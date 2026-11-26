@@ -142,6 +142,8 @@ class AgentCommandBar(QToolBar):
         self.controller.card.connect(self._on_card)
         self.controller.run_finished.connect(self._on_finished)
         self.controller.busy_changed.connect(self._on_busy)
+        window.agent_bridge_controller.external_activity.connect(self._on_external)
+        self.prompt.installEventFilter(self)
         focus = QShortcut(QKeySequence("Ctrl+K"), window)
         focus.setObjectName("agentFocusShortcut")
         focus.activated.connect(self.focus_prompt)
@@ -199,6 +201,21 @@ class AgentCommandBar(QToolBar):
     def focus_prompt(self):
         self.prompt.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self.prompt.selectAll()
+
+    def eventFilter(self, watched, event):
+        from PySide6.QtCore import QEvent
+        if watched is self.prompt and event.type() == QEvent.Type.FocusIn:
+            try:
+                self.controller.prewarm_if_idle()
+            except Exception:
+                pass
+        return super().eventFilter(watched, event)
+
+    def _on_external(self, tool, ok, message):
+        """External MCP activity is shown and logged, so the user and Claude can see it."""
+        self.controller.action_log.record(origin="agent_mcp", command=tool, arguments={},
+                                          status="ok" if ok else "error")
+        self.transcript.add_notice(f"External agent · {tool} {'✓' if ok else '✗ ' + message}")
 
     def _escape(self):
         if self.controller.running:

@@ -325,6 +325,7 @@ class ExternalAgentPanel(QWidget):
 
 class AgentBridgeController(QObject):
     connected_changed = Signal(bool)
+    external_activity = Signal(str, bool, str)  # tool, ok, message — external MCP calls only
 
     def __init__(self, host):
         super().__init__(host)
@@ -342,6 +343,7 @@ class AgentBridgeController(QObject):
         # user-owned (not protected) motion; external agents keep the panel's policy.
         self.inapp_allow_user_override = True
         self.candidate_origin = None
+        self._external_futures = set()
         self.closed = False
         self.internal_transition = False
         self._pending = []
@@ -435,6 +437,8 @@ class AgentBridgeController(QObject):
             self._tokens.add(cancellation)
             future = self.executor.submit(self._work, name, arguments, cancellation, trusted, inapp)
             self._pending.append((future, name, cancellation))
+            if not trusted and not inapp:
+                self._external_futures.add(future)
         return future
 
     def submit_local(self, name):
@@ -657,8 +661,13 @@ class AgentBridgeController(QObject):
             for _, _, token in done:
                 self._tokens.discard(token)
         for future, name, token in done:
+            external = future in self._external_futures
+            self._external_futures.discard(future)
             if not future.cancelled():
                 result = future.result()
+                if external:
+                    self.external_activity.emit(str(name)[:64], bool(result['ok']),
+                                                str(result['payload'].get('message', ''))[:200])
                 self.panel.activity.setText(('Finished: ' if result['ok'] else 'Failed: ') + str(name)[:64] +
                                             ('' if result['ok'] else '\n' + result['payload'].get('message', '')[:400]))
         busy = bool(self._pending)

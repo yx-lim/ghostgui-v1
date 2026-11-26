@@ -9,6 +9,11 @@ from core.models import ROBOT_MODELS
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "agent":
+        # Headless command-bar run; dispatched before any Qt import.
+        from application.agent_api.cli import run
+
+        sys.exit(run(sys.argv[2:]))
     parser = argparse.ArgumentParser(
         prog="ghostgui",
         description="Launch the GhostGUI MuJoCo trajectory editor.",

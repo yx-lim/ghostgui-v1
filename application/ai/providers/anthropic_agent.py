@@ -243,6 +243,19 @@ class AnthropicAgentProvider:
                 emit(AgentStreamEvent("tool_use_start", name=str(getattr(block, "name", "")),
                                       index=int(getattr(event, "index", -1))))
 
+    async def prewarm(self, request: AgentTurnRequest):
+        """Write the tools+system cache with max_tokens=0 (no output tokens, not streamed).
+
+        Used only when the user opts in and the bar is focused after an idle period.
+        """
+        arguments = build_stream_arguments(request)
+        arguments["max_tokens"] = 0
+        try:
+            message = await self._client.beta.messages.create(**arguments)
+        except Exception as error:
+            raise map_error(error) from error
+        return parse_usage(_to_dict(message).get("usage"), request.model)
+
     async def validate_key(self, models=AGENT_MODELS) -> dict[str, dict]:
         """Zero-token check: retrieve each model; returns id → {ok, max_input_tokens | error}."""
         results = {}

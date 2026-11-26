@@ -19,6 +19,11 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.13"]
+        extras: [""]
+        include:
+          # SDK and MCP tests skip silently without the optional extras.
+          - python-version: "3.13"
+            extras: "[ai,agent]"
     env:
       QT_QPA_PLATFORM: offscreen
       LIBGL_ALWAYS_SOFTWARE: "1"
@@ -48,7 +53,7 @@ jobs:
             xauth \
             xvfb
           python -m pip install --upgrade pip
-          python -m pip install .
+          python -m pip install ".${{ matrix.extras }}"
           python -m pip check
 
       - name: Static, architecture, and documentation guardrails
@@ -61,7 +66,7 @@ jobs:
         run: python scripts/run_test_suite.py
 
       - name: Build and inspect wheel
-        if: matrix.python-version == '3.13'
+        if: matrix.python-version == '3.13' && matrix.extras == ''
         run: |
           mkdir -p wheelhouse
           python -m pip wheel . \
@@ -73,7 +78,7 @@ jobs:
             wheelhouse/*.whl
 
       - name: Smoke-test installed wheel outside checkout
-        if: matrix.python-version == '3.13'
+        if: matrix.python-version == '3.13' && matrix.extras == ''
         working-directory: ${{ runner.temp }}
         run: |
           python -m venv --system-site-packages wheel-smoke
@@ -86,7 +91,7 @@ jobs:
             --gui
 
       - name: Xvfb software-OpenGL visual regression smoke
-        if: matrix.python-version == '3.13'
+        if: matrix.python-version == '3.13' && matrix.extras == ''
         env:
           QT_QPA_PLATFORM: xcb
           GHOSTGUI_VISUAL_TESTS: "1"
