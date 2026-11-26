@@ -385,7 +385,14 @@ def agent_request_fingerprint(request) -> str:
 
     from application.ai.agent_wire import canonical_json
 
+    import re
+
+    volatile = re.compile(r'"checkpoint_id": "[0-9a-f]{32}"')
+
     def fold(value):
+        if isinstance(value, str):
+            # Checkpoint ids are random per run; everything else stays strict.
+            return volatile.sub('"checkpoint_id": "*"', value)
         if isinstance(value, dict):
             if value.get("type") == "base64" and "data" in value:
                 return {**value, "data": hashlib.sha256(str(value["data"]).encode()).hexdigest()}

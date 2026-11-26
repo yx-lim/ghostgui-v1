@@ -326,6 +326,16 @@ and workflow diagnostics.
 - IK priority numbers are descriptive metadata; the current solver uses one
   weighted task stack rather than strict null-space priority projection.
 
+## Ask Claude (Command Bar)
+
+Press **Ctrl+K** to focus the "Ask Claude" bar under the toolbar, type a request
+in plain English and press Enter. Claude uses your own Anthropic API key (add it
+with **Key…**) and the same commands as the menus and toolbar. Motion edits
+appear as the orange preview for you to **Accept** or **Discard**; **Stop** or
+**Esc** stops a run. Without a key, type `/` plus a command name to run it
+locally. See [Claude Command Bar](command_bar.md) for models, approvals, costs
+and safety.
+
 ## External Agent Control
 
 In Motion Assistant, **Allow external agent control** opts this GUI session into

@@ -81,6 +81,17 @@ review|auto_accept`, `--plan`, `--max-cost` (default $1.00) and `--json`.
   check (models, two-turn loop, cache reads, spend cap). It also runs from the
   Live AI Provider Smoke workflow with `suite: agent`; it never runs on PRs.
 
+## Evaluation
+
+`tests/agent_scenarios.py` defines app-control scenarios (inspection, project
+creation, a candidate timeline edit, plan-mode export, refusal handling,
+injection containment, an unknown tool). `python scripts/eval_command_bar.py`
+replays them from sanitised synthetic fixtures and reports the pass rate; the
+replay test fails closed when the registry or prompt changes, and
+`scripts/build_agent_replay_fixtures.py --write` refreshes the fixtures
+deliberately. `--live --i-understand-this-spends` runs the same scenarios against
+Claude with a spend cap; live and replay results are reported separately.
+
 ## Data Sent To Anthropic
 
 Your prompt, the state digest, tool results (app and view state, project and

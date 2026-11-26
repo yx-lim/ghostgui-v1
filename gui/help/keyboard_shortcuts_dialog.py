@@ -18,6 +18,8 @@ SHORTCUT_ROWS = (
     ("Ctrl + drag", "Snap movement"),
     ("Ctrl+Z", "Undo"),
     ("Ctrl+Shift+Z", "Redo"),
+    ("Ctrl+K", "Ask Claude (command bar)"),
+    ("Esc (while Claude works)", "Stop Claude"),
 )
 
 

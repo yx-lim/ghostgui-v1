@@ -147,9 +147,14 @@ class AgentCommandBar(QToolBar):
         focus = QShortcut(QKeySequence("Ctrl+K"), window)
         focus.setObjectName("agentFocusShortcut")
         focus.activated.connect(self.focus_prompt)
+        # Esc is window-wide only while Claude runs, so it never steals the canvas's
+        # "cancel the active drag" key otherwise.
         stop = QShortcut(QKeySequence(Qt.Key.Key_Escape), window)
+        stop.setObjectName("agentStopShortcut")
         stop.setContext(Qt.ShortcutContext.WindowShortcut)
+        stop.setEnabled(False)
         stop.activated.connect(self._escape)
+        self.stop_shortcut = stop
         self._shortcuts = (focus, stop)
 
     # ------------------------------------------------------------- provider
@@ -204,6 +209,10 @@ class AgentCommandBar(QToolBar):
 
     def eventFilter(self, watched, event):
         from PySide6.QtCore import QEvent
+        if (watched is self.prompt and event.type() == QEvent.Type.KeyPress
+                and event.key() == Qt.Key.Key_Escape):
+            self._escape()
+            return True
         if watched is self.prompt and event.type() == QEvent.Type.FocusIn:
             try:
                 self.controller.prewarm_if_idle()
@@ -300,6 +309,7 @@ class AgentCommandBar(QToolBar):
     # ----------------------------------------------------------------- events
     def _on_busy(self, busy):
         self.send.setText("Stop" if busy else "Send")
+        self.stop_shortcut.setEnabled(bool(busy))
         self.model.setEnabled(not busy)
         self.new_button.setEnabled(not busy)
         self.pill.setVisible(busy)

@@ -1,0 +1,284 @@
+{
+ "note": "Synthetic scripted recordings; regenerate with scripts/build_agent_replay_fixtures.py",
+ "scenarios": {
+  "create_project": [
+   {
+    "fingerprint": "facc0aa96a479732b71ceaa7f0c05a8b7024fb9a5b2d9fc7396eed53ac9431e1",
+    "response": {
+     "content": [
+      {
+       "id": "t1",
+       "input": {
+        "duration_s": 1.0,
+        "name": "demo"
+       },
+       "name": "new_project",
+       "type": "tool_use"
+      }
+     ],
+     "model": "claude-opus-5-5",
+     "stop_details": null,
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 150
+     }
+    }
+   },
+   {
+    "fingerprint": "93ee4401e9d80a17ab9182a193a8cae8ca0db524589851493c8e274f67742f07",
+    "response": {
+     "content": [
+      {
+       "text": "Created the demo project.",
+       "type": "text"
+      }
+     ],
+     "model": "claude-opus-5-5",
+     "stop_details": null,
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 150
+     }
+    }
+   }
+  ],
+  "injection_contained": [
+   {
+    "fingerprint": "d588f0dcf2659c20af2d41d4ca33d7d3527b5f81e36ee4dd5fc25fb4e410e2cd",
+    "response": {
+     "content": [
+      {
+       "id": "t1",
+       "input": {},
+       "name": "list_projects",
+       "type": "tool_use"
+      }
+     ],
+     "model": "claude-opus-5-5",
+     "stop_details": null,
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 150
+     }
+    }
+   },
+   {
+    "fingerprint": "5aa82e2218da8f6f609afe2670e6cd5448534203ad171e5ee8e98ca376b955a0",
+    "response": {
+     "content": [
+      {
+       "text": "You have one project.",
+       "type": "text"
+      }
+     ],
+     "model": "claude-opus-5-5",
+     "stop_details": null,
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 150
+     }
+    }
+   }
+  ],
+  "insert_pause": [
+   {
+    "fingerprint": "569e177c631f6472b6273dededc52bd91007e36e578f51412ec31e329c25a13d",
+    "response": {
+     "content": [
+      {
+       "id": "t1",
+       "input": {
+        "at_s": 0.2,
+        "duration_s": 0.5
+       },
+       "name": "insert_time",
+       "type": "tool_use"
+      }
+     ],
+     "model": "claude-opus-5-5",
+     "stop_details": null,
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 150
+     }
+    }
+   },
+   {
+    "fingerprint": "0dc0773483a07ce004f88173cd8c808cc05513ff98e20d0a26caab43b51ebd7e",
+    "response": {
+     "content": [
+      {
+       "text": "Added a 0.5 s pause at 0.2 s; review the orange preview.",
+       "type": "text"
+      }
+     ],
+     "model": "claude-opus-5-5",
+     "stop_details": null,
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 150
+     }
+    }
+   }
+  ],
+  "inspect_robot": [
+   {
+    "fingerprint": "d6237b85e9bb0a999a62d5fd2837733110f95e1ac36d74cbd1dc0f2729f692e6",
+    "response": {
+     "content": [
+      {
+       "signature": "c3ludGhldGlj",
+       "thinking": "Plan the steps.",
+       "type": "thinking"
+      },
+      {
+       "id": "t1",
+       "input": {},
+       "name": "list_models",
+       "type": "tool_use"
+      },
+      {
+       "id": "t2",
+       "input": {},
+       "name": "get_robot_summary",
+       "type": "tool_use"
+      }
+     ],
+     "model": "claude-opus-5-5",
+     "stop_details": null,
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 150
+     }
+    }
+   },
+   {
+    "fingerprint": "09f2fff5825a0d099fbea8f074dbba38a010ce999b06e0306732ffc4c9ee1ee6",
+    "response": {
+     "content": [
+      {
+       "text": "The G1 is loaded; G1 and Go2 are available.",
+       "type": "text"
+      }
+     ],
+     "model": "claude-opus-5-5",
+     "stop_details": null,
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 150
+     }
+    }
+   }
+  ],
+  "plan_export": [
+   {
+    "fingerprint": "54a3806c2073fd77266fe29b3a70a03add13f6a882312c135aa4ab7db1e42902",
+    "response": {
+     "content": [
+      {
+       "id": "t1",
+       "input": {
+        "file_name": "demo",
+        "format": "qpos_csv"
+       },
+       "name": "export_trajectory",
+       "type": "tool_use"
+      }
+     ],
+     "model": "claude-opus-5-5",
+     "stop_details": null,
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 150
+     }
+    }
+   },
+   {
+    "fingerprint": "3a4194440911eddfca55aa8b3bd6e15cf211122369b4b0a5bab58dbebbe930a1",
+    "response": {
+     "content": [
+      {
+       "text": "The export is planned for your approval.",
+       "type": "text"
+      }
+     ],
+     "model": "claude-opus-5-5",
+     "stop_details": null,
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 150
+     }
+    }
+   }
+  ],
+  "refusal_handled": [
+   {
+    "fingerprint": "19c17fdc77f8e10969d4eda5d81ade46d827f51683f93d816f092bdfe0303e31",
+    "response": {
+     "content": [],
+     "model": "claude-opus-5-5",
+     "stop_details": {
+      "category": "cyber"
+     },
+     "stop_reason": "refusal",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 150
+     }
+    }
+   }
+  ],
+  "unknown_tool_rejected": [
+   {
+    "fingerprint": "6090b87c986aa248f378cf383bde06a96770dfd3c24d85609b5de5a11a4d20e3",
+    "response": {
+     "content": [
+      {
+       "id": "t1",
+       "input": {
+        "key": "redacted"
+       },
+       "name": "set_api_key",
+       "type": "tool_use"
+      }
+     ],
+     "model": "claude-opus-5-5",
+     "stop_details": null,
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 150
+     }
+    }
+   },
+   {
+    "fingerprint": "a1420e59f38bf9161c543bd205661c9daad440bef42c42be76ac91259163d7b8",
+    "response": {
+     "content": [
+      {
+       "text": "I can't manage API keys; use Key\u2026 in the command bar.",
+       "type": "text"
+      }
+     ],
+     "model": "claude-opus-5-5",
+     "stop_details": null,
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 150
+     }
+    }
+   }
+  ]
+ }
+}

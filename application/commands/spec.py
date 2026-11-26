@@ -115,7 +115,7 @@ class CommandSpec:
     def summarize(self, arguments: Mapping[str, Any], limit: int = 80) -> str:
         """Short argument summary for chips and logs (values only, scrubbed by the caller)."""
         parts = []
-        for key, value in arguments.items():
+        for key, value in sorted(arguments.items()):  # stable regardless of model key order
             if key == "expected_revision":
                 continue
             text = value if isinstance(value, str) else repr(value)
